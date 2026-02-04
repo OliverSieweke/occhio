@@ -6,14 +6,20 @@ import unittest
 import torch
 from torch import nn
 
-from occhio.autoencoder import AutoEncoder, deep_autoencoder, linear_autoencoder, TiedLinear
+from occhio.autoencoder import (
+    AutoEncoder,
+    TiedLinear,
+    create_autoencoder,
+    deep_autoencoder,
+    linear_autoencoder,
+)
 
 
 class AutoEncoderTests(unittest.TestCase):
     def test_forward_uses_custom_modules(self):
         encoder = nn.Sequential(nn.Linear(6, 4), nn.ReLU())
         decoder = nn.Linear(4, 6, bias=False)
-        autoencoder = AutoEncoder(encoder=encoder, decoder=decoder, activation="identity")
+        autoencoder = AutoEncoder(encoder=encoder, decoder=decoder, activation="identity", tied_weights=False)
 
         x = torch.randn(5, 6)
         encoded = autoencoder.encode(x)
@@ -43,24 +49,14 @@ class AutoEncoderTests(unittest.TestCase):
         out = autoencoder(x)
         self.assertEqual(out.shape, (2, 6))
 
-    def test_tied_weights_without_decoder(self):
+    def test_tied_weights_requires_decoder(self):
         encoder = nn.Linear(4, 2, bias=False)
-        autoencoder = AutoEncoder(encoder=encoder, decoder=None, tied_weights=True, activation="identity")
-
-        with torch.no_grad():
-            encoder.weight.copy_(torch.tensor([[1.0, 2.0, -1.0, 0.5], [-0.5, 0.0, 1.5, 1.0]]))
-
-        x = torch.tensor([[1.0, 0.0, -1.0, 2.0], [0.5, -1.0, 0.0, 1.0]])
-        decoded = autoencoder.forward(x)
-        expected = x @ encoder.weight.t() @ encoder.weight
-
-        self.assertTrue(torch.allclose(decoded, expected))
+        with self.assertRaises(ValueError):
+            AutoEncoder(encoder=encoder, decoder=None, tied_weights=True, activation="identity")
 
     def test_dimensionality_validation(self):
-        encoder = nn.Linear(4, 5)
-        decoder = nn.Linear(5, 4)
         with self.assertRaises(ValueError):
-            AutoEncoder(encoder=encoder, decoder=decoder, validate_shapes=True)
+            linear_autoencoder(n_features=4, hidden_sizes=5, validate_shapes=True)
 
     def test_factory_function_creates_autoencoder(self):
         ae = linear_autoencoder(n_features=5, hidden_sizes=2, activation="identity", tied_weights=False)
@@ -74,6 +70,14 @@ class AutoEncoderTests(unittest.TestCase):
         autoencoder = AutoEncoder(encoder=encoder, decoder=decoder, activation="identity")
         self.assertIn("encoder", autoencoder.W)
         self.assertIn("decoder", autoencoder.W)
+
+    def test_create_autoencoder_wrapper(self):
+        encoder = nn.Linear(3, 2)
+        decoder = nn.Linear(2, 3)
+        ae = create_autoencoder(encoder=encoder, decoder=decoder, activation="identity", tied_weights=False)
+        x = torch.randn(4, 3)
+        out = ae(x)
+        self.assertEqual(out.shape, (4, 3))
 
     def test_deep_autoencoder_builder(self):
         ae = deep_autoencoder([8, 4, 2], activation="relu", bias=True, validate_shapes=False)
@@ -91,7 +95,7 @@ class AutoEncoderTests(unittest.TestCase):
     def test_tied_weights_arbitrary_module_batchnorm(self):
         encoder = nn.BatchNorm1d(4, affine=True)
         decoder = nn.BatchNorm1d(4, affine=True)
-        ae = AutoEncoder(encoder=encoder, decoder=decoder, activation="relu", tied_weights=True, validate_shapes=False)
+        ae = AutoEncoder(encoder=encoder, decoder=decoder, activation="relu", tied_weights=True)
         self.assertIs(encoder.weight, decoder.weight)
         x = torch.randn(3, 4)
         out = ae(x)

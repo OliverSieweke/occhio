@@ -6,7 +6,7 @@ from __future__ import annotations
 import torch
 from torch import nn
 
-from occhio.autoencoder import AutoEncoder
+from occhio.autoencoder import AutoEncoder, TiedLinear
 
 
 class SparseTiedAutoEncoder(AutoEncoder):
@@ -14,7 +14,8 @@ class SparseTiedAutoEncoder(AutoEncoder):
 
     def __init__(self, n_features: int, n_hidden: int):
         encoder = nn.Linear(n_features, n_hidden, bias=False)
-        super().__init__(encoder=encoder, decoder=None, tied_weights=True, validate_shapes=True)
+        decoder = TiedLinear(encoder, bias=False)
+        super().__init__(encoder=encoder, decoder=decoder, tied_weights=True, activation="identity")
 
 
 class DeepNonlinearAutoEncoder(AutoEncoder):
@@ -31,7 +32,7 @@ class DeepNonlinearAutoEncoder(AutoEncoder):
             nn.ReLU(),
             nn.Linear(mid_hidden, n_features),
         )
-        super().__init__(encoder=encoder, decoder=decoder, activation="identity", tied_weights=False, validate_shapes=False)
+        super().__init__(encoder=encoder, decoder=decoder, activation="identity", tied_weights=False)
 
 
 class DropoutAutoEncoder(AutoEncoder):
@@ -44,7 +45,7 @@ class DropoutAutoEncoder(AutoEncoder):
             nn.Dropout(p),
         )
         decoder = nn.Linear(n_hidden, n_features)
-        super().__init__(encoder=encoder, decoder=decoder, activation="identity", tied_weights=False, validate_shapes=False)
+        super().__init__(encoder=encoder, decoder=decoder, activation="identity", tied_weights=False)
 
 
 class BottleneckConvAutoEncoder(AutoEncoder):
@@ -63,4 +64,4 @@ class BottleneckConvAutoEncoder(AutoEncoder):
             nn.Unflatten(1, (n_hidden, seq_len)),
             nn.ConvTranspose1d(n_hidden, n_channels, kernel_size, padding=kernel_size // 2),
         )
-        super().__init__(encoder=encoder, decoder=decoder, activation="identity", tied_weights=False, validate_shapes=False)
+        super().__init__(encoder=encoder, decoder=decoder, activation="identity", tied_weights=False)

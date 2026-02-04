@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import Callable, Iterable, Sequence, Union
+from typing import Callable, Sequence, Union
 import copy
 
 import torch
@@ -21,70 +21,54 @@ class _FunctionalActivation(nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         return self.fn(x)
 
-
 def _resolve_activation(activation: ActivationLike) -> Callable[[Tensor], Tensor]:
     if isinstance(activation, nn.Module):
         return activation
     if callable(activation):
         return activation
+    module_cls = getattr(nn, str(activation), None)
+    if isinstance(module_cls, type) and issubclass(module_cls, nn.Module):
+        try:
+            return module_cls()
+        except TypeError:
+            pass
     if activation == "identity":
         return lambda x: x
     fn = getattr(F, activation, None)
     if fn is None or not callable(fn):
-        raise ValueError(f"activation '{activation}' not found in torch.nn.functional")
+        raise ValueError(f"invalid activation '{activation}'")
     return fn
 
 class AutoEncoder(nn.Module):
     """
     Autoencoder base: encode → activation → decode.
-    Accepts arbitrary encoder/decoder modules; supports optional tied decoding.
+    Accepts arbitrary encoder/decoder modules; supports optional parameter tying.
     """
 
     def __init__(
         self,
         *,
         encoder: nn.Module,
-        decoder: nn.Module | None = None,
-        activation: ActivationLike = "relu",
+        decoder: nn.Module,
+        activation: ActivationLike = "identity",
         tied_weights: bool = False,
-        validate_shapes: bool = True,
     ):
         super().__init__()
+        if decoder is None:
+            raise ValueError("decoder is required")
         self.encoder = encoder
         self.activation = _resolve_activation(activation)
         self.tied_weights = tied_weights
-        self.validate_shapes = validate_shapes
-
-        encoder_out = getattr(self.encoder, "out_features", None)
-        encoder_in = getattr(self.encoder, "in_features", None)
-
-        if decoder is None and not tied_weights:
-            if encoder_out is None or encoder_in is None:
-                raise ValueError("decoder required when encoder dimensions unknown")
-            decoder = nn.Linear(encoder_out, encoder_in, bias=False)
 
         self.decoder = decoder
 
         if tied_weights:
-            self.decoder = decoder or _build_tied_decoder(self.encoder, activation)
             self._tie_shared_parameters(self.encoder, self.decoder)
-            self.decoder_bias = getattr(self.decoder, "bias", None)
-        else:
-            self.decoder_bias = None
-
-        if self.validate_shapes:
-            self._validate_shapes()
 
     def encode(self, x: Tensor) -> Tensor:
         return self.activation(self.encoder(x))
 
     def decode(self, h: Tensor) -> Tensor:
-        if self.tied_weights:
-            if self.decoder is None:
-                raise RuntimeError("decoder missing with tied_weights=True")
-            return self.decoder(h)
-        if self.decoder is None:
-            raise RuntimeError("decoder missing (tied_weights=False)")
         return self.decoder(h)
 
     def forward(self, x: Tensor) -> Tensor:  # type: ignore[override]
@@ -102,16 +86,6 @@ class AutoEncoder(nn.Module):
         if not weights:
             raise AttributeError("no accessible weights on encoder/decoder")
         return weights
-
-    def _validate_shapes(self) -> None:
-        first_linear = self._first_linear(self.encoder)
-        if first_linear and first_linear.out_features >= first_linear.in_features:
-            raise ValueError("encoder out_features must be < in_features")
-        if not self.tied_weights and self.decoder:
-            dec_linear = self._first_linear(self.decoder)
-            if first_linear and dec_linear:
-                if dec_linear.in_features != first_linear.out_features or dec_linear.out_features != first_linear.in_features:
-                    raise ValueError("decoder dims must mirror encoder (hidden→input)")
 
     @staticmethod
     def _first_linear(module: nn.Module) -> nn.Linear | None:
@@ -146,6 +120,16 @@ def _make_mlp(sizes: Sequence[int], activation: ActivationLike, bias: bool) -> n
     return nn.Sequential(*layers) if len(layers) > 1 else layers[0]
 
 
+def create_autoencoder(
+    *,
+    encoder: nn.Module,
+    decoder: nn.Module,
+    activation: ActivationLike = "identity",
+    tied_weights: bool = False,
+) -> AutoEncoder:
+    return AutoEncoder(encoder=encoder, decoder=decoder, activation=activation, tied_weights=tied_weights)
+
+
 def linear_autoencoder(
     n_features: int,
     hidden_sizes: Union[int, Sequence[int]],
@@ -155,21 +139,26 @@ def linear_autoencoder(
     tied_weights: bool = False,
     validate_shapes: bool = True,
 ) -> AutoEncoder:
-    if isinstance(hidden_sizes, int):
-        hidden_sizes = [hidden_sizes]
-    sizes = [n_features, *hidden_sizes]
+    hidden_list = [hidden_sizes] if isinstance(hidden_sizes, int) else list(hidden_sizes)
+    if not hidden_list:
+        raise ValueError("hidden_sizes must be non-empty")
+    if validate_shapes and hidden_list[-1] >= n_features:
+        raise ValueError("latent dimension must be smaller than input size")
+
+    sizes = [n_features, *hidden_list]
     encoder = _make_mlp(sizes, activation, bias)
 
-    decoder: nn.Module | None
-    decoder_sizes = [hidden_sizes[-1], *reversed(sizes[:-1])]
-    decoder = _make_mlp(decoder_sizes, activation, bias) if not tied_weights else _build_tied_decoder(encoder, activation)
+    if tied_weights:
+        decoder = _build_tied_decoder(encoder, activation)
+    else:
+        decoder_sizes = [hidden_list[-1], *reversed(sizes[:-1])]
+        decoder = _make_mlp(decoder_sizes, activation, bias)
 
     return AutoEncoder(
         encoder=encoder,
         decoder=decoder,
         activation=activation,
         tied_weights=tied_weights,
-        validate_shapes=validate_shapes,
     )
 
 
@@ -182,9 +171,11 @@ def deep_autoencoder(
 ) -> AutoEncoder:
     if len(layer_sizes) < 2:
         raise ValueError("layer_sizes must have at least input and output dims")
+    if validate_shapes and layer_sizes[0] <= layer_sizes[-1]:
+        raise ValueError("encoder must compress input when validate_shapes=True")
     encoder = _make_mlp(layer_sizes, activation, bias)
     decoder = _make_mlp([layer_sizes[-1], *reversed(layer_sizes[:-1])], activation, bias)
-    return AutoEncoder(encoder=encoder, decoder=decoder, activation=activation, validate_shapes=validate_shapes)
+    return AutoEncoder(encoder=encoder, decoder=decoder, activation=activation)
 
 
 class TiedLinear(nn.Module):
@@ -220,11 +211,6 @@ def _build_tied_decoder(encoder: nn.Module, activation: ActivationLike) -> nn.Mo
         else:
             raise TypeError(f"tied_weights cannot mirror layer type {type(layer).__name__}")
     return nn.Sequential(*layers)
-
-
-def _iter_params(module: nn.Module) -> Iterable[nn.Parameter]:
-    for _, param in module.named_parameters(recurse=True):
-        yield param
 
 
 def _set_param_by_name(module: nn.Module, name: str, param: nn.Parameter) -> None:
