@@ -2,6 +2,7 @@ from .base import Distribution
 from .sparse import SparseUniform, SparseExponential
 from .correlated import CorrelatedPairs, AnticorrelatedPairs
 from .relational import RelationalSimple, MultiRelational
+from .hierarchical import HierarchicalSparse
 
 
 __all__ = [
@@ -12,4 +13,5 @@ __all__ = [
     "AnticorrelatedPairs",
     "RelationalSimple",
     "MultiRelational",
+    "HierarchicalSparse",
 ]

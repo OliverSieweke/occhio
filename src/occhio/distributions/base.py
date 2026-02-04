@@ -33,13 +33,13 @@ class Distribution(ABC):
     def _rand_On(self, num_feat) -> Tensor:
         """Random O(n) generator respecting self.generator"""
         mat = self._randn(num_feat, num_feat)
-        q, r = torch.qr(mat)
-        return q * torch.diag(torch.sign(torch.diag(r)))
+        q, r = torch.linalg.qr(mat)
+        return q * torch.sign(torch.diag(r))
 
-    def _randint(self, low: int, high: int, *shape) -> Tensor:
+    def _randint(self, low: int, high: int, shape: tuple[int, ...]) -> Tensor:
         """Random generator respecting the self.generator"""
         return torch.randint(
-            low, high, shape, device=self.device, generator=self.generator
+            low=low, high=high, size=shape, device=self.device, generator=self.generator
         )
 
     def _broadcast(self, x: float | list[float] | Tensor) -> Tensor:

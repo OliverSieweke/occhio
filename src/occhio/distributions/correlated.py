@@ -9,6 +9,7 @@ class CorrelatedPairs(Distribution):
     """
     Features come in pars; if features 2i is active,
     feature 2i+1 is active with probability `correlation`.
+    Correlation is not strictly speaking the correlation.
 
     A shallow form of hierarchy.
     """
@@ -59,7 +60,7 @@ class AnticorrelatedPairs(Distribution):
         self.sparsity = sparsity
 
     def sample(self, batch_size: int) -> Tensor:
-        n_pairs = self.n_features // 2
+        n_pairs: int = self.n_features // 2
 
         pair_active = self._rand(batch_size, n_pairs) < self.sparsity
 

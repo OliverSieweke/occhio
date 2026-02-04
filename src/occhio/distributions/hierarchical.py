@@ -22,7 +22,7 @@ class HierarchicalSparse(Distribution):
     Sampling process:
     1. Root node always fires
     2. For each non-root node: fires with probability p(depth) IF parent fired
-    3. Values are Uniform[0,1] when active
+    3. Values are Uniform([0,1]) when active
 
     Tree structure is fixed at init (call generate_new_tree to resample).
     """
@@ -86,7 +86,7 @@ class HierarchicalSparse(Distribution):
             max_possible = min(self.max_children, remaining)
 
             if max_possible > 0:
-                n_children = int(self._randint(1, max_possible + 1, 1).item())
+                n_children = int(self._randint(1, max_possible + 1, (1, )).item())
 
                 for _ in range(n_children):
                     if next_index >= self.n_features:
