@@ -1,4 +1,7 @@
-"""Simple Sparse Feature Distributions."""
+"""
+Simple Sparse Feature Distributions.
+Inspired / taken from Toy Model of Superposition paper.
+"""
 
 from .base import Distribution
 from torch import Tensor
