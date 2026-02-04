@@ -17,14 +17,14 @@ class SparseUniform(Distribution):
 
 
 class SparseExponential(Distribution):
-    def __init__(self, n_features: int, sparsity: float, scale: float = 1.0, **kwargs):
+    def __init__(self, n_features: int, p_active: float, scale: float = 1.0, **kwargs):
         super().__init__(**kwargs)
         self.n_features = n_features
-        self.sparsity = self._broadcast(sparsity)
+        self.p_active = self._broadcast(p_active)
         self.scale = scale
 
     def sample(self, batch_size: int) -> Tensor:
-        mask = self._rand(batch_size, self.n_features) < self.sparsity
+        mask = self._rand(batch_size, self.n_features) < self.p_active
         values = -(1.0 / self.scale) * torch.log(
             1.0 - self._rand(batch_size, self.n_features)
         )
