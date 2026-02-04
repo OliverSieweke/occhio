@@ -6,7 +6,7 @@ import unittest
 import torch
 from torch import nn
 
-from occhio.autoencoder import AutoEncoder, deep_autoencoder, linear_autoencoder
+from occhio.autoencoder import AutoEncoder, deep_autoencoder, linear_autoencoder, TiedLinear
 
 
 class AutoEncoderTests(unittest.TestCase):
@@ -80,6 +80,22 @@ class AutoEncoderTests(unittest.TestCase):
         x = torch.randn(3, 8)
         out = ae(x)
         self.assertEqual(out.shape, (3, 8))
+
+    def test_tied_weights_multi_layer_linear(self):
+        ae = linear_autoencoder(n_features=6, hidden_sizes=[4, 3], activation="relu", tied_weights=True)
+        x = torch.randn(2, 6)
+        out = ae(x)
+        self.assertEqual(out.shape, (2, 6))
+        self.assertIsInstance(ae.decoder[0], TiedLinear)
+
+    def test_tied_weights_arbitrary_module_batchnorm(self):
+        encoder = nn.BatchNorm1d(4, affine=True)
+        decoder = nn.BatchNorm1d(4, affine=True)
+        ae = AutoEncoder(encoder=encoder, decoder=decoder, activation="relu", tied_weights=True, validate_shapes=False)
+        self.assertIs(encoder.weight, decoder.weight)
+        x = torch.randn(3, 4)
+        out = ae(x)
+        self.assertEqual(out.shape, (3, 4))
 
 
 if __name__ == "__main__":
