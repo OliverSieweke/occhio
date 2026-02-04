@@ -2,5 +2,9 @@
 name = "occhio"
 version = "0.1.0"
 description = "Experiment with Toy Models of Superposition"
-requires-python = ">=3.14"
+requires-python = ">=3.10"
 dependencies = []
+
+[build-system]
+requires = ["uv_build"]
+build-backend = "uv_build"
