@@ -3,8 +3,13 @@ name = "occhio"
 version = "0.1.0"
 description = "Experiment with Toy Models of Superposition"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+    "torch>=2.10.0",
+]
 
 [build-system]
 requires = ["uv_build"]
 build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]

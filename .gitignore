@@ -1,2 +1,7 @@
 dist/
 .venv/
+AGENTS.md
+.codex/
+.private/
+__pycache__/
+*.pyc
