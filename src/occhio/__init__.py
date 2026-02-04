@@ -4,6 +4,6 @@ def hello():
     """Hello occhio"""
     print("Hello from occhio!!")
 
-from .autoencoder import AutoEncoder
+from .autoencoder import AutoEncoder, create_autoencoder
 
-__all__ = ["hello", "AutoEncoder"]
+__all__ = ["hello", "AutoEncoder", "create_autoencoder"]

@@ -1,12 +1,12 @@
 # ABOUTME: Tests for the AutoEncoder component in occhio.
-# ABOUTME: Verifies pluggable encoder/decoder, activation hook, tied-weight helper, and weight exposure.
+# ABOUTME: Verifies defaults, pluggable modules, activation hook, validation, and tied-weight helper.
 
 import unittest
 
 import torch
 from torch import nn
 
-from occhio.autoencoder import AutoEncoder
+from occhio.autoencoder import AutoEncoder, create_autoencoder
 
 
 class AutoEncoderTests(unittest.TestCase):
@@ -37,10 +37,16 @@ class AutoEncoderTests(unittest.TestCase):
         expected = torch.zeros(1, 3)
         self.assertTrue(torch.allclose(output, expected))
 
+    def test_default_linear_created_when_sizes_passed(self):
+        autoencoder = AutoEncoder(n_features=6, n_hidden=3)
+        x = torch.randn(2, 6)
+        out = autoencoder(x)
+        self.assertEqual(out.shape, (2, 6))
+
     def test_requires_decoder_when_not_tied(self):
         encoder = nn.Linear(4, 2)
-        with self.assertRaises(ValueError):
-            AutoEncoder(encoder=encoder, decoder=None, tied_weights=False)
+        ae = AutoEncoder(encoder=encoder, decoder=None, tied_weights=False)
+        self.assertIsNotNone(ae.decoder)
 
     def test_tied_weights_without_decoder(self):
         encoder = nn.Linear(4, 2, bias=False)
@@ -54,6 +60,18 @@ class AutoEncoderTests(unittest.TestCase):
         expected = x @ encoder.weight.t() @ encoder.weight
 
         self.assertTrue(torch.allclose(decoded, expected))
+
+    def test_dimensionality_validation(self):
+        encoder = nn.Linear(4, 5)
+        decoder = nn.Linear(5, 4)
+        with self.assertRaises(ValueError):
+            AutoEncoder(encoder=encoder, decoder=decoder, validate_shapes=True)
+
+    def test_factory_function_creates_autoencoder(self):
+        ae = create_autoencoder(n_features=5, n_hidden=2, activation="identity", tied_weights=False)
+        self.assertIsInstance(ae, AutoEncoder)
+        self.assertEqual(ae.encoder.out_features, 2)
+        self.assertEqual(ae.decoder.in_features, 2)
 
     def test_W_property_exposes_encoder_weight(self):
         encoder = nn.Linear(5, 2, bias=False)

@@ -30,18 +30,33 @@ class AutoEncoder(nn.Module):
     def __init__(
         self,
         *,
-        encoder: nn.Module,
+        encoder: Optional[nn.Module] = None,
         decoder: Optional[nn.Module] = None,
-        activation: str | Callable[[Tensor], Tensor] = "identity",
+        n_features: Optional[int] = None,
+        n_hidden: Optional[int] = None,
+        activation: str | Callable[[Tensor], Tensor] = "relu",
         tied_weights: bool = False,
+        validate_shapes: bool = True,
     ):
         super().__init__()
+        if encoder is None:
+            if n_features is None or n_hidden is None:
+                raise ValueError("n_features and n_hidden are required when encoder is not provided")
+            encoder = nn.Linear(n_features, n_hidden, bias=False)
         self.encoder = encoder
         self.activation = _get_activation(activation)
         self.tied_weights = tied_weights
+        self.validate_shapes = validate_shapes
+
+        encoder_out = getattr(self.encoder, "out_features", None)
+        encoder_in = getattr(self.encoder, "in_features", None)
 
         if decoder is None and not tied_weights:
-            raise ValueError("decoder must be provided unless tied_weights=True")
+            if encoder_out is None:
+                raise ValueError("decoder must be provided unless tied_weights=True")
+            decoder = nn.Linear(encoder_out, encoder_in, bias=False) if encoder_in is not None else None
+            if decoder is None:
+                raise ValueError("decoder must be provided unless tied_weights=True")
 
         self.decoder = decoder
 
@@ -56,6 +71,9 @@ class AutoEncoder(nn.Module):
         else:
             self.decoder_bias = None
 
+        if self.validate_shapes:
+            self._validate_shapes()
+
     def encode(self, x: Tensor) -> Tensor:
         return self.activation(self.encoder(x))
 
@@ -63,10 +81,10 @@ class AutoEncoder(nn.Module):
         if self.tied_weights:
             return F.linear(h, self.encoder.weight.t(), self.decoder_bias)
         if self.decoder is None:
-            raise RuntimeError("decoder is not set")
+            raise RuntimeError("decoder must be provided unless tied_weights=True")
         return self.decoder(h)
 
-    def forward(self, x: Tensor) -> Tensor:  # type: ignore[override]
+    def forward(self, x: Tensor) -> Tensor: 
         return self.decode(self.encode(x))
 
     @property
@@ -74,3 +92,32 @@ class AutoEncoder(nn.Module):
         if hasattr(self.encoder, "weight"):
             return self.encoder.weight  # type: ignore[return-value]
         raise AttributeError("encoder has no weight attribute")
+
+    def _validate_shapes(self) -> None:
+        if isinstance(self.encoder, nn.Linear):
+            if self.encoder.out_features >= self.encoder.in_features:
+                raise ValueError("encoder output dimension must be smaller than input dimension to encourage compression")
+        if not self.tied_weights and isinstance(self.decoder, nn.Linear) and isinstance(self.encoder, nn.Linear):
+            if self.decoder.in_features != self.encoder.out_features or self.decoder.out_features != self.encoder.in_features:
+                raise ValueError("decoder dimensions must mirror encoder dimensions (hidden → input)")
+
+
+def create_autoencoder(
+    n_features: int,
+    n_hidden: int,
+    *,
+    activation: str | Callable[[Tensor], Tensor] = "relu",
+    tied_weights: bool = False,
+    validate_shapes: bool = True,
+) -> AutoEncoder:
+    encoder = nn.Linear(n_features, n_hidden, bias=False)
+    decoder = None if tied_weights else nn.Linear(n_hidden, n_features, bias=False)
+    return AutoEncoder(
+        encoder=encoder,
+        decoder=decoder,
+        n_features=n_features,
+        n_hidden=n_hidden,
+        activation=activation,
+        tied_weights=tied_weights,
+        validate_shapes=validate_shapes,
+    )
