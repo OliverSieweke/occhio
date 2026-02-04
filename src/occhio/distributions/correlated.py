@@ -1,3 +1,5 @@
+"""Simple correlation structures."""
+
 import torch
 from torch import Tensor
 from .base import Distribution
