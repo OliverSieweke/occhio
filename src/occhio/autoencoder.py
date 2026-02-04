@@ -1,221 +1,201 @@
-# ABOUTME: Defines a flexible autoencoder base and quick-build helpers.
-# ABOUTME: Supports arbitrary encoder/decoder modules with optional tying and validation.
+# ABOUTME: Defines the abstract AutoEncoder container and activation utilities.
+# ABOUTME: Provides factory helpers for linear autoencoders and module wrapping.
 
 from __future__ import annotations
 
-from typing import Callable, Sequence, Union
 import copy
+import inspect
+from abc import ABC, abstractmethod
+from typing import Callable, Dict, Iterable, List, Sequence
 
 import torch
-from torch import Tensor, nn
-from torch.nn import functional as F
+import torch.nn.functional as F
+from torch import nn
 
-ActivationLike = Union[str, Callable[[Tensor], Tensor], nn.Module]
+
+ActivationSpec = str | Callable[[torch.Tensor], torch.Tensor] | nn.Module | None
 
 
 class _FunctionalActivation(nn.Module):
-    def __init__(self, fn: Callable[[Tensor], Tensor]):
+    def __init__(self, fn: Callable[[torch.Tensor], torch.Tensor]):
         super().__init__()
         self.fn = fn
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:  # pragma: no cover
         return self.fn(x)
 
-def _resolve_activation(activation: ActivationLike) -> Callable[[Tensor], Tensor]:
-    if isinstance(activation, nn.Module):
-        return activation
-    if callable(activation):
-        return activation
-    module_cls = getattr(nn, str(activation), None)
-    if isinstance(module_cls, type) and issubclass(module_cls, nn.Module):
-        try:
-            return module_cls()
-        except TypeError:
-            pass
-    if activation == "identity":
-        return lambda x: x
-    fn = getattr(F, activation, None)
-    if fn is None or not callable(fn):
-        raise ValueError(f"invalid activation '{activation}'")
-    return fn
 
-class AutoEncoder(nn.Module):
-    """
-    Autoencoder base: encode → activation → decode.
-    Accepts arbitrary encoder/decoder modules; supports optional parameter tying.
-    """
+def _resolve_activation(spec: ActivationSpec) -> Callable[[torch.Tensor], torch.Tensor] | None:
+    if spec is None or spec == "identity":
+        return None
+    if isinstance(spec, nn.Module):
+        return spec
+    if isinstance(spec, str):
+        attr = getattr(nn, spec, None)
+        if inspect.isclass(attr):
+            return attr()
+        func = getattr(F, spec, None)
+        if callable(func):
+            return _FunctionalActivation(func)
+        raise ValueError("unknown activation")
+    if callable(spec):
+        return spec
+    raise TypeError("invalid activation")
 
-    def __init__(
-        self,
-        *,
-        encoder: nn.Module,
-        decoder: nn.Module,
-        activation: ActivationLike = "identity",
-        tied_weights: bool = False,
-    ):
+
+def _activation_module_factory(spec: ActivationSpec) -> Callable[[], nn.Module]:
+    if spec is None or spec == "identity":
+        return nn.Identity
+    if isinstance(spec, str):
+        attr = getattr(nn, spec, None)
+        if inspect.isclass(attr):
+            return attr
+        func = getattr(F, spec, None)
+        if callable(func):
+            return lambda: _FunctionalActivation(func)
+        raise ValueError("unknown activation")
+    if isinstance(spec, nn.Module):
+        return lambda: copy.deepcopy(spec)
+    if callable(spec):
+        return lambda: _FunctionalActivation(spec)
+    raise TypeError("invalid activation")
+
+
+def _get_parameter_owner(module: nn.Module, name: str) -> tuple[nn.Module, str]:
+    parts = name.split(".")
+    parent = module
+    for part in parts[:-1]:
+        parent = getattr(parent, part)
+    return parent, parts[-1]
+
+
+class AutoEncoder(nn.Module, ABC):
+    def __init__(self, *, activation: ActivationSpec = "identity", tied_weights: bool = False):
         super().__init__()
-        if decoder is None:
-            raise ValueError("decoder is required")
-        self.encoder = encoder
         self.activation = _resolve_activation(activation)
-        self.tied_weights = tied_weights
-
-        self.decoder = decoder
-
+        self.encoder = self.create_encoder()
+        self.decoder = self.create_decoder()
+        if self.encoder is None or self.decoder is None:
+            raise ValueError("encoder and decoder required")
         if tied_weights:
-            self._tie_shared_parameters(self.encoder, self.decoder)
+            self._tie_parameters(self.encoder, self.decoder)
 
-    def encode(self, x: Tensor) -> Tensor:
-        return self.activation(self.encoder(x))
+    @abstractmethod
+    def create_encoder(self) -> nn.Module:
+        raise NotImplementedError
 
-    def decode(self, h: Tensor) -> Tensor:
+    @abstractmethod
+    def create_decoder(self) -> nn.Module:
+        raise NotImplementedError
+
+    def encode(self, x: torch.Tensor) -> torch.Tensor:
+        h = self.encoder(x)
+        if self.activation is None:
+            return h
+        if isinstance(self.activation, nn.Module):
+            return self.activation(h)
+        return self.activation(h)
+
+    def decode(self, h: torch.Tensor) -> torch.Tensor:
         return self.decoder(h)
 
-    def forward(self, x: Tensor) -> Tensor:  # type: ignore[override]
+    def forward(self, x: torch.Tensor) -> torch.Tensor:  # type: ignore[override]
         return self.decode(self.encode(x))
 
     @property
-    def W(self) -> dict[str, Tensor]:
-        weights: dict[str, Tensor] = {}
-        enc_w = getattr(self.encoder, "weight", None)
-        if enc_w is not None:
-            weights["encoder"] = enc_w
-        dec_w = getattr(self.decoder, "weight", None) if self.decoder is not None else None
-        if dec_w is not None:
-            weights["decoder"] = dec_w
-        if not weights:
-            raise AttributeError("no accessible weights on encoder/decoder")
-        return weights
+    def W(self) -> Dict[str, Dict[str, nn.Parameter]]:
+        return {
+            "encoder": dict(self.encoder.named_parameters()),
+            "decoder": dict(self.decoder.named_parameters()),
+        }
 
-    @staticmethod
-    def _first_linear(module: nn.Module) -> nn.Linear | None:
-        if isinstance(module, nn.Linear):
-            return module
-        if isinstance(module, nn.Sequential):
-            for layer in module:
-                if isinstance(layer, nn.Linear):
-                    return layer
-        return None
-
-    @staticmethod
-    def _tie_shared_parameters(src: nn.Module, dst: nn.Module) -> None:
-        src_map = {name: param for name, param in src.named_parameters(recurse=True)}
-        for name, param in dst.named_parameters(recurse=True):
-            other = src_map.get(name)
-            if other is not None and other.shape == param.shape:
-                _set_param_by_name(dst, name, other)
-
-
-def _make_mlp(sizes: Sequence[int], activation: ActivationLike, bias: bool) -> nn.Module:
-    layers: list[nn.Module] = []
-    act_fn = _resolve_activation(activation)
-    def make_act() -> nn.Module:
-        if isinstance(act_fn, nn.Module):
-            return copy.deepcopy(act_fn)
-        return _FunctionalActivation(act_fn)
-    for in_s, out_s in zip(sizes[:-1], sizes[1:]):
-        layers.append(nn.Linear(in_s, out_s, bias=bias))
-        layers.append(make_act())
-    layers = layers[:-1] if len(layers) > 1 else layers
-    return nn.Sequential(*layers) if len(layers) > 1 else layers[0]
-
-
-def create_autoencoder(
-    *,
-    encoder: nn.Module,
-    decoder: nn.Module,
-    activation: ActivationLike = "identity",
-    tied_weights: bool = False,
-) -> AutoEncoder:
-    return AutoEncoder(encoder=encoder, decoder=decoder, activation=activation, tied_weights=tied_weights)
-
-
-def linear_autoencoder(
-    n_features: int,
-    hidden_sizes: Union[int, Sequence[int]],
-    *,
-    activation: ActivationLike = "relu",
-    bias: bool = False,
-    tied_weights: bool = False,
-    validate_shapes: bool = True,
-) -> AutoEncoder:
-    hidden_list = [hidden_sizes] if isinstance(hidden_sizes, int) else list(hidden_sizes)
-    if not hidden_list:
-        raise ValueError("hidden_sizes must be non-empty")
-    if validate_shapes and hidden_list[-1] >= n_features:
-        raise ValueError("latent dimension must be smaller than input size")
-
-    sizes = [n_features, *hidden_list]
-    encoder = _make_mlp(sizes, activation, bias)
-
-    if tied_weights:
-        decoder = _build_tied_decoder(encoder, activation)
-    else:
-        decoder_sizes = [hidden_list[-1], *reversed(sizes[:-1])]
-        decoder = _make_mlp(decoder_sizes, activation, bias)
-
-    return AutoEncoder(
-        encoder=encoder,
-        decoder=decoder,
-        activation=activation,
-        tied_weights=tied_weights,
-    )
-
-
-def deep_autoencoder(
-    layer_sizes: Sequence[int],
-    *,
-    activation: ActivationLike = "relu",
-    bias: bool = True,
-    validate_shapes: bool = False,
-) -> AutoEncoder:
-    if len(layer_sizes) < 2:
-        raise ValueError("layer_sizes must have at least input and output dims")
-    if validate_shapes and layer_sizes[0] <= layer_sizes[-1]:
-        raise ValueError("encoder must compress input when validate_shapes=True")
-    encoder = _make_mlp(layer_sizes, activation, bias)
-    decoder = _make_mlp([layer_sizes[-1], *reversed(layer_sizes[:-1])], activation, bias)
-    return AutoEncoder(encoder=encoder, decoder=decoder, activation=activation)
+    def _tie_parameters(self, src: nn.Module, dst: nn.Module) -> None:
+        src_params = dict(src.named_parameters())
+        dst_params = dict(dst.named_parameters())
+        for name, param in src_params.items():
+            if name not in dst_params:
+                continue
+            target = dst_params[name]
+            if param.shape != target.shape:
+                raise ValueError("shape mismatch for tied parameter")
+            parent, attr = _get_parameter_owner(dst, name)
+            parent._parameters[attr] = param
 
 
 class TiedLinear(nn.Module):
-    """Linear decode that reuses source Linear weight with transpose."""
-
-    def __init__(self, source: nn.Linear, bias: bool = True):
+    def __init__(self, linear: nn.Linear, *, bias: bool = True):
         super().__init__()
-        self.source = source
-        self.bias = nn.Parameter(torch.zeros(source.in_features)) if bias else None
-
-    def forward(self, x: Tensor) -> Tensor:
-        return F.linear(x, self.source.weight.t(), self.bias)
-
-
-def _build_tied_decoder(encoder: nn.Module, activation: ActivationLike) -> nn.Module:
-    if isinstance(encoder, nn.Linear):
-        return TiedLinear(encoder, bias=getattr(encoder, "bias", None) is not None)
-    if not isinstance(encoder, nn.Sequential):
-        raise TypeError("tied_weights requires decoder or a Sequential/Linear encoder to mirror")
-
-    layers: list[nn.Module] = []
-    resolved_act = _resolve_activation(activation)
-    def make_act() -> nn.Module:
-        if isinstance(resolved_act, nn.Module):
-            return copy.deepcopy(resolved_act)
-        return _FunctionalActivation(resolved_act)
-
-    for layer in reversed(encoder):
-        if isinstance(layer, nn.Linear):
-            layers.append(TiedLinear(layer, bias=getattr(layer, "bias", None) is not None))
-        elif isinstance(layer, (nn.ReLU, nn.Identity, nn.Dropout, _FunctionalActivation)):
-            layers.append(make_act())
+        self.linear = linear
+        if bias:
+            self.bias = nn.Parameter(torch.zeros(linear.in_features))
         else:
-            raise TypeError(f"tied_weights cannot mirror layer type {type(layer).__name__}")
+            self.register_parameter("bias", None)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:  # pragma: no cover
+        return F.linear(x, self.linear.weight.t(), self.bias)
+
+
+class _ProvidedAutoEncoder(AutoEncoder):
+    def __init__(self, *, encoder: nn.Module, decoder: nn.Module, activation: ActivationSpec, tied_weights: bool):
+        self._encoder_factory = lambda: encoder
+        self._decoder_factory = lambda: decoder
+        super().__init__(activation=activation, tied_weights=tied_weights)
+
+    def create_encoder(self) -> nn.Module:
+        return self._encoder_factory()
+
+    def create_decoder(self) -> nn.Module:
+        return self._decoder_factory()
+
+
+def create_autoencoder(*, encoder: nn.Module, decoder: nn.Module, activation: ActivationSpec = "identity", tied_weights: bool = False) -> AutoEncoder:
+    return _ProvidedAutoEncoder(encoder=encoder, decoder=decoder, activation=activation, tied_weights=tied_weights)
+
+
+def _build_linear_stack(dimensions: Sequence[int], *, bias: bool, activation: ActivationSpec) -> nn.Sequential:
+    if len(dimensions) < 2:
+        raise ValueError("need at least input and output dimension")
+    layers: List[nn.Module] = []
+    act_factory = _activation_module_factory(activation)
+    for in_dim, out_dim in zip(dimensions[:-1], dimensions[1:]):
+        layers.append(nn.Linear(in_dim, out_dim, bias=bias))
+        if out_dim != dimensions[-1]:
+            layers.append(act_factory())
     return nn.Sequential(*layers)
 
 
-def _set_param_by_name(module: nn.Module, name: str, param: nn.Parameter) -> None:
-    parts = name.split(".")
-    target = module
-    for p in parts[:-1]:
-        target = getattr(target, p)
-    setattr(target, parts[-1], param)
+def _reverse_linear_stack(linear_stack: nn.Sequential, *, use_tied: bool, activation: ActivationSpec, bias: bool) -> nn.Sequential:
+    reversed_layers: List[nn.Module] = []
+    act_factory = _activation_module_factory(activation)
+    linear_layers = [layer for layer in linear_stack if isinstance(layer, nn.Linear)]
+    for idx, layer in enumerate(reversed(linear_layers)):
+        if use_tied:
+            reversed_layers.append(TiedLinear(layer, bias=bias))
+        else:
+            reversed_layers.append(nn.Linear(layer.out_features, layer.in_features, bias=bias))
+        if idx != len(linear_layers) - 1:
+            reversed_layers.append(act_factory())
+    return nn.Sequential(*reversed_layers)
+
+
+def _validate_monotonic(dimensions: Sequence[int]) -> None:
+    if not all(dimensions[i] > dimensions[i + 1] for i in range(len(dimensions) - 1)):
+        raise ValueError("encoder dimensions must strictly decrease")
+
+
+def linear_autoencoder(
+    *,
+    dimensions: Sequence[int],
+    hidden_activation: ActivationSpec = "relu",
+    output_activation: ActivationSpec = "identity",
+    bias: bool = True,
+    tied_weights: bool = False,
+    validate_shapes: bool = False,
+) -> AutoEncoder:
+    dims = list(dimensions)
+    if validate_shapes:
+        _validate_monotonic(dims)
+    encoder = _build_linear_stack(dims, bias=bias, activation=hidden_activation)
+    decoder = _reverse_linear_stack(encoder, use_tied=tied_weights, activation=hidden_activation, bias=bias)
+    use_base_tie = tied_weights and not any(isinstance(layer, TiedLinear) for layer in decoder)
+    return create_autoencoder(encoder=encoder, decoder=decoder, activation=output_activation, tied_weights=use_base_tie)

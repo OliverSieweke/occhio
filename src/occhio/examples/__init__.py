@@ -1,16 +1,16 @@
-# ABOUTME: Example autoencoder package exports illustrative subclasses.
-# ABOUTME: Helps users see patterns for customizing occhio autoencoders.
+# ABOUTME: Package init for occhio examples.
+# ABOUTME: Exposes example autoencoders module.
 
 from .autoencoders import (
-    SparseTiedAutoEncoder,
-    DeepNonlinearAutoEncoder,
-    DropoutAutoEncoder,
-    BottleneckConvAutoEncoder,
+    Conv1dAutoEncoder,
+    DeepTiedLinearAE,
+    LayerNormAutoEncoder,
+    LinearBottleneckAE,
 )
 
 __all__ = [
-    "SparseTiedAutoEncoder",
-    "DeepNonlinearAutoEncoder",
-    "DropoutAutoEncoder",
-    "BottleneckConvAutoEncoder",
+    "Conv1dAutoEncoder",
+    "DeepTiedLinearAE",
+    "LayerNormAutoEncoder",
+    "LinearBottleneckAE",
 ]
