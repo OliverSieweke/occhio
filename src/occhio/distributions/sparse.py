@@ -1,4 +1,6 @@
-from base import Distribution
+"""Simple Sparse Feature Distributions."""
+
+from .base import Distribution
 from torch import Tensor
 import torch
 
@@ -18,8 +20,7 @@ class SparseUniform(Distribution):
 
 class SparseExponential(Distribution):
     def __init__(self, n_features: int, p_active: float, scale: float = 1.0, **kwargs):
-        super().__init__(**kwargs)
-        self.n_features = n_features
+        super().__init__(n_features, **kwargs)
         self.p_active = self._broadcast(p_active)
         self.scale = scale
 
