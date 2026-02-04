@@ -54,7 +54,7 @@ class Distribution(ABC):
         return self
 
     def __repr__(self):
-        return f"Distribution({self.n_features}, {self.device})"
+        return f"{type(self).__name__}({self.n_features}, {self.device})"
 
     def __str__(self):
-        return f"Distribution({self.n_features}, {self.device})"
+        return f"{type(self).__name__}({self.n_features}, {self.device})"
