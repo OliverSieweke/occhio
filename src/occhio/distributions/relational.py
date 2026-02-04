@@ -1,4 +1,7 @@
-"""Module for Relational Composition."""
+"""
+Module for Relational Composition.
+Based on https://arxiv.org/abs/2407.14662v1
+"""
 
 from .base import Distribution
 import torch

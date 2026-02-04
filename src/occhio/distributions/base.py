@@ -52,3 +52,9 @@ class Distribution(ABC):
     def to(self, device: torch.device | str):
         self.device = torch.device(device)
         return self
+
+    def __repr__(self):
+        return f"Distribution({self.n_features}, {self.device})"
+
+    def __str__(self):
+        return f"Distribution({self.n_features}, {self.device})"
