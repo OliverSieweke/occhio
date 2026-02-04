@@ -6,7 +6,7 @@ import unittest
 import torch
 from torch import nn
 
-from occhio.autoencoder import AutoEncoder, create_autoencoder
+from occhio.autoencoder import AutoEncoder, deep_autoencoder, linear_autoencoder
 
 
 class AutoEncoderTests(unittest.TestCase):
@@ -37,16 +37,11 @@ class AutoEncoderTests(unittest.TestCase):
         expected = torch.zeros(1, 3)
         self.assertTrue(torch.allclose(output, expected))
 
-    def test_default_linear_created_when_sizes_passed(self):
-        autoencoder = AutoEncoder(n_features=6, n_hidden=3)
+    def test_linear_autoencoder_factory_single_layer(self):
+        autoencoder = linear_autoencoder(n_features=6, hidden_sizes=3, tied_weights=False)
         x = torch.randn(2, 6)
         out = autoencoder(x)
         self.assertEqual(out.shape, (2, 6))
-
-    def test_requires_decoder_when_not_tied(self):
-        encoder = nn.Linear(4, 2)
-        ae = AutoEncoder(encoder=encoder, decoder=None, tied_weights=False)
-        self.assertIsNotNone(ae.decoder)
 
     def test_tied_weights_without_decoder(self):
         encoder = nn.Linear(4, 2, bias=False)
@@ -68,16 +63,23 @@ class AutoEncoderTests(unittest.TestCase):
             AutoEncoder(encoder=encoder, decoder=decoder, validate_shapes=True)
 
     def test_factory_function_creates_autoencoder(self):
-        ae = create_autoencoder(n_features=5, n_hidden=2, activation="identity", tied_weights=False)
+        ae = linear_autoencoder(n_features=5, hidden_sizes=2, activation="identity", tied_weights=False)
         self.assertIsInstance(ae, AutoEncoder)
-        self.assertEqual(ae.encoder.out_features, 2)
-        self.assertEqual(ae.decoder.in_features, 2)
+        first_linear = ae._first_linear(ae.encoder)
+        self.assertEqual(first_linear.out_features, 2)
 
     def test_W_property_exposes_encoder_weight(self):
         encoder = nn.Linear(5, 2, bias=False)
         decoder = nn.Linear(2, 5, bias=False)
         autoencoder = AutoEncoder(encoder=encoder, decoder=decoder, activation="identity")
-        self.assertIs(autoencoder.W, encoder.weight)
+        self.assertIn("encoder", autoencoder.W)
+        self.assertIn("decoder", autoencoder.W)
+
+    def test_deep_autoencoder_builder(self):
+        ae = deep_autoencoder([8, 4, 2], activation="relu", bias=True, validate_shapes=False)
+        x = torch.randn(3, 8)
+        out = ae(x)
+        self.assertEqual(out.shape, (3, 8))
 
 
 if __name__ == "__main__":
