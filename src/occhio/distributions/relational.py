@@ -1,9 +1,13 @@
+"""Module for Relational Composition."""
+
 from .base import Distribution
 import torch
 from torch import Tensor
 
 
 class RelationalSimple(Distribution):
+    """Encodes two distinct matrix bindings (identity + O(n))"""
+
     def __init__(self, n_features: int, p_active: float = 0.1, **kwargs):
         super().__init__(n_features, **kwargs)
         self.p_active = self._broadcast(p_active)
@@ -20,10 +24,12 @@ class RelationalSimple(Distribution):
         values = self._rand(batch_size, self.n_features)
         second = mask * values
 
-        return first + second @ self.on_mat 
+        return first + second @ self.on_mat
 
 
 class MultiRelational(Distribution):
+    """Encodes k distinct matrix bindings"""
+
     def __init__(self, n_features: int, p_active: float = 0.1, k=2, **kwargs):
         super().__init__(n_features, **kwargs)
         self.p_active = self._broadcast(p_active)
