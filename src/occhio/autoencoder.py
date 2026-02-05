@@ -18,11 +18,25 @@ class AutoEncoder(nn.Module):
     ) -> None:
         super().__init__()
 
+        self.device = device
+        self.generator = generator
+
         self.n_features = n_features
         self.n_hidden = n_hidden
 
-        self.W = nn.Parameter(torch.randn(n_hidden, n_features) / sqrt(n_hidden))
-        self.b = nn.Parameter(torch.zeros(n_features))
+        self.resample_weights()
+
+    def resample_weights(self):
+        self.W = nn.Parameter(
+            torch.randn(
+                self.n_hidden,
+                self.n_features,
+                generator=self.generator,
+                device=self.device,
+            )
+            / sqrt(self.n_hidden)
+        )
+        self.b = nn.Parameter(torch.zeros(self.n_features, device=self.device))
 
     def encode(self, x: Tensor) -> Tensor:
         return x @ self.W.T
