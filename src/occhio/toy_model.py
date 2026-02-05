@@ -43,6 +43,7 @@ class ToyModel:
         learning_rate=3e-4,
         weight_decay=0.01,
         track_losses=True,
+        force_norm=False,
         verbose=False,
     ) -> list[float]:
         optimizer = AdamW(
@@ -58,6 +59,10 @@ class ToyModel:
             loss = self.loss_func(x, x_hat)
             loss.backward()
             optimizer.step()
+
+            if force_norm:
+                with torch.no_grad():
+                    self.ae.W.data = self.ae.W.data / self.ae.get_feature_norms()
             if track_losses:
                 losses.append(loss)
             if verbose and (ep + 1) % 1000 == 0:

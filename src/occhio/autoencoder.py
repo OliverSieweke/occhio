@@ -50,7 +50,7 @@ class AutoEncoder(nn.Module):
         return x_hat, z
 
     def get_feature_norms(self):
-        return torch.linalg.norm(self.W, dim=0)
+        return torch.linalg.norm(self.W.data, dim=0)
 
     # @property
     # def W(self) -> Dict[str, List[nn.Parameter]]:
