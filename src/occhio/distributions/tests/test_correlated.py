@@ -25,14 +25,14 @@ class TestCorrelatedPairs:
 class TestHierarchicalPairsBasic:
     def test_sample_shape(self, seeded_generator):
         dist = HierarchicalPairs(
-            n_features=20, sparsity=0.5, correlation=0.5, generator=seeded_generator
+            n_features=20, p_active=0.5, p_follow=0.5, generator=seeded_generator
         )
         samples = dist.sample(100)
         assert samples.shape == (100, 20)
 
     def test_values_in_unit_interval(self, seeded_generator):
         dist = HierarchicalPairs(
-            n_features=20, sparsity=0.8, correlation=0.7, generator=seeded_generator
+            n_features=20, p_active=0.8, p_follow=0.7, generator=seeded_generator
         )
         samples = dist.sample(1000)
         assert samples.min() >= 0.0
@@ -40,11 +40,11 @@ class TestHierarchicalPairsBasic:
 
     def test_requires_even_features(self):
         with pytest.raises(AssertionError, match="even"):
-            HierarchicalPairs(n_features=11, sparsity=0.5)
+            HierarchicalPairs(n_features=11, p_active=0.5)
 
     def test_sparse_has_zeros(self, seeded_generator):
         dist = HierarchicalPairs(
-            n_features=20, sparsity=0.3, correlation=0.5, generator=seeded_generator
+            n_features=20, p_active=0.3, p_follow=0.5, generator=seeded_generator
         )
         samples = dist.sample(1000)
         assert (samples == 0).any()
@@ -54,7 +54,7 @@ class TestHierarchicalPairsHierarchy:
     def test_secondary_inactive_when_primary_inactive(self, seeded_generator):
         """If primary (even index) is inactive, secondary (odd index) must be inactive."""
         dist = HierarchicalPairs(
-            n_features=20, sparsity=0.5, correlation=0.8, generator=seeded_generator
+            n_features=20, p_active=0.5, p_follow=0.8, generator=seeded_generator
         )
         samples = dist.sample(5000)
 
@@ -65,9 +65,9 @@ class TestHierarchicalPairsHierarchy:
             assert violations == 0, f"Pair {i // 2}: secondary active without primary"
 
     def test_correlation_one_means_always_paired(self, seeded_generator):
-        """With correlation=1, secondary always fires when primary fires."""
+        """With p_follow=1, secondary always fires when primary fires."""
         dist = HierarchicalPairs(
-            n_features=20, sparsity=0.5, correlation=1.0, generator=seeded_generator
+            n_features=20, p_active=0.5, p_follow=1.0, generator=seeded_generator
         )
         samples = dist.sample(5000)
 
@@ -79,55 +79,55 @@ class TestHierarchicalPairsHierarchy:
             assert mismatches == 0, f"Pair {i // 2}: secondary should fire with primary"
 
     def test_correlation_zero_means_secondary_never_fires(self, seeded_generator):
-        """With correlation=0, secondary never fires."""
+        """With p_follow=0, secondary never fires."""
         dist = HierarchicalPairs(
-            n_features=20, sparsity=0.5, correlation=0.0, generator=seeded_generator
+            n_features=20, p_active=0.5, p_follow=0.0, generator=seeded_generator
         )
         samples = dist.sample(1000)
 
         secondary_active = (samples[:, 1::2] > 0).any()
         assert not secondary_active, (
-            "Secondary features should never fire with correlation=0"
+            "Secondary features should never fire with p_follow=0"
         )
 
 
 class TestHierarchicalPairsActivationRates:
     def test_primary_activation_rate(self, seeded_generator):
-        """Primary features should have activation rate = sparsity."""
-        sparsity = 0.4
+        """Primary features should have activation rate = p_active."""
+        p_active = 0.4
         dist = HierarchicalPairs(
             n_features=100,
-            sparsity=sparsity,
-            correlation=0.5,
+            p_active=p_active,
+            p_follow=0.5,
             generator=seeded_generator,
         )
         samples = dist.sample(10000)
 
         primary_rate = (samples[:, 0::2] > 0).float().mean().item()
-        assert abs(primary_rate - sparsity) < 0.02, (
-            f"Primary rate {primary_rate} should be ~{sparsity}"
+        assert abs(primary_rate - p_active) < 0.02, (
+            f"Primary rate {primary_rate} should be ~{p_active}"
         )
 
     def test_secondary_activation_rate(self, seeded_generator):
-        """Secondary features should have activation rate = sparsity * correlation."""
-        sparsity = 0.5
-        correlation = 0.6
+        """Secondary features should have activation rate = p_active * p_follow."""
+        p_active = 0.5
+        p_follow = 0.6
         dist = HierarchicalPairs(
             n_features=100,
-            sparsity=sparsity,
-            correlation=correlation,
+            p_active=p_active,
+            p_follow=p_follow,
             generator=seeded_generator,
         )
         samples = dist.sample(10000)
 
-        expected = sparsity * correlation
+        expected = p_active * p_follow
         secondary_rate = (samples[:, 1::2] > 0).float().mean().item()
         assert abs(secondary_rate - expected) < 0.02, (
             f"Secondary rate {secondary_rate} should be ~{expected}"
         )
 
     @pytest.mark.parametrize(
-        "sparsity,correlation",
+        "p_active,p_follow",
         [
             (0.3, 0.2),
             (0.5, 0.5),
@@ -136,12 +136,12 @@ class TestHierarchicalPairsActivationRates:
         ],
     )
     def test_activation_rates_parametrized(
-        self, sparsity, correlation, seeded_generator
+        self, p_active, p_follow, seeded_generator
     ):
         dist = HierarchicalPairs(
             n_features=100,
-            sparsity=sparsity,
-            correlation=correlation,
+            p_active=p_active,
+            p_follow=p_follow,
             generator=seeded_generator,
         )
         samples = dist.sample(10000)
@@ -149,19 +149,19 @@ class TestHierarchicalPairsActivationRates:
         primary_rate = (samples[:, 0::2] > 0).float().mean().item()
         secondary_rate = (samples[:, 1::2] > 0).float().mean().item()
 
-        assert abs(primary_rate - sparsity) < 0.03
-        assert abs(secondary_rate - sparsity * correlation) < 0.03
+        assert abs(primary_rate - p_active) < 0.03
+        assert abs(secondary_rate - p_active * p_follow) < 0.03
 
 
 class TestHierarchicalPairsConditionalRate:
     def test_conditional_correlation(self, seeded_generator):
-        """P(secondary | primary) should equal correlation parameter."""
-        sparsity = 0.5
-        correlation = 0.7
+        """P(secondary | primary) should equal p_follow parameter."""
+        p_active = 0.5
+        p_follow = 0.7
         dist = HierarchicalPairs(
             n_features=100,
-            sparsity=sparsity,
-            correlation=correlation,
+            p_active=p_active,
+            p_follow=p_follow,
             generator=seeded_generator,
         )
         samples = dist.sample(10000)
@@ -174,8 +174,8 @@ class TestHierarchicalPairsConditionalRate:
         primary_total = primary_active.float().sum().item()
 
         conditional = joint / primary_total
-        assert abs(conditional - correlation) < 0.03, (
-            f"P(secondary|primary) = {conditional}, expected {correlation}"
+        assert abs(conditional - p_follow) < 0.03, (
+            f"P(secondary|primary) = {conditional}, expected {p_follow}"
         )
 
 
@@ -185,10 +185,10 @@ class TestHierarchicalPairsReproducibility:
         gen2 = torch.Generator().manual_seed(999)
 
         dist1 = HierarchicalPairs(
-            n_features=20, sparsity=0.5, correlation=0.6, generator=gen1
+            n_features=20, p_active=0.5, p_follow=0.6, generator=gen1
         )
         dist2 = HierarchicalPairs(
-            n_features=20, sparsity=0.5, correlation=0.6, generator=gen2
+            n_features=20, p_active=0.5, p_follow=0.6, generator=gen2
         )
 
         samples1 = dist1.sample(50)
@@ -199,14 +199,14 @@ class TestHierarchicalPairsReproducibility:
 class TestAnticorrelatedPairsBasic:
     def test_sample_shape(self, seeded_generator):
         dist = AnticorrelatedPairs(
-            n_features=20, sparsity=0.5, generator=seeded_generator
+            n_features=20, p_active=0.5, generator=seeded_generator
         )
         samples = dist.sample(100)
         assert samples.shape == (100, 20)
 
     def test_values_in_unit_interval(self, seeded_generator):
         dist = AnticorrelatedPairs(
-            n_features=20, sparsity=0.8, generator=seeded_generator
+            n_features=20, p_active=0.8, generator=seeded_generator
         )
         samples = dist.sample(1000)
         assert samples.min() >= 0.0
@@ -214,11 +214,11 @@ class TestAnticorrelatedPairsBasic:
 
     def test_requires_even_features(self):
         with pytest.raises(AssertionError, match="even"):
-            AnticorrelatedPairs(n_features=11, sparsity=0.5)
+            AnticorrelatedPairs(n_features=11, p_active=0.5)
 
     def test_sparse_has_zeros(self, seeded_generator):
         dist = AnticorrelatedPairs(
-            n_features=20, sparsity=0.3, generator=seeded_generator
+            n_features=20, p_active=0.3, generator=seeded_generator
         )
         samples = dist.sample(1000)
         assert (samples == 0).any()
@@ -228,7 +228,7 @@ class TestAnticorrelatedPairsMutualExclusion:
     def test_at_most_one_active_per_pair(self, seeded_generator):
         """Both features in a pair should never be simultaneously active."""
         dist = AnticorrelatedPairs(
-            n_features=20, sparsity=0.8, generator=seeded_generator
+            n_features=20, p_active=0.8, generator=seeded_generator
         )
         samples = dist.sample(5000)
 
@@ -240,9 +240,9 @@ class TestAnticorrelatedPairsMutualExclusion:
             )
 
     def test_mutual_exclusion_high_sparsity(self, seeded_generator):
-        """Even with high sparsity, pairs should be exclusive."""
+        """Even with high p_active, pairs should be exclusive."""
         dist = AnticorrelatedPairs(
-            n_features=100, sparsity=0.95, generator=seeded_generator
+            n_features=100, p_active=0.95, generator=seeded_generator
         )
         samples = dist.sample(10000)
 
@@ -254,31 +254,31 @@ class TestAnticorrelatedPairsMutualExclusion:
 
 class TestAnticorrelatedPairsActivationRates:
     def test_overall_activation_rate(self, seeded_generator):
-        """Overall activation should be ~sparsity (one per pair fires)."""
-        sparsity = 0.5
+        """Overall activation should be ~p_active (one per pair fires)."""
+        p_active = 0.5
         dist = AnticorrelatedPairs(
-            n_features=100, sparsity=sparsity, generator=seeded_generator
+            n_features=100, p_active=p_active, generator=seeded_generator
         )
         samples = dist.sample(10000)
 
         # Each pair contributes 1 active feature when active, 0 otherwise
-        # Expected total = n_pairs * sparsity = n_features/2 * sparsity
-        # Expected rate = sparsity / 2 (since n_features total)
+        # Expected total = n_pairs * p_active = n_features/2 * p_active
+        # Expected rate = p_active / 2 (since n_features total)
         overall_rate = (samples > 0).float().mean().item()
-        expected = sparsity / 2
+        expected = p_active / 2
         assert abs(overall_rate - expected) < 0.02, (
             f"Overall rate {overall_rate} should be ~{expected}"
         )
 
     def test_per_feature_activation_rate(self, seeded_generator):
-        """Each feature should have activation rate = sparsity / 2."""
-        sparsity = 0.6
+        """Each feature should have activation rate = p_active / 2."""
+        p_active = 0.6
         dist = AnticorrelatedPairs(
-            n_features=100, sparsity=sparsity, generator=seeded_generator
+            n_features=100, p_active=p_active, generator=seeded_generator
         )
         samples = dist.sample(10000)
 
-        expected = sparsity / 2
+        expected = p_active / 2
         for i in range(100):
             rate = (samples[:, i] > 0).float().mean().item()
             assert abs(rate - expected) < 0.05, (
@@ -287,9 +287,9 @@ class TestAnticorrelatedPairsActivationRates:
 
     def test_even_odd_symmetry(self, seeded_generator):
         """Even and odd features should have equal marginal rates."""
-        sparsity = 0.5
+        p_active = 0.5
         dist = AnticorrelatedPairs(
-            n_features=100, sparsity=sparsity, generator=seeded_generator
+            n_features=100, p_active=p_active, generator=seeded_generator
         )
         samples = dist.sample(10000)
 
@@ -300,30 +300,30 @@ class TestAnticorrelatedPairsActivationRates:
             f"Even rate {even_rate} vs odd rate {odd_rate} should be symmetric"
         )
 
-    @pytest.mark.parametrize("sparsity", [0.2, 0.4, 0.6, 0.8])
-    def test_activation_rates_parametrized(self, sparsity, seeded_generator):
+    @pytest.mark.parametrize("p_active", [0.2, 0.4, 0.6, 0.8])
+    def test_activation_rates_parametrized(self, p_active, seeded_generator):
         dist = AnticorrelatedPairs(
-            n_features=100, sparsity=sparsity, generator=seeded_generator
+            n_features=100, p_active=p_active, generator=seeded_generator
         )
         samples = dist.sample(10000)
 
         overall_rate = (samples > 0).float().mean().item()
-        expected = sparsity / 2
+        expected = p_active / 2
         assert abs(overall_rate - expected) < 0.02
 
 
 class TestAnticorrelatedPairsEdgeCases:
     def test_sparsity_zero_all_zeros(self, seeded_generator):
         dist = AnticorrelatedPairs(
-            n_features=20, sparsity=0.0, generator=seeded_generator
+            n_features=20, p_active=0.0, generator=seeded_generator
         )
         samples = dist.sample(100)
         assert (samples == 0).all()
 
     def test_sparsity_one_exactly_one_per_pair(self, seeded_generator):
-        """With sparsity=1, exactly one feature per pair should be active."""
+        """With p_active=1, exactly one feature per pair should be active."""
         dist = AnticorrelatedPairs(
-            n_features=20, sparsity=1.0, generator=seeded_generator
+            n_features=20, p_active=1.0, generator=seeded_generator
         )
         samples = dist.sample(1000)
 
@@ -339,8 +339,8 @@ class TestAnticorrelatedPairsReproducibility:
         gen1 = torch.Generator().manual_seed(999)
         gen2 = torch.Generator().manual_seed(999)
 
-        dist1 = AnticorrelatedPairs(n_features=20, sparsity=0.5, generator=gen1)
-        dist2 = AnticorrelatedPairs(n_features=20, sparsity=0.5, generator=gen2)
+        dist1 = AnticorrelatedPairs(n_features=20, p_active=0.5, generator=gen1)
+        dist2 = AnticorrelatedPairs(n_features=20, p_active=0.5, generator=gen2)
 
         samples1 = dist1.sample(50)
         samples2 = dist2.sample(50)
@@ -354,9 +354,9 @@ class TestCorrelationContrast:
         gen2 = torch.Generator().manual_seed(42)
 
         corr_dist = HierarchicalPairs(
-            n_features=20, sparsity=0.8, correlation=0.9, generator=gen1
+            n_features=20, p_active=0.8, p_follow=0.9, generator=gen1
         )
-        anti_dist = AnticorrelatedPairs(n_features=20, sparsity=0.8, generator=gen2)
+        anti_dist = AnticorrelatedPairs(n_features=20, p_active=0.8, generator=gen2)
 
         corr_samples = corr_dist.sample(1000)
         anti_samples = anti_dist.sample(1000)
