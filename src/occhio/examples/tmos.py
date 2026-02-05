@@ -1,7 +1,6 @@
 """Sweep over p_active values and visualize W embeddings"""
 
-from occhio.distributions.sparse import SparseUniform
-from occhio.distributions.correlated import CorrelatedPairs
+from occhio.distributions.correlated import HierarchicalPairs
 from occhio.autoencoder import AutoEncoder
 from occhio.toy_model import ToyModel
 import torch
@@ -12,21 +11,24 @@ import numpy as np
 n_features = 6
 n_hidden = 2
 importances = torch.tensor([0.8**i for i in range(n_features)])
+# gen =
 
 p_actives = [0.01, 0.05, 0.1, 0.2, 0.5, 1.0]
 
+# Plotting
 colors = sns.color_palette("viridis", n_features)
 fig, axes = plt.subplots(2, 3, figsize=(12, 8))
 axes = axes.flatten()
 
 
-for idx, p_active in enumerate(p_actives):
-    tm = ToyModel(
-        CorrelatedPairs(n_features, p_active, p_individual=0.75),
-        AutoEncoder(n_features, n_hidden),
-    )
+dist = HierarchicalPairs(n_features, 0.0, p_follow=0.9)
+ae = AutoEncoder(n_features, n_hidden)
 
-    tm.fit(12_000, verbose=False)
+for idx, p_active in enumerate(p_actives):
+    tm = ToyModel(dist, ae)
+    tm.distribution.p_active = p_active
+
+    tm.fit(16_000, verbose=False)
 
     W: np.ndarray = tm.ae.W.detach().numpy()
 

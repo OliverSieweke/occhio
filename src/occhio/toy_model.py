@@ -70,12 +70,6 @@ class ToyModel:
 
         return losses
 
-    def encode(self, inputs: Tensor) -> Tensor:
-        return self.ae.encode(inputs)
-
-    def decode(self, latents: Tensor) -> Tensor:
-        return self.ae.decode(latents)
-
     def sample_latent(self, batch_size) -> Tensor:
         inputs = self.distribution.sample(batch_size)
         return self.ae.encode(inputs)
