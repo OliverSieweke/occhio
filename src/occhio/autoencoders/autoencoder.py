@@ -2,15 +2,15 @@
 # ABOUTME: Provides tied linear layers plus encode/decode utilities.
 
 from __future__ import annotations
-
+from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 from torch import Tensor, nn
 from warnings import warn
 
 
-class AutoEncoder(nn.Module):
-    def __init__(self, encoder: Optional[nn.Module] = None, decoder: Optional[nn.Module] = None):
-        super().__init__()
+class AutoEncoder(nn.Module, ABC):
+    def __init__(self, encoder: Optional[nn.Module] = None, decoder: Optional[nn.Module] = None) -> None:
+
         self.encoder: Optional[nn.Module] = encoder
         self.decoder: Optional[nn.Module] = decoder
 
@@ -21,6 +21,64 @@ class AutoEncoder(nn.Module):
                 UserWarning,
             )
 
+        if self.build_encoder.__func__ is AutoEncoder.build_encoder:
+            warn(
+                f"{self.__class__.__name__} does not implement build_encoder",
+                UserWarning,
+            )
+
+        if self.build_decoder.__func__ is AutoEncoder.build_decoder:
+            warn(
+                f"{self.__class__.__name__} does not implement build_decoder",
+                UserWarning,
+            )
+
+    def set_encoder(self, encoder: nn.Module, *, tie_to_decoder: bool = False) -> None:
+        if tie_to_decoder:
+            if self.decoder is None:
+                raise ValueError("Cannot tie weights without an existing decoder.")
+            encoder = self.tie_weights(source=self.decoder, target=self.encoder, target_name="encoder")
+        self.encoder = encoder
+
+    def set_decoder(self, decoder: nn.Module, *, tie_to_encoder: bool = False) -> None:
+        if tie_to_encoder:
+            if self.encoder is None:
+                raise ValueError("Cannot tie weights without an existing encoder.")
+            decoder = self.tie_weights(source=self.encoder, target=self.decoder, target_name="decoder")
+        self.decoder = decoder
+        
+    def build_encoder(self, ) -> nn.Module:
+        raise NotImplementedError("build_encoder is not implemented for this AutoEncoder instance.")
+
+    def build_decoder(self) -> nn.Module:
+        raise NotImplementedError("build_decoder is not implemented for this AutoEncoder instance.")
+
+    def tie_weights(self, source: nn.Module, target: nn.Module, target_name: Optional[str] = None, *args, **kwargs) -> nn.Module:
+        raise NotImplementedError("tie_weights is not implemented for this AutoEncoder instance.")
+
+    @property
+    def get_autoencoder(self) -> nn.Module:
+        self.validate()
+        return self.encoder
+    
+    @property
+    def get_decoder(self) -> nn.Module:
+        self.validate()
+        return self.decoder
+    
+    @property
+    def get_autoencoder(self) -> nn.Sequential:
+        self.validate()
+        return nn.Sequential(self.encoder, self.decoder)
+    
+    @property
+    def W(self) -> Dict[str, List[nn.Parameter]]:
+        self.validate()
+        return {
+            "encoder": list(self.encoder.parameters()),
+            "decoder": list(self.decoder.parameters()),
+        }
+    
     def forward(self, x: Tensor) -> Tensor:
         self.validate()
         return self.decode(self.encode(x))
@@ -32,14 +90,6 @@ class AutoEncoder(nn.Module):
     def decode(self, encoded: Tensor) -> Tensor:
         self.validate()
         return self.decoder(encoded)
-
-    @property
-    def W(self) -> Dict[str, List[nn.Parameter]]:
-        self.validate()
-        return {
-            "encoder": list(self.encoder.parameters()),
-            "decoder": list(self.decoder.parameters()),
-        }
 
     def freeze_encoder(self) -> None:
         self.validate()
@@ -70,39 +120,7 @@ class AutoEncoder(nn.Module):
         self.validate()
         self.unfreeze_encoder()
         self.unfreeze_decoder()
-
-    def set_encoder(self, encoder: nn.Module, *, tie_weights: bool = False) -> None:
-        if tie_weights:
-            if self.decoder is None:
-                raise ValueError("Cannot tie weights without an existing decoder.")
-            encoder = self.tie_weights(source=self.decoder, target=self.encoder, target_name="encoder")
-        self.encoder = encoder
-
-    def set_decoder(self, decoder: nn.Module, *, tie_weights: bool = False) -> None:
-        if tie_weights:
-            if self.encoder is None:
-                raise ValueError("Cannot tie weights without an existing encoder.")
-            decoder = self.tie_weights(source=self.encoder, target=self.decoder, target_name="decoder")
-        self.decoder = decoder
-
-    @property
-    def get_autoencoder(self) -> nn.Module:
-        self.validate()
-        return self.encoder
     
-    @property
-    def get_decoder(self) -> nn.Module:
-        self.validate()
-        return self.decoder
-    
-    @property
-    def get_autoencoder(self) -> nn.Sequential:
-        self.validate()
-        return nn.Sequential(self.encoder, self.decoder)
-    
-    def tie_weights(self, source: nn.Module, target: nn.Module, target_name: Optional[str] = None, *args, **kwargs) -> nn.Module:
-        raise NotImplementedError("tie_weights is not implemented for this AutoEncoder instance.")
-
     def validate(
         self,
         x: Optional[Tensor] = None,
