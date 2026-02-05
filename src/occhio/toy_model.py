@@ -1,8 +1,9 @@
 import torch
+from torch import Tensor
 from torch.optim import AdamW
-from ..distributions.base import Distribution
-from ..distributions.sparse import SparseUniform
-from ..autoencoders.autoencoder import AutoEncoder
+from .distributions.base import Distribution
+from .distributions.sparse import SparseUniform
+from .autoencoder import AutoEncoder
 from typing import Optional
 
 
@@ -11,7 +12,8 @@ class ToyModel:
         self,
         distribution: Optional[Distribution] = None,
         ae: Optional[AutoEncoder] = None,
-        device="cpu",
+        device: torch.device | str = "cpu",
+        generator: torch.Generator | None = None,
         importances=None,
     ):
 
@@ -37,7 +39,7 @@ class ToyModel:
     def fit(
         self,
         n_epochs: int,
-        batch_size=64,
+        batch_size=128,
         learning_rate=3e-4,
         weight_decay=0.01,
         track_losses=True,
@@ -52,17 +54,26 @@ class ToyModel:
         for ep in range(n_epochs):
             x = self.distribution.sample(batch_size)
             optimizer.zero_grad()
-            x_hat = self.ae.forward(x)
+            x_hat = self.ae.forward(x)[0]  # Only take x_hat
             loss = self.loss_func(x, x_hat)
             loss.backward()
             optimizer.step()
             if track_losses:
                 losses.append(loss)
             if verbose and (ep + 1) % 1000 == 0:
-                print(f"AE Epoch {ep + 1}/{ep}, Loss: {loss.item():.6f}")
+                print(f"AE Epoch {ep + 1}/{n_epochs}, Loss: {loss.item():.6f}")
 
         return losses
 
-    def get_latent(self, batch_size):
+    def encode(self, inputs: Tensor) -> Tensor:
+        return self.ae.encode(inputs)
+
+    def decode(self, latents: Tensor) -> Tensor:
+        return self.ae.encode(latents)
+
+    def sample_latent(self, batch_size) -> Tensor:
         inputs = self.distribution.sample(batch_size)
         return self.ae.encode(inputs)
+
+    def __repr__(self):
+        return f"ToyModel({self.distribution})"
