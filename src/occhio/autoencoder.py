@@ -6,27 +6,47 @@ from math import sqrt
 from torch import Tensor
 import torch.nn as nn
 import torch
+from abc import ABC, abstractmethod
 
 
-class AutoEncoder(nn.Module):
+class AutoEncoderBase(nn.Module, ABC):
+    @abstractmethod
+    def encode(self, x: Tensor) -> Tensor:
+        """features --> latent"""
+
+    @abstractmethod
+    def decode(self, z: Tensor) -> Tensor:
+        """latent --> features"""
+
+    @abstractmethod
+    def resample_weights(self):
+        """Reset / resample all weights"""
+
+    def forward(self, x: Tensor) -> tuple[Tensor, Tensor]:
+        z = self.encode(x)
+        x_hat = self.decode(z)
+        return x_hat, z
+
     def __init__(
         self,
-        n_features: int,
-        n_hidden: int,
         device: torch.device | str = "cpu",
         generator: torch.Generator | None = None,
-    ) -> None:
+    ):
         super().__init__()
-
         self.device = device
         self.generator = generator
+
+
+class TiedLinear(AutoEncoderBase):
+    def __init__(self, n_features: int, n_hidden: int, **kwargs) -> None:
+        super().__init__(**kwargs)
 
         self.n_features = n_features
         self.n_hidden = n_hidden
 
         self.resample_weights()
 
-    def resample_weights(self):
+    def resample_weights(self, force_norm=False):
         self.W = nn.Parameter(
             torch.randn(
                 self.n_hidden,
@@ -36,6 +56,9 @@ class AutoEncoder(nn.Module):
             )
             / sqrt(self.n_hidden)
         )
+        with torch.no_grad():
+            norms = self.W.data.norm(dim=0, keepdim=True)
+            self.W.data /= norms
         self.b = nn.Parameter(torch.zeros(self.n_features, device=self.device))
 
     def encode(self, x: Tensor) -> Tensor:
@@ -44,17 +67,65 @@ class AutoEncoder(nn.Module):
     def decode(self, z: Tensor) -> Tensor:
         return torch.relu(z @ self.W + self.b)
 
-    def forward(self, x: Tensor) -> tuple[Tensor, Tensor]:
-        z = self.encode(x)
-        x_hat = self.decode(z)
-        return x_hat, z
 
-    def get_feature_norms(self):
-        return torch.linalg.norm(self.W.data, dim=0)
+class MLPEncoder(AutoEncoderBase):
+    def __init__(self, embedding: list[int], unembedding: list[int], **kwargs):
+        super().__init__(**kwargs)
 
-    # @property
-    # def W(self) -> Dict[str, List[nn.Parameter]]:
-    #     return {
-    #         "encoder": list(self.encoder.parameters()),
-    #         "decoder": list(self.decoder.parameters()),
-    #     }
+        assert len(embedding) >= 2, "embedding must have at least [input, latent]"
+        assert len(unembedding) >= 2, "unembedding must have at least [latent, output]"
+        assert embedding[-1] == unembedding[0], "latent dims must match"
+        assert embedding[0] == unembedding[-1], "input/output dims must match"
+
+        self.n_features = embedding[0]
+        self.n_hidden = embedding[-1]
+
+        self.embedding_dims = embedding
+        self.unembedding_dims = unembedding
+
+        self._build_layers()
+
+    def _build_layers(self):
+        # Encoder
+        encoder_layers = []
+        for i in range(len(self.embedding_dims) - 1):
+            encoder_layers.append(
+                nn.Linear(
+                    self.embedding_dims[i],
+                    self.embedding_dims[i + 1],
+                    bias=(i == len(self.embedding_dims) - 2),  # bias only on last layer
+                    device=self.device,
+                )
+            )
+            if (
+                i < len(self.embedding_dims) - 2
+            ):  # ReLU between hidden layers, not on output
+                encoder_layers.append(nn.ReLU())
+        self.encoder = nn.Sequential(*encoder_layers)
+
+        # Decoder
+        decoder_layers = []
+        for i in range(len(self.unembedding_dims) - 1):
+            decoder_layers.append(
+                nn.Linear(
+                    self.unembedding_dims[i],
+                    self.unembedding_dims[i + 1],
+                    bias=(
+                        i == len(self.unembedding_dims) - 2
+                    ),  # bias only on last layer
+                    device=self.device,
+                )
+            )
+            if i < len(self.unembedding_dims) - 2:
+                decoder_layers.append(nn.ReLU())
+        decoder_layers.append(nn.ReLU())  # ReLU on final output, matching TiedLinear
+        self.decoder = nn.Sequential(*decoder_layers)
+
+    def resample_weights(self, force_norm=False):
+        self._build_layers()
+
+    def encode(self, x: Tensor) -> Tensor:
+        return self.encoder(x)
+
+    def decode(self, z: Tensor) -> Tensor:
+        return self.decoder(z)

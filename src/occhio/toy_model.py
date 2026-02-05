@@ -3,29 +3,22 @@ from torch import Tensor
 from torch.optim import AdamW
 from .distributions.base import Distribution
 from .distributions.sparse import SparseUniform
-from .autoencoder import AutoEncoder
+from .autoencoder import AutoEncoderBase, TiedLinear
 from typing import Optional
 
 
 class ToyModel:
     def __init__(
         self,
-        distribution: Optional[Distribution] = None,
-        ae: Optional[AutoEncoder] = None,
+        distribution: Optional[Distribution],
+        ae: Optional[AutoEncoderBase],
         device: torch.device | str = "cpu",
         generator: torch.Generator | None = None,
         importances=None,
     ):
 
-        if distribution is None:
-            self.distribution = SparseUniform(10, 0.1)
-        else:
-            self.distribution = distribution
-
-        if ae is None:
-            self.ae = AutoEncoder(10, 3)
-        else:
-            self.ae = ae
+        self.distribution = distribution
+        self.ae = ae
 
         assert distribution.n_features == ae.n_features  # ty:ignore
 
@@ -39,11 +32,10 @@ class ToyModel:
     def fit(
         self,
         n_epochs: int,
-        batch_size=512,
+        batch_size=256,
         learning_rate=3e-4,
-        weight_decay=0.01,
+        weight_decay=0.05,
         track_losses=True,
-        force_norm=False,
         verbose=False,
     ) -> list[float]:
         optimizer = AdamW(
@@ -60,9 +52,6 @@ class ToyModel:
             loss.backward()
             optimizer.step()
 
-            if force_norm:
-                with torch.no_grad():
-                    self.ae.W.data = self.ae.W.data / self.ae.get_feature_norms()
             if track_losses:
                 losses.append(loss)
             if verbose and (ep + 1) % 1000 == 0:
@@ -81,7 +70,7 @@ class ToyModel:
         if name in ("sample", "n_features"):
             return getattr(self.distribution, name)
 
-        if name in ("encode", "decode", "forward", "W"):
+        if name in ("encode", "decode", "forward", "W", "resample_weights"):
             return getattr(self.ae, name)
 
         raise AttributeError(f"'{type(self).__name__}' has no attribute '{name}'")
