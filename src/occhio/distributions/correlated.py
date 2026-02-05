@@ -8,8 +8,13 @@ from .base import Distribution
 class HierarchicalPairs(Distribution):
     """
     Features come in pars; if features 2i is active,
-    feature 2i+1 is active with probability `correlation`.
-    Correlation is not strictly speaking the correlation.
+    feature 2i+1 is active with probability `p_follow`.
+
+    correlation = sqrt[(p_f * (1 - p_a))/(1 - p_f * p_a)].
+    Note that corr --> sqrt(p_f) as p_a --> 0.
+
+    For a specified correlation c you can set
+    p_f = c**2 / [1 + p_a (c**2 - 1)]
 
     A shallow form of hierarchy.
     """
@@ -17,20 +22,20 @@ class HierarchicalPairs(Distribution):
     def __init__(
         self,
         n_features: int,
-        sparsity: float,
-        correlation: float = 0.5,
+        p_active: float,
+        p_follow: float = 0.5,
         **kwargs,
     ):
         assert n_features % 2 == 0, "Need even `n_features` for pairs."
         super().__init__(n_features, **kwargs)
-        self.correlation = correlation
-        self.sparsity = sparsity
+        self.p_active = p_active
+        self.p_follow = p_follow
 
     def sample(self, batch_size: int) -> Tensor:
         n_pairs = self.n_features // 2
-        primary_mask = self._rand(batch_size, n_pairs) < self.sparsity
+        primary_mask = self._rand(batch_size, n_pairs) < self.p_active
         secondary_mask = primary_mask & (
-            self._rand(batch_size, n_pairs) < self.correlation
+            self._rand(batch_size, n_pairs) < self.p_follow
         )
 
         mask = torch.empty(
@@ -54,6 +59,9 @@ class CorrelatedPairs(Distribution):
     Correlation between pairs is:
     Corr(X_{2i}, X_{2i+1}) = (p_i (1 - p_a))/(1 - p_a p_i)
     Note that as p_a -> 0 we have Corr -> p_i.
+
+    If you want a specific correlation `c` then
+    p_i = c / (1 - p_a + c*p_a)
     """
 
     def __init__(
@@ -95,17 +103,17 @@ class AnticorrelatedPairs(Distribution):
     def __init__(
         self,
         n_features: int,
-        sparsity: float,
+        p_active: float,
         **kwargs,
     ):
         assert n_features % 2 == 0, "Need even n_features for pairs"
         super().__init__(n_features, **kwargs)
-        self.sparsity = sparsity
+        self.p_active = p_active
 
     def sample(self, batch_size: int) -> Tensor:
         n_pairs: int = self.n_features // 2
 
-        pair_active = self._rand(batch_size, n_pairs) < self.sparsity
+        pair_active = self._rand(batch_size, n_pairs) < self.p_active
 
         which_one = self._randint(0, 2, (batch_size, n_pairs))
 
