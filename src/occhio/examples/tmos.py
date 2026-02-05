@@ -11,7 +11,7 @@ import numpy as np
 n_features = 6
 n_hidden = 2
 importances = torch.tensor([0.8**i for i in range(n_features)])
-# gen =
+gen = torch.Generator("cpu")
 
 p_actives = [0.01, 0.05, 0.1, 0.2, 0.5, 1.0]
 
@@ -21,8 +21,8 @@ fig, axes = plt.subplots(2, 3, figsize=(12, 8))
 axes = axes.flatten()
 
 
-dist = HierarchicalPairs(n_features, 0.0, p_follow=0.9)
-ae = AutoEncoder(n_features, n_hidden)
+dist = HierarchicalPairs(n_features, 0.0, p_follow=0.9, generator=gen)
+ae = AutoEncoder(n_features, n_hidden, generator=gen)
 
 for idx, p_active in enumerate(p_actives):
     tm = ToyModel(dist, ae)
@@ -46,10 +46,7 @@ for idx, p_active in enumerate(p_actives):
     ax.axhline(0, color="gray", linewidth=0.5)
     ax.axvline(0, color="gray", linewidth=0.5)
 
-plt.suptitle(
-    "Feature embeddings W as sparsity varies\n(colors = importance rank, 0=highest)",
-    fontsize=12,
-)
+plt.suptitle("Feature embeddings W as sparsity varies for Hierarchical Pairs")
 plt.tight_layout()
 plt.savefig("sparsity_sweep.png", dpi=150)
 plt.show()
