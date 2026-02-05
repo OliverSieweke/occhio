@@ -66,11 +66,3 @@ class ToyModel:
     def get_latent(self, batch_size):
         inputs = self.distribution.sample(batch_size)
         return self.ae.encode(inputs)
-
-
-tm.importances = 0.8 ** torch.linspace(0, 5)
-tm.distribution.p_active = some_vector
-
-
-for index in range(tm.n_features):
-    tm.ae.encode(one_hot_vector[index])
