@@ -27,9 +27,9 @@ class ToyModel:
         else:
             self.ae = ae
 
-        assert distribution.n_features == ae.n_features
+        assert distribution.n_features == ae.n_features  # ty:ignore
 
-        self.importances = torch.ones(distribution.n_features)
+        self.importances = torch.ones(distribution.n_features)  # ty:ignore
 
     def loss_func(self, x_true, x_hat):
         return torch.mean(
@@ -76,3 +76,12 @@ class ToyModel:
 
     def __repr__(self):
         return f"ToyModel({self.distribution})"
+
+    def __getattr__(self, name):
+        if name in ("sample", "n_features"):
+            return getattr(self.distribution, name)
+
+        if name in ("encode", "decode", "forward", "W"):
+            return getattr(self.ae, name)
+
+        raise AttributeError(f"'{type(self).__name__}' has no attribute '{name}'")

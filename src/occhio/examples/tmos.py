@@ -26,7 +26,7 @@ ae = AutoEncoder(n_features, n_hidden)
 
 for idx, p_active in enumerate(p_actives):
     tm = ToyModel(dist, ae)
-    tm.distribution.p_active = p_active
+    tm.distribution.p_active = p_active  # ty:ignore
 
     tm.fit(16_000, verbose=False)
 
