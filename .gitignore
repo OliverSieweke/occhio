@@ -1,5 +1,10 @@
 dist/
 .venv/
+AGENTS.md
+.codex/
+.private/
+__pycache__/
+*.pyc
 *.DS_Store
 *__pycache__
 .vscode/*
