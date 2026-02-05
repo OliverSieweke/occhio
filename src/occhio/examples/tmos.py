@@ -12,6 +12,7 @@ n_features = 6
 n_hidden = 2
 importances = torch.tensor([0.8**i for i in range(n_features)])
 gen = torch.Generator("cpu")
+gen.manual_seed(42)
 
 p_actives = [0.01, 0.05, 0.1, 0.2, 0.5, 1.0]
 
