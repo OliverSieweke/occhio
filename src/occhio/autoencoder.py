@@ -1,7 +1,6 @@
-# ABOUTME: Defines the AutoEncoder abstraction used across occhio.
-# ABOUTME: Provides tied linear layers plus encode/decode utilities.
+"""Implements simple"""
 
-from __future__ import annotations
+import functools
 from math import sqrt
 from torch import Tensor
 import torch.nn as nn
@@ -27,6 +26,12 @@ class AutoEncoderBase(nn.Module, ABC):
         x_hat = self.decode(z)
         return x_hat, z
 
+    def loss(self, x_true: Tensor, x_hat: Tensor, importances: Tensor | None):
+        """The associated loss function."""
+        if importances is None:
+            importances = torch.ones(self.n_features)  # ty:ignore
+        return torch.mean(torch.sum(importances * torch.square(x_true - x_hat), dim=-1))
+
     def __init__(
         self,
         device: torch.device | str = "cpu",
@@ -35,6 +40,22 @@ class AutoEncoderBase(nn.Module, ABC):
         super().__init__()
         self.device = device
         self.generator = generator
+
+    def __init_subclass__(cls, **kwargs):
+        """This ensures that `n_features` and `n_hidden` are defined at creation"""
+        super().__init_subclass__(**kwargs)
+        original_init = cls.__init__
+
+        @functools.wraps(original_init)
+        def checked_init(self, *args, **kwargs):
+            original_init(self, *args, **kwargs)
+            for attr in ("n_features", "n_hidden"):
+                if not hasattr(self, attr):
+                    raise AttributeError(
+                        f"{cls.__name__}.__init__ must set self.{attr}"
+                    )
+
+        cls.__init__ = checked_init  # ty:ignore
 
 
 class TiedLinear(AutoEncoderBase):
@@ -45,6 +66,13 @@ class TiedLinear(AutoEncoderBase):
         self.n_hidden = n_hidden
 
         self.resample_weights()
+
+    # def loss_func(
+    #     self, x_true: Tensor, x_hat: Tensor, importances: Tensor | None = None
+    # ):
+    #     if importances is None:
+    #         importances = torch.ones(self.n_features)
+    #     return torch.mean(torch.sum(importances * torch.square(x_true - x_hat), dim=-1))
 
     def resample_weights(self, force_norm=False):
         self.W = nn.Parameter(
@@ -86,33 +114,26 @@ class MLPEncoder(AutoEncoderBase):
         self._build_layers()
 
     def _build_layers(self):
-        # Encoder
         encoder_layers = []
         for i in range(len(self.embedding_dims) - 1):
             encoder_layers.append(
                 nn.Linear(
                     self.embedding_dims[i],
                     self.embedding_dims[i + 1],
-                    bias=(i == len(self.embedding_dims) - 2),  # bias only on last layer
                     device=self.device,
                 )
             )
-            if (
-                i < len(self.embedding_dims) - 2
-            ):  # ReLU between hidden layers, not on output
+            # No ReLU on output
+            if i < len(self.embedding_dims) - 2:
                 encoder_layers.append(nn.ReLU())
         self.encoder = nn.Sequential(*encoder_layers)
 
-        # Decoder
         decoder_layers = []
         for i in range(len(self.unembedding_dims) - 1):
             decoder_layers.append(
                 nn.Linear(
                     self.unembedding_dims[i],
                     self.unembedding_dims[i + 1],
-                    bias=(
-                        i == len(self.unembedding_dims) - 2
-                    ),  # bias only on last layer
                     device=self.device,
                 )
             )

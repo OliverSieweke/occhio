@@ -21,13 +21,15 @@ class ToyModel:
         self.ae = ae
 
         assert distribution.n_features == ae.n_features  # ty:ignore
+        self.n_features: int = ae.n_features  # ty:ignore
 
-        self.importances = torch.ones(distribution.n_features)  # ty:ignore
+        if importances is None:
+            self.importances = torch.ones(self.n_features)
 
-    def loss_func(self, x_true, x_hat):
-        return torch.mean(
-            torch.sum(self.importances * torch.square(x_true - x_hat), dim=-1)
-        )
+    # def loss_func(self, x_true, x_hat):
+    #     return torch.mean(
+    #         torch.sum(self.importances * torch.square(x_true - x_hat), dim=-1)
+    #     )
 
     def fit(
         self,
@@ -48,7 +50,7 @@ class ToyModel:
             x = self.distribution.sample(batch_size)
             optimizer.zero_grad()
             x_hat = self.ae.forward(x)[0]  # Only take x_hat
-            loss = self.loss_func(x, x_hat)
+            loss = self.loss(x, x_hat, self.importances)
             loss.backward()
             optimizer.step()
 
@@ -63,6 +65,9 @@ class ToyModel:
         inputs = self.distribution.sample(batch_size)
         return self.ae.encode(inputs)
 
+    def get_one_hot_embeddings(self) -> Tensor:
+        return self.ae.encode(torch.eye(self.n_features))
+
     def __repr__(self):
         return f"ToyModel({self.distribution})"
 
@@ -70,7 +75,7 @@ class ToyModel:
         if name in ("sample", "n_features"):
             return getattr(self.distribution, name)
 
-        if name in ("encode", "decode", "forward", "W", "resample_weights"):
+        if name in ("encode", "decode", "forward", "W", "resample_weights", "loss"):
             return getattr(self.ae, name)
 
         raise AttributeError(f"'{type(self).__name__}' has no attribute '{name}'")
