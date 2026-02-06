@@ -16,7 +16,7 @@ class AutoEncoderBase(nn.Module, ABC):
     @abstractmethod
     def decode(self, z: Tensor) -> Tensor:
         """latent --> features"""
-
+        
     @abstractmethod
     def resample_weights(self):
         """Reset / resample all weights"""
