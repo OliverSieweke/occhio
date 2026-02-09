@@ -36,7 +36,7 @@ class ToyModel:
     def fit(
         self,
         n_epochs: int,
-        batch_size=512,
+        batch_size=1024,
         learning_rate=3e-4,
         weight_decay=0.05,
         track_losses=True,

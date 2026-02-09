@@ -9,9 +9,9 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 
-n_features = 5
+n_features = 6
 n_hidden = 2
-importances = torch.tensor([0.8**i for i in range(n_features)])
+importances = torch.tensor([0.9**i for i in range(n_features)])
 gen = torch.Generator("cpu")
 gen.manual_seed(7)
 
@@ -23,8 +23,8 @@ fig, axes = plt.subplots(2, 3, figsize=(12, 8))
 axes = axes.flatten()
 
 
-# dist = HierarchicalPairs(n_features, 0.0, p_follow=0.9, generator=gen)
-dist = SparseUniform(n_features, p_active=0.5)
+dist = HierarchicalPairs(n_features, 0.0, p_follow=0.9, generator=gen)
+# dist = SparseUniform(n_features, p_active=0.5)
 ae = TiedLinear(n_features, n_hidden, generator=gen)
 
 for idx, p_active in enumerate(p_actives):
@@ -34,7 +34,7 @@ for idx, p_active in enumerate(p_actives):
     tm = ToyModel(dist, ae, importances=importances)
     tm.distribution.p_active = p_active  # ty:ignore
 
-    tm.fit(16_000, verbose=True)
+    tm.fit(16_000, verbose=False)
 
     W: np.ndarray = tm.ae.W.detach().numpy()  # ty:ignore
 
