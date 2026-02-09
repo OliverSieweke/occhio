@@ -1,6 +1,6 @@
-"""Train on each p_active, evaluate loss on all p_actives, and show as a heatmap."""
-
-from fontTools.misc.symfont import n
+"""
+Train on each p_active, evaluate loss on all p_actives, and show as a heatmap.
+"""
 
 from occhio.distributions.correlated import HierarchicalPairs
 from occhio.distributions.sparse import SparseUniform
@@ -15,7 +15,7 @@ n_hidden = 2
 importances = torch.tensor([1.0**i for i in range(n_features)])
 gen = torch.Generator("cpu")
 
-p_actives = [0.01, 0.05, 0.1, 0.2, 0.5, 0.75, 0.99]
+p_actives = torch.linspace(0.01, 0.99, 32)
 n_p = len(p_actives)
 
 loss_matrix = np.zeros((n_p, n_p))
@@ -39,8 +39,8 @@ for i, p_train in enumerate(p_actives):
 # Plot
 fig, ax = plt.subplots(figsize=(7, 6))
 im = ax.imshow(loss_matrix, origin="lower")
-ax.set_xticks(range(n_p), labels=[str(p) for p in p_actives])
-ax.set_yticks(range(n_p), labels=[str(p) for p in p_actives])
+ax.set_xticks(range(n_p), labels=[str(p.item())[:4] for p in p_actives])
+ax.set_yticks(range(n_p), labels=[str(p.item())[:4] for p in p_actives])
 ax.set_xlabel("Test p_active")
 ax.set_ylabel("Train p_active")
 ax.set_title("Loss: train vs test p_active (Sparse Uniform)")
