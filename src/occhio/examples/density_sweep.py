@@ -4,7 +4,7 @@ from fontTools.misc.symfont import n
 
 from occhio.distributions.correlated import HierarchicalPairs
 from occhio.distributions.sparse import SparseUniform
-from occhio.autoencoder import TiedLinear
+from occhio.autoencoder import TiedLinearRelu
 from occhio.toy_model import ToyModel
 import torch
 import matplotlib.pyplot as plt
@@ -24,7 +24,7 @@ for i, p_train in enumerate(p_actives):
     gen.manual_seed(7)
     # dist = HierarchicalPairs(n_features, p_train, p_follow=0.9, generator=gen)
     dist = SparseUniform(n_features, p_train, generator=gen)
-    ae = TiedLinear(n_features, n_hidden, generator=gen)
+    ae = TiedLinearRelu(n_features, n_hidden, generator=gen)
     tm = ToyModel(dist, ae, importances=importances)
     tm.fit(16_000, verbose=False)
 

@@ -15,7 +15,7 @@ importances = torch.tensor([0.9**i for i in range(n_features)])
 gen = torch.Generator("cpu")
 gen.manual_seed(7)
 
-p_actives = [0.01, 0.05, 0.1, 0.2, 0.5, 0.99]
+p_actives = [0.01, 0.1, 0.2, 0.5, 0.75, 0.99]
 
 # Plotting
 colors = sns.color_palette("viridis", n_features)
