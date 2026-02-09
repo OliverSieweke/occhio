@@ -1,8 +1,7 @@
 """Sweep over p_active values and visualize W embeddings"""
 
 from occhio.distributions.correlated import HierarchicalPairs
-from occhio.distributions.sparse import SparseUniform
-from occhio.autoencoder import TiedLinear
+from occhio.autoencoder import TiedLinearRelu
 from occhio.toy_model import ToyModel
 import torch
 import matplotlib.pyplot as plt
@@ -24,8 +23,8 @@ axes = axes.flatten()
 
 
 dist = HierarchicalPairs(n_features, 0.0, p_follow=0.9, generator=gen)
-# dist = SparseUniform(n_features, p_active=0.5)
-ae = TiedLinear(n_features, n_hidden, generator=gen)
+# Try replacing TiedLinearRelu with TiedLinear!
+ae = TiedLinearRelu(n_features, n_hidden, generator=gen)
 
 for idx, p_active in enumerate(p_actives):
     gen.manual_seed(7)
