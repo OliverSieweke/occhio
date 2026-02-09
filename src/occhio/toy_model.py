@@ -25,6 +25,8 @@ class ToyModel:
 
         if importances is None:
             self.importances = torch.ones(self.n_features)
+        else:
+            self.importances = importances
 
     # def loss_func(self, x_true, x_hat):
     #     return torch.mean(
@@ -34,7 +36,7 @@ class ToyModel:
     def fit(
         self,
         n_epochs: int,
-        batch_size=256,
+        batch_size=1024,
         learning_rate=3e-4,
         weight_decay=0.05,
         track_losses=True,

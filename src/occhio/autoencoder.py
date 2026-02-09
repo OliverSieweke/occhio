@@ -67,12 +67,36 @@ class TiedLinear(AutoEncoderBase):
 
         self.resample_weights()
 
-    # def loss_func(
-    #     self, x_true: Tensor, x_hat: Tensor, importances: Tensor | None = None
-    # ):
-    #     if importances is None:
-    #         importances = torch.ones(self.n_features)
-    #     return torch.mean(torch.sum(importances * torch.square(x_true - x_hat), dim=-1))
+    def resample_weights(self, force_norm=False):
+        self.W = nn.Parameter(
+            torch.randn(
+                self.n_hidden,
+                self.n_features,
+                generator=self.generator,
+                device=self.device,
+            )
+            / sqrt(self.n_hidden)
+        )
+        with torch.no_grad():
+            norms = self.W.data.norm(dim=0, keepdim=True)
+            self.W.data /= norms
+        self.b = nn.Parameter(torch.zeros(self.n_features, device=self.device))
+
+    def encode(self, x: Tensor) -> Tensor:
+        return x @ self.W.T
+
+    def decode(self, z: Tensor) -> Tensor:
+        return z @ self.W + self.b
+
+
+class TiedLinearRelu(AutoEncoderBase):
+    def __init__(self, n_features: int, n_hidden: int, **kwargs) -> None:
+        super().__init__(**kwargs)
+
+        self.n_features = n_features
+        self.n_hidden = n_hidden
+
+        self.resample_weights()
 
     def resample_weights(self, force_norm=False):
         self.W = nn.Parameter(
