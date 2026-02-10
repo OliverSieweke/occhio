@@ -17,15 +17,6 @@ class TreeNode:
 
 
 class HierarchicalSparse(Distribution):
-    """Sparse distribution with tree-structured dependencies.
-
-    Sampling process:
-    1. Root node always fires
-    2. For each non-root node: fires with probability p(depth) IF parent fired
-    3. Values are Uniform([0,1]) when active
-
-    Tree structure is fixed at init (call generate_new_tree to resample).
-    """
 
     def __init__(
         self,
