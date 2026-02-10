@@ -28,11 +28,6 @@ class ToyModel:
         else:
             self.importances = importances
 
-    # def loss_func(self, x_true, x_hat):
-    #     return torch.mean(
-    #         torch.sum(self.importances * torch.square(x_true - x_hat), dim=-1)
-    #     )
-
     def fit(
         self,
         n_epochs: int,
@@ -77,7 +72,7 @@ class ToyModel:
         if name in ("sample", "n_features"):
             return getattr(self.distribution, name)
 
-        if name in ("encode", "decode", "forward", "W", "resample_weights", "loss"):
+        if name in ("encode", "decode", "forward", "resample_weights", "loss"):
             return getattr(self.ae, name)
 
         raise AttributeError(f"'{type(self).__name__}' has no attribute '{name}'")
