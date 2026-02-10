@@ -5,7 +5,8 @@ description = "Experiment with Toy Models of Superposition"
 requires-python = ">=3.10"
 dependencies = [
     "torch>=2.10.0",
-    "numpy>=2.2.6"
+    "numpy>=2.2.6",
+    "einops>=0.8.2",
 ]
 
 [build-system]
@@ -13,7 +14,15 @@ requires = ["uv_build"]
 build-backend = "uv_build"
 
 [dependency-groups]
-dev = ["pytest>=9.0.2", "ruff>=0.15.0", "ty>=0.0.14"]
+dev = [
+    "kaleido>=1.2.0",
+    "matplotlib>=3.10.8",
+    "plotly>=6.5.2",
+    "pytest>=9.0.2",
+    "ruff>=0.15.0",
+    "seaborn>=0.13.2",
+    "ty>=0.0.14",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

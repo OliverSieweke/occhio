@@ -26,6 +26,7 @@ dist = HierarchicalPairs(n_features, 0.0, p_follow=0.9, generator=gen)
 # Try replacing TiedLinearRelu with TiedLinear!
 ae = TiedLinearRelu(n_features, n_hidden, generator=gen)
 
+
 for idx, p_active in enumerate(p_actives):
     gen.manual_seed(7)
     ae.resample_weights(True)
