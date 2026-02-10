@@ -5,7 +5,10 @@ description = "Experiment with Toy Models of Superposition"
 requires-python = ">=3.10"
 dependencies = [
     "torch>=2.10.0",
-    "numpy>=2.2.6"
+    "numpy>=2.2.6",
+    "ipykernel>=7.2.0",
+    "plotly>=6.5.2",
+    "nbformat>=5.10.4",
 ]
 
 [build-system]
