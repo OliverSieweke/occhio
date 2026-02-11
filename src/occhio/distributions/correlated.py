@@ -48,6 +48,46 @@ class HierarchicalPairs(Distribution):
         return mask * values
 
 
+class ScaledHierarchicalPairs(Distribution):
+    """
+    Like HierarchicalPairs, but the follower's activation is
+    scaled by the parent's value rather than being independent.
+
+    If feature 2i is active with value v, feature 2i+1 is active
+    with probability `p_follow` and takes value `U * v` where
+    U ~ Uniform(0, 1).
+    """
+
+    def __init__(
+        self,
+        n_features: int,
+        p_active: float,
+        p_follow: float = 0.5,
+        **kwargs,
+    ):
+        assert n_features % 2 == 0, "Need even `n_features` for pairs."
+        super().__init__(n_features, **kwargs)
+        self.p_active = p_active
+        self.p_follow = p_follow
+
+    def sample(self, batch_size: int) -> Tensor:
+        n_pairs = self.n_features // 2
+        primary_mask = self._rand(batch_size, n_pairs) < self.p_active
+        secondary_mask = primary_mask & (
+            self._rand(batch_size, n_pairs) < self.p_follow
+        )
+
+        primary_values = self._rand(batch_size, n_pairs)
+        secondary_values = self._rand(batch_size, n_pairs) * primary_values
+
+        out = torch.zeros(
+            batch_size, self.n_features, device=self.device
+        )
+        out[:, 0::2] = primary_mask * primary_values
+        out[:, 1::2] = secondary_mask * secondary_values
+        return out
+
+
 class CorrelatedPairs(Distribution):
     """
     Features come in pairs.
