@@ -138,7 +138,7 @@ tm = ToyModel(distribution=dist, ae=ae)
 
 print("Training autoencoder...")
 ae_losses = tm.fit(n_epochs=15_000, batch_size=2048, verbose=True)
-print(f"  Final AE loss: {ae_losses[-1].item():.6f}")  # ty:ignore
+print(f"  Final AE loss: {ae_losses[-1]:.6f}")
 print()
 
 

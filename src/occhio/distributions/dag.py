@@ -200,55 +200,81 @@ class DAGRandomWalkToRoot(Distribution):
         )
         return adj
 
-    def _build_parent_cache(self) -> None:
-        """Precompute parent indices for efficient sampling."""
-        self._parent_indices = []
-        self._has_parents = []
-        for j in range(self.n_features):
-            parents = self.adjacency[:, j].nonzero(as_tuple=True)[0]
-            self._parent_indices.append(parents)
-            self._has_parents.append(len(parents) > 0)
-
     def regenerate_dag(self) -> None:
         """Generate a new random DAG structure."""
         self.adjacency = self._generate_dag()
         self._build_parent_cache()
 
+    def _build_parent_cache(self) -> None:
+        """Precompute padded parent tensor for vectorized sampling."""
+        parent_lists = []
+        parent_counts = []
+        max_parents = 0
+        for j in range(self.n_features):
+            parents = self.adjacency[:, j].nonzero(as_tuple=True)[0]
+            parent_lists.append(parents)
+            parent_counts.append(len(parents))
+            if len(parents) > max_parents:
+                max_parents = len(parents)
+
+        # Padded tensor: (n_features, max_parents), pad with 0 (arbitrary, masked out)
+        max_parents = max(max_parents, 1)  # avoid zero-dim
+        self._parent_padded = torch.zeros(
+            self.n_features, max_parents, dtype=torch.long, device=self.device
+        )
+        self._parent_counts = torch.tensor(
+            parent_counts, dtype=torch.long, device=self.device
+        )
+        self._has_parents_mask = self._parent_counts > 0
+
+        for j, parents in enumerate(parent_lists):
+            if len(parents) > 0:
+                self._parent_padded[j, : len(parents)] = parents
+
     def sample(self, batch_size: int) -> Tensor:
-        """Sample sparse activations via random walk to root."""
+        """Sample sparse activations via random walk to root (vectorized)."""
         values = torch.zeros(batch_size, self.n_features, device=self.device)
 
-        seeds = torch.randint(0, self.n_features, (batch_size,), device=self.device)
+        seeds = self._randint(
+            0,
+            self.n_features,
+            (batch_size,),
+        )
         activations = self._rand(batch_size)
 
-        values[torch.arange(batch_size, device=self.device), seeds] = activations
+        batch_idx = torch.arange(batch_size, device=self.device)
+        values[batch_idx, seeds] = activations
 
-        current_nodes = seeds.clone()
-        current_values = activations.clone()
+        current_nodes = seeds
+        current_values = activations
 
         for _ in range(self.n_features):
             current_values = current_values * self.beta
 
-            still_walking = torch.zeros(
-                batch_size, dtype=torch.bool, device=self.device
-            )
-            next_nodes = current_nodes.clone()
-
-            for b in range(batch_size):
-                node = current_nodes[b].item()
-                if self._has_parents[node]:  # ty:ignore
-                    parents = self._parent_indices[node]  # ty:ignore
-                    chosen = parents[
-                        torch.randint(0, len(parents), (1,), device=self.device).item()
-                    ]
-                    next_nodes[b] = chosen
-                    still_walking[b] = True
-
+            # Check which walkers still have parents
+            still_walking = self._has_parents_mask[current_nodes]  # (batch_size,)
             if not still_walking.any():
                 break
 
-            idx = torch.arange(batch_size, device=self.device)[still_walking]
-            values[idx, next_nodes[still_walking]] += current_values[still_walking]
+            active_counts = self._parent_counts[
+                current_nodes[still_walking]
+            ]  # (n_active,)
+            random_idx = (
+                self._rand(active_counts.shape) * active_counts
+            ).long()  # uniform in [0, count)
+
+            # Gather chosen parents from padded tensor
+            active_nodes = current_nodes[still_walking]
+            chosen_parents = self._parent_padded[
+                active_nodes, random_idx
+            ]  # (n_active,)
+
+            # Update
+            next_nodes = current_nodes.clone()
+            next_nodes[still_walking] = chosen_parents
+
+            active_idx = batch_idx[still_walking]
+            values[active_idx, chosen_parents] += current_values[still_walking]
             current_nodes = next_nodes
 
         return values
@@ -257,5 +283,7 @@ class DAGRandomWalkToRoot(Distribution):
         """Move distribution to device."""
         super().to(device)
         self.adjacency = self.adjacency.to(device)
-        self._parent_indices = [p.to(device) for p in self._parent_indices]
+        self._parent_padded = self._parent_padded.to(device)
+        self._parent_counts = self._parent_counts.to(device)
+        self._has_parents_mask = self._has_parents_mask.to(device)
         return self
