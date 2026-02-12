@@ -116,7 +116,7 @@ class ToyModel:
     @cached_property
     @torch.no_grad()
     def W(self) -> Tensor:
-        return self.get_one_hot_embeddings()
+        return self.get_one_hot_embeddings().T
 
     @cached_property
     @torch.no_grad()
