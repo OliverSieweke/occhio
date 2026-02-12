@@ -6,6 +6,7 @@ from torch import Tensor
 import torch.nn as nn
 import torch
 from abc import ABC, abstractmethod
+import math
 
 
 class AutoEncoderBase(nn.Module, ABC):
@@ -120,6 +121,12 @@ class TiedLinearRelu(AutoEncoderBase):
         return torch.relu(z @ self.W + self.b)
 
 
+"""
+Note that nn.Sequetial / nn.Linear did not allow to control randomness.
+So we are building our own!
+"""
+
+
 class MLPEncoder(AutoEncoderBase):
     def __init__(self, embedding: list[int], unembedding: list[int], **kwargs):
         super().__init__(**kwargs)
@@ -138,39 +145,60 @@ class MLPEncoder(AutoEncoderBase):
         self._build_layers()
 
     def _build_layers(self):
-        encoder_layers = []
+        self.encoder_weights = nn.ParameterList()
+        self.encoder_biases = nn.ParameterList()
         for i in range(len(self.embedding_dims) - 1):
-            encoder_layers.append(
-                nn.Linear(
-                    self.embedding_dims[i],
+            w = nn.Parameter(
+                torch.empty(
                     self.embedding_dims[i + 1],
+                    self.embedding_dims[i],
                     device=self.device,
                 )
             )
-            # No ReLU on output
-            if i < len(self.embedding_dims) - 2:
-                encoder_layers.append(nn.ReLU())
-        self.encoder = nn.Sequential(*encoder_layers)
+            b = nn.Parameter(
+                torch.empty(self.embedding_dims[i + 1], device=self.device)
+            )
+            self._init_param(w, b)
+            self.encoder_weights.append(w)
+            self.encoder_biases.append(b)
 
-        decoder_layers = []
+        self.decoder_weights = nn.ParameterList()
+        self.decoder_biases = nn.ParameterList()
         for i in range(len(self.unembedding_dims) - 1):
-            decoder_layers.append(
-                nn.Linear(
-                    self.unembedding_dims[i],
+            w = nn.Parameter(
+                torch.empty(
                     self.unembedding_dims[i + 1],
+                    self.unembedding_dims[i],
                     device=self.device,
                 )
             )
-            if i < len(self.unembedding_dims) - 2:
-                decoder_layers.append(nn.ReLU())
-        decoder_layers.append(nn.ReLU())  # ReLU on final output, matching TiedLinear
-        self.decoder = nn.Sequential(*decoder_layers)
+            b = nn.Parameter(
+                torch.empty(self.unembedding_dims[i + 1], device=self.device)
+            )
+            self._init_param(w, b)
+            self.decoder_weights.append(w)
+            self.decoder_biases.append(b)
+
+    def _init_param(self, w: nn.Parameter, b: nn.Parameter):
+        nn.init.kaiming_uniform_(w, a=math.sqrt(5), generator=self.generator)
+        fan_in, _ = nn.init._calculate_fan_in_and_fan_out(w)
+        bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
+        nn.init.uniform_(b, -bound, bound, generator=self.generator)
+
+    def encode(self, x: Tensor) -> Tensor:
+        for i, (w, b) in enumerate(zip(self.encoder_weights, self.encoder_biases)):
+            x = x @ w.t() + b
+            if i < len(self.encoder_weights) - 1:
+                x = torch.relu(x)
+        return x
+
+    def decode(self, z: Tensor) -> Tensor:
+        for i, (w, b) in enumerate(zip(self.decoder_weights, self.decoder_biases)):
+            z = z @ w.t() + b
+            if i < len(self.decoder_weights) - 1:
+                z = torch.relu(z)
+        z = torch.relu(z)  # ReLU on final output, matching your original
+        return z
 
     def resample_weights(self, force_norm=False):
         self._build_layers()
-
-    def encode(self, x: Tensor) -> Tensor:
-        return self.encoder(x)
-
-    def decode(self, z: Tensor) -> Tensor:
-        return self.decoder(z)
