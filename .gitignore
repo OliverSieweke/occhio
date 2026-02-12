@@ -8,3 +8,4 @@ __pycache__/
 *.DS_Store
 .vscode/*
 *.png
+src/occhio/trash_experiment/
