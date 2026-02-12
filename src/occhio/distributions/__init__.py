@@ -1,6 +1,6 @@
 from .base import Distribution
 from .sparse import SparseUniform, SparseExponential
-from .correlated import CorrelatedPairs, HierarchicalPairs, AnticorrelatedPairs
+from .correlated import CorrelatedPairs, HierarchicalPairs, ScaledHierarchicalPairs, AnticorrelatedPairs
 from .relational import RelationalSimple, MultiRelational
 from .hierarchical import HierarchicalSparse
 from .dag import DAGBayesianPropagation, DAGDistribution
@@ -12,6 +12,7 @@ __all__ = [
     "SparseExponential",
     "CorrelatedPairs",
     "HierarchicalPairs",
+    "ScaledHierarchicalPairs",
     "AnticorrelatedPairs",
     "RelationalSimple",
     "MultiRelational",
