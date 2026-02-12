@@ -10,6 +10,10 @@ dependencies = [
     "plotly>=6.5.2",
     "nbformat>=5.10.4",
     "einops>=0.8.2",
+    "jupyterlab>=4.5.3",
+    "debugpy>=1.8.20",
+    "scipy>=1.15.3",
+    "tqdm>=4.67.3",
 ]
 
 [build-system]

@@ -1,10 +1,13 @@
+from functools import cached_property
+from typing import Any, Optional
+
 import torch
+import torch.nn.functional as F
 from torch import Tensor
 from torch.optim import AdamW
+
+from .autoencoder import AutoEncoderBase
 from .distributions.base import Distribution
-from .distributions.sparse import SparseUniform
-from .autoencoder import AutoEncoderBase, TiedLinear
-from typing import Optional
 
 
 class ToyModel:
@@ -30,7 +33,7 @@ class ToyModel:
 
     def fit(
         self,
-        n_epochs: int,
+        n_epochs: int = 10000,
         batch_size=1024,
         learning_rate=3e-4,
         weight_decay=0.05,
@@ -76,3 +79,72 @@ class ToyModel:
             return getattr(self.ae, name)
 
         raise AttributeError(f"'{type(self).__name__}' has no attribute '{name}'")
+
+    @cached_property
+    @torch.no_grad()
+    def froebenius_norm_squared(self):
+        return torch.linalg.norm(self.W, ord="fro") ** 2
+
+    @cached_property
+    @torch.no_grad()
+    def hidden_dimensions_per_embedded_features(self) -> Any:
+        return self.ae.n_hidden / self.froebenius_norm_squared
+
+    @cached_property
+    @torch.no_grad()
+    def embedded_features_per_hidden_dimensions(self) -> Any:
+        return self.froebenius_norm_squared / self.ae.n_hidden
+
+    @cached_property
+    @torch.no_grad()
+    def feature_dimensionalities(self):
+        return (
+            self.feature_representations
+            / self.total_feature_interferences_including_self
+        )
+
+    @cached_property
+    @torch.no_grad()
+    def mean_feature_dimensionalities(self):
+        return self.feature_dimensionalities.mean()
+
+    @cached_property
+    @torch.no_grad()
+    def total_feature_dimensionalities_per_hidden_dimension(self):
+        return self.feature_dimensionalities.sum() / self.ae.n_hidden
+
+    @cached_property
+    @torch.no_grad()
+    def W(self) -> Tensor:
+        return self.get_one_hot_embeddings().T
+
+    @cached_property
+    @torch.no_grad()
+    def W_normalized_features(self) -> Tensor:
+        return F.normalize(self.W, dim=0)
+
+    @cached_property
+    @torch.no_grad()
+    def feature_norms(self) -> Tensor:
+        return torch.linalg.vector_norm(self.W, dim=0)
+
+    @cached_property
+    @torch.no_grad()
+    def feature_representations(self) -> Tensor:
+        return (self.W**2).sum(dim=0)
+
+    @cached_property
+    @torch.no_grad()
+    def interferences(self) -> Tensor:
+        return (self.W_normalized_features.T @ self.W) ** 2
+
+    @cached_property
+    @torch.no_grad()
+    def total_feature_interferences(self) -> Tensor:
+        interferences = self.interferences.clone()
+        return interferences.fill_diagonal_(0).sum(dim=1)
+
+    @cached_property
+    @torch.no_grad()
+    def total_feature_interferences_including_self(self) -> Tensor:
+        return self.interferences.sum(dim=1)
