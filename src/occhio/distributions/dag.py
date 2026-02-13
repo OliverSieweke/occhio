@@ -177,7 +177,8 @@ class DAGRandomWalkToRoot(Distribution):
         self,
         n_features: int,
         p_edge: float = 0.1,
-        beta: float = 0.9,
+        beta: float = 1.0,
+        p_active: list[float] | Tensor | None = None,
         **kwargs,
     ):
         """
@@ -189,6 +190,10 @@ class DAGRandomWalkToRoot(Distribution):
         super().__init__(n_features, **kwargs)
         self.p_edge = p_edge
         self.beta = beta
+        if p_active is None:
+            self.p_active = torch.ones(n_features, device=self.device) / n_features
+        else:
+            self.p_active = torch.Tensor(p_active)
 
         self.regenerate_dag()
 
@@ -239,6 +244,7 @@ class DAGRandomWalkToRoot(Distribution):
             0,
             self.n_features,
             (batch_size,),
+            p=self.p_active,
         )
         activations = self._rand(batch_size)
 
@@ -251,7 +257,6 @@ class DAGRandomWalkToRoot(Distribution):
         for _ in range(self.n_features):
             current_values = current_values * self.beta
 
-            # Check which walkers still have parents
             still_walking = self._has_parents_mask[current_nodes]  # (batch_size,)
             if not still_walking.any():
                 break
@@ -263,7 +268,6 @@ class DAGRandomWalkToRoot(Distribution):
                 self._rand(active_counts.shape) * active_counts
             ).long()  # uniform in [0, count)
 
-            # Gather chosen parents from padded tensor
             active_nodes = current_nodes[still_walking]
             chosen_parents = self._parent_padded[
                 active_nodes, random_idx
