@@ -1,6 +1,7 @@
 """The base class for distributions"""
 
 from abc import ABC, abstractmethod
+from math import prod
 import torch
 from torch import Tensor
 
@@ -36,11 +37,28 @@ class Distribution(ABC):
         q, r = torch.linalg.qr(mat)
         return q * torch.sign(torch.diag(r))
 
-    def _randint(self, low: int, high: int, shape: tuple[int, ...]) -> Tensor:
+    def _randint(
+        self, low: int, high: int, shape: tuple[int, ...], p: Tensor | None = None
+    ) -> Tensor:
         """Random generator respecting the self.generator"""
-        return torch.randint(
-            low=low, high=high, size=shape, device=self.device, generator=self.generator
-        )
+        if p is None:
+            return torch.randint(
+                low=low,
+                high=high,
+                size=shape,
+                device=self.device,
+                generator=self.generator,
+            )
+        else:
+            return (
+                low
+                + torch.multinomial(
+                    p[low:high],
+                    prod(shape),
+                    replacement=True,
+                    generator=self.generator,
+                )
+            ).reshape(shape)
 
     def _broadcast(self, x: float | list[float] | Tensor) -> Tensor:
         if isinstance(x, Tensor):

@@ -187,7 +187,7 @@ class MLPEncoder(AutoEncoderBase):
 
     def encode(self, x: Tensor) -> Tensor:
         for i, (w, b) in enumerate(zip(self.encoder_weights, self.encoder_biases)):
-            x = x @ w.t() + b
+            x = x @ w.t()
             if i < len(self.encoder_weights) - 1:
                 x = torch.relu(x)
         return x
