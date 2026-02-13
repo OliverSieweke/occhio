@@ -255,7 +255,9 @@ class DAGRandomWalkToRoot(Distribution):
         current_values = activations
 
         for _ in range(self.n_features):
-            current_values = current_values * self.beta
+            current_values = self.beta * current_values + (
+                1.0 - self.beta
+            ) * current_values * self._rand(batch_size)
 
             still_walking = self._has_parents_mask[current_nodes]  # (batch_size,)
             if not still_walking.any():
