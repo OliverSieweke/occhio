@@ -48,3 +48,6 @@ Here the activations are viewed as binary. A node activates if the parent is act
 
 `DAGBayesianPropagation`
 Here the activation size matters. A node is active with probability $1 - \prod_{j\in \textup{active parents}} (1 - a_j)$. 
+
+
+`DAGRandomWalkToRoot`
