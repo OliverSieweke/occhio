@@ -39,15 +39,12 @@ class DAGDistribution(Distribution):
         )
 
         for i in range(self.n_features):
-            # Parents of node i are nodes j where causal[j, i] = True
             parent_mask = self.adjacency[:, i]
             has_parents = parent_mask.any()
 
             if not has_parents:
-                # Root node: fires with probability p_active
                 active[:, i] = self._rand(batch_size, 1).squeeze(-1) < self.p_active[i]
             else:
-                # Non-root: fires if (any parent active) AND (coin flip)
                 any_parent_active = active[:, parent_mask].any(dim=1)
                 fires = self._rand(batch_size, 1).squeeze(-1) < self.p_active[i]
                 active[:, i] = any_parent_active & fires
@@ -158,4 +155,141 @@ class DAGBayesianPropagation(Distribution):
         super().to(device)
         self.adjacency = self.adjacency.to(device)
         self._parent_indices = [p.to(device) for p in self._parent_indices]
+        return self
+
+
+class DAGRandomWalkToRoot(Distribution):
+    """
+    DAG-structured distribution with random-walk-to-root activation.
+
+    Sampling:
+    1. Pick one node uniformly at random
+    2. Activate it with value ~ Uniform(0,1)
+    3. Random walk upward: at each node, pick one parent uniformly,
+       activate it with decayed value (beta * current), repeat until root
+    4. If a node has multiple parents, one is chosen uniformly at random
+
+    Produces maximally sparse activations: exactly one path from a
+    random node to a root is active per sample.
+    """
+
+    def __init__(
+        self,
+        n_features: int,
+        p_edge: float = 0.1,
+        beta: float = 1.0,
+        p_active: list[float] | Tensor | None = None,
+        **kwargs,
+    ):
+        """
+        Args:
+            n_features: Number of nodes/features
+            p_edge: Probability of edge i -> j existing (for i < j)
+            beta: Multiplicative decay per step upward
+        """
+        super().__init__(n_features, **kwargs)
+        self.p_edge = p_edge
+        self.beta = beta
+        if p_active is None:
+            self.p_active = torch.ones(n_features, device=self.device) / n_features
+        else:
+            self.p_active = torch.Tensor(p_active)
+
+        self.regenerate_dag()
+
+    def _generate_dag(self) -> Tensor:
+        """Generate random DAG as upper triangular adjacency matrix."""
+        adj = torch.triu(
+            self._rand(self.n_features, self.n_features) < self.p_edge,
+            diagonal=1,
+        )
+        return adj
+
+    def regenerate_dag(self) -> None:
+        """Generate a new random DAG structure."""
+        self.adjacency = self._generate_dag()
+        self._build_parent_cache()
+
+    def _build_parent_cache(self) -> None:
+        """Precompute padded parent tensor for vectorized sampling."""
+        parent_lists = []
+        parent_counts = []
+        max_parents = 0
+        for j in range(self.n_features):
+            parents = self.adjacency[:, j].nonzero(as_tuple=True)[0]
+            parent_lists.append(parents)
+            parent_counts.append(len(parents))
+            if len(parents) > max_parents:
+                max_parents = len(parents)
+
+        # Padded tensor: (n_features, max_parents), pad with 0 (arbitrary, masked out)
+        max_parents = max(max_parents, 1)  # avoid zero-dim
+        self._parent_padded = torch.zeros(
+            self.n_features, max_parents, dtype=torch.long, device=self.device
+        )
+        self._parent_counts = torch.tensor(
+            parent_counts, dtype=torch.long, device=self.device
+        )
+        self._has_parents_mask = self._parent_counts > 0
+
+        for j, parents in enumerate(parent_lists):
+            if len(parents) > 0:
+                self._parent_padded[j, : len(parents)] = parents
+
+    def sample(self, batch_size: int) -> Tensor:
+        """Sample sparse activations via random walk to root (vectorized)."""
+        values = torch.zeros(batch_size, self.n_features, device=self.device)
+
+        seeds = self._randint(
+            0,
+            self.n_features,
+            (batch_size,),
+            p=self.p_active,
+        )
+        activations = self._rand(batch_size)
+
+        batch_idx = torch.arange(batch_size, device=self.device)
+        values[batch_idx, seeds] = activations
+
+        current_nodes = seeds
+        current_values = activations
+
+        for _ in range(self.n_features):
+            current_values = self.beta * current_values + (
+                1.0 - self.beta
+            ) * current_values * self._rand(batch_size)
+
+            still_walking = self._has_parents_mask[current_nodes]  # (batch_size,)
+            if not still_walking.any():
+                break
+
+            active_counts = self._parent_counts[
+                current_nodes[still_walking]
+            ]  # (n_active,)
+            random_idx = (
+                self._rand(active_counts.shape) * active_counts
+            ).long()  # uniform in [0, count)
+
+            active_nodes = current_nodes[still_walking]
+            chosen_parents = self._parent_padded[
+                active_nodes, random_idx
+            ]  # (n_active,)
+
+            # Update
+            next_nodes = current_nodes.clone()
+            next_nodes[still_walking] = chosen_parents
+
+            active_idx = batch_idx[still_walking]
+            values[active_idx, chosen_parents] += current_values[still_walking]
+            current_nodes = next_nodes
+
+        return values
+
+    def to(self, device: torch.device | str):
+        """Move distribution to device."""
+        super().to(device)
+        self.adjacency = self.adjacency.to(device)
+        self._parent_padded = self._parent_padded.to(device)
+        self._parent_counts = self._parent_counts.to(device)
+        self._has_parents_mask = self._has_parents_mask.to(device)
         return self

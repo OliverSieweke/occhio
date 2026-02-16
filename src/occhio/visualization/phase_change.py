@@ -1,9 +1,45 @@
+import math
+
 import numpy as np
 import plotly.graph_objects as go
 from numpy.typing import NDArray
 from plotly.subplots import make_subplots
 
 from occhio.model_grid import ModelGrid
+
+
+def plot_phase_change_multi(model_grid: ModelGrid, *, up_to: int, max_cols: int = 4):
+    total_items = up_to + 1  # features + colormap
+    n_cols = min(total_items, max_cols)
+    n_rows = math.ceil(total_items / n_cols)
+
+    specs = []
+    for r in range(n_rows):
+        row_specs = []
+        for c in range(n_cols):
+            if r * n_cols + c < total_items:
+                row_specs.append({})
+            else:
+                row_specs.append(None)
+        specs.append(row_specs)
+
+    fig = make_subplots(
+        rows=n_rows,
+        cols=n_cols,
+        # subplot_titles=[f"Phase Change [Feature {i}]" for i in range(up_to)] + ["Colormaddp"],
+        specs=specs,
+    )
+
+    for i in range(up_to):
+        row = i // n_cols + 1
+        col = i % n_cols + 1
+        _add_model_phases_trace(model_grid, i, fig, col=col, row=row)
+
+    colormap_row = up_to // n_cols + 1
+    colormap_col = up_to % n_cols + 1
+    _add_colormap_trace(fig, col=colormap_col, row=colormap_row)
+
+    return fig
 
 
 def plot_phase_change(model_grid: ModelGrid, *, tracked_feature=1):

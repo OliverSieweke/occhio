@@ -4,7 +4,7 @@ from typing import Any, Optional
 import torch
 import torch.nn.functional as F
 from torch import Tensor
-from torch.optim import AdamW
+from torch.optim import AdamW, Optimizer
 
 from .autoencoder import AutoEncoderBase
 from .distributions.base import Distribution
@@ -33,16 +33,18 @@ class ToyModel:
 
     def fit(
         self,
-        n_epochs: int = 10000,
-        batch_size=1024,
-        learning_rate=3e-4,
-        weight_decay=0.05,
-        track_losses=True,
-        verbose=False,
+        n_epochs: int,
+        batch_size: int = 1024,
+        learning_rate: float = 3e-4,
+        weight_decay: float = 0.05,
+        track_losses: bool = True,
+        optimizer: Optimizer | None = None,
+        verbose: bool = False,
     ) -> list[float]:
-        optimizer = AdamW(
-            self.ae.parameters(), lr=learning_rate, weight_decay=weight_decay
-        )
+        if optimizer is None:
+            optimizer = AdamW(
+                self.ae.parameters(), lr=learning_rate, weight_decay=weight_decay
+            )
 
         losses = []
 
@@ -55,7 +57,7 @@ class ToyModel:
             optimizer.step()
 
             if track_losses:
-                losses.append(loss)
+                losses.append(loss.item())
             if verbose and (ep + 1) % 1000 == 0:
                 print(f"AE Epoch {ep + 1}/{n_epochs}, Loss: {loss.item():.6f}")
 

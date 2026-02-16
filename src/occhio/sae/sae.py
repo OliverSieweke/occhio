@@ -3,10 +3,10 @@ Implements Sparse AutoEncoders.
 """
 
 from torch import Tensor
+from torch.optim import AdamW
 import torch
 import torch.nn as nn
 from abc import ABC, abstractmethod
-from ..autoencoder import AutoEncoderBase
 
 
 class SparseAutoEncoderBase(nn.Module, ABC):
@@ -34,6 +34,27 @@ class SparseAutoEncoderBase(nn.Module, ABC):
         sparsity_loss = torch.mean(torch.sum(torch.abs(intermediate), dim=-1))
         mse_loss = torch.mean(torch.sum(torch.square(x_true - x_hat), dim=-1))
         return self.l1_coef * sparsity_loss + mse_loss
+
+    def train_sae(
+        self,
+        data_fn,
+        n_steps: int = 10_000,
+        batch_size: int = 1024,
+        lr: float = 3e-4,
+    ) -> list[float]:
+        optimizer = AdamW(self.parameters(), lr=lr)
+        losses = []
+        for step in range(n_steps):
+            x = data_fn(batch_size)
+            optimizer.zero_grad()
+            x_hat, z = self.forward(x)
+            loss = self.loss(x, x_hat, z)
+            loss.backward()
+            optimizer.step()
+            losses.append(loss.item())
+            if (step + 1) % 1000 == 0:
+                print(f"  SAE step {step + 1}/{n_steps}  loss={loss.item():.4f}")
+        return losses
 
     def __init__(
         self,
