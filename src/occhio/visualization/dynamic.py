@@ -1,0 +1,126 @@
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+
+
+def plot_dynamic_scatter(losses: list[float], hooks_list: list[tuple]):
+    """Creates a dynamic plot of loss and another property as a scatter.
+
+    Args:
+        losses: list of losses.
+        hooks_list: list of tuples of (loss_epoch, Tensor[2, n])
+    """
+    fig = make_subplots(
+        rows=1,
+        cols=2,
+        subplot_titles=("Training Loss", "Scatter"),
+        column_widths=[0.5, 0.5],
+    )
+    n: int = hooks_list[0][-1].shape[-1]
+
+    # Add loss line plot (static)
+    fig.add_trace(
+        go.Scatter(x=list(range(len(losses))), y=losses, mode="lines", name="Loss"),
+        row=1,
+        col=1,
+    )
+
+    # Create frames for animation (one per epoch in hooks_list)
+    frames = []
+    for idx, (epoch, emb_mat) in enumerate(hooks_list):
+        frames.append(
+            go.Frame(
+                data=[
+                    go.Scatter(x=list(range(len(losses))), y=losses, mode="lines"),
+                    go.Scatter(
+                        x=emb_mat[0],
+                        y=emb_mat[1],
+                        mode="markers",
+                        marker=dict(
+                            size=10,
+                            color=list(range(n)),
+                            colorscale="Viridis",
+                        ),
+                        showlegend=False,
+                    ),
+                ],
+                name=str(epoch),
+                layout=go.Layout(
+                    title_text=f"Epoch {epoch}",
+                    shapes=[
+                        dict(
+                            type="line",
+                            x0=epoch,
+                            x1=epoch,
+                            y0=0,
+                            y1=1,
+                            xref="x",
+                            yref="y domain",
+                            line=dict(color="red", width=2, dash="dash"),
+                        )
+                    ],
+                ),
+            )
+        )
+
+    # Add initial scatter plot
+    emb_mat = hooks_list[0][1]
+    fig.add_trace(
+        go.Scatter(
+            x=emb_mat[0],
+            y=emb_mat[1],
+            mode="markers",
+            marker=dict(size=10, color=list(range(n)), colorscale="Viridis"),
+            showlegend=False,
+        ),
+        row=1,
+        col=2,
+    )
+
+    # Add frames to figure
+    fig.frames = frames
+
+    # Add slider
+    steps = []
+    for idx, (epoch, _) in enumerate(hooks_list):
+        step = dict(
+            method="animate",
+            args=[
+                [str(epoch)],
+                {"frame": {"duration": 0, "redraw": True}, "mode": "immediate"},
+            ],
+            label=str(epoch),
+        )
+        steps.append(step)
+
+    sliders = [
+        dict(
+            active=0,
+            yanchor="top",
+            y=-0.1,
+            xanchor="left",
+            x=0.0,
+            currentvalue=dict(prefix="Epoch: ", visible=True, xanchor="right"),
+            pad=dict(b=10, t=50),
+            len=0.9,
+            steps=steps,
+        )
+    ]
+
+    fig.update_layout(
+        sliders=sliders,
+        height=500,
+        showlegend=False,
+        shapes=[
+            dict(
+                type="line",
+                x0=hooks_list[0][0],
+                x1=hooks_list[0][0],
+                y0=0,
+                y1=1,
+                xref="x",
+                yref="y domain",
+                line=dict(color="red", width=2, dash="dash"),
+            )
+        ],
+    )
+    return fig

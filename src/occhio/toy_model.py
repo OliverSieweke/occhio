@@ -42,13 +42,14 @@ class ToyModel:
         hooks: list[Callable] = [],
         hook_freq: int = 1,
         verbose: bool = False,
-    ) -> list[float]:
+    ) -> tuple[list[float], list]:
         if optimizer is None:
             optimizer = AdamW(
                 self.ae.parameters(), lr=learning_rate, weight_decay=weight_decay
             )
 
         losses = []
+        hook_returns = [[] for _ in hooks]
 
         for ep in range(n_epochs):
             x = self.distribution.sample(batch_size)
@@ -62,15 +63,15 @@ class ToyModel:
                 losses.append(loss.item())
             if verbose and (ep + 1) % 1000 == 0:
                 print(f"AE Epoch {ep + 1}/{n_epochs}, Loss: {loss.item():.6f}")
-            if hooks and (ep % hook_freq == 0 or ep == n_epochs-1):
+            if hooks and (ep % hook_freq == 0 or ep == n_epochs - 1):
                 with torch.no_grad():
                     hook_data = dict(
                         tm=self, epoch=ep, loss=loss.item(), x=x, x_hat=x_hat
                     )
-                    for h in hooks:
-                        h(hook_data)
+                    for i, h in enumerate(hooks):
+                        hook_returns[i].append(h(hook_data))
 
-        return losses
+        return losses, hook_returns
 
     def sample_latent(self, batch_size) -> Tensor:
         inputs = self.distribution.sample(batch_size)
