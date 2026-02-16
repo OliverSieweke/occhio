@@ -62,10 +62,13 @@ class ToyModel:
                 losses.append(loss.item())
             if verbose and (ep + 1) % 1000 == 0:
                 print(f"AE Epoch {ep + 1}/{n_epochs}, Loss: {loss.item():.6f}")
-            if hooks and ep % hook_freq == 0:
-                hook_data = dict(ae=self.ae, episode=ep)
-                for h in hooks:
-                    h(hook_data)
+            if hooks and (ep % hook_freq == 0 or ep == n_epochs-1):
+                with torch.no_grad():
+                    hook_data = dict(
+                        tm=self, epoch=ep, loss=loss.item(), x=x, x_hat=x_hat
+                    )
+                    for h in hooks:
+                        h(hook_data)
 
         return losses
 
