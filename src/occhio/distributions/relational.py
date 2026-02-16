@@ -9,12 +9,18 @@ from torch import Tensor
 
 
 class RelationalSimple(Distribution):
-    """Encodes two distinct matrix bindings (identity + O(n))"""
+    """Encodes two distinct matrix bindings (identity + O(n))
+
+    Args:
+        n_features: Number of features.
+        p_active: Probability each feature is non-zero. Scalar or per-feature.
+        **kwargs: Passed to ``Distribution`` (device, generator).
+    """
 
     def __init__(self, n_features: int, p_active: float = 0.1, **kwargs):
         super().__init__(n_features, **kwargs)
         self.p_active = self._broadcast(p_active)
-        self.on_mat = self._rand_On(self.n_features)
+        self.new_On_matrix()
 
     def sample(self, batch_size: int) -> Tensor:
         # first
@@ -29,14 +35,25 @@ class RelationalSimple(Distribution):
 
         return first + second @ self.on_mat
 
+    def new_On_matrix(self):
+        self.on_mat = self._rand_On(self.n_features)
+
 
 class MultiRelational(Distribution):
-    """Encodes k distinct matrix bindings"""
+    """Encodes k distinct matrix bindings
 
-    def __init__(self, n_features: int, p_active: float = 0.1, k=2, **kwargs):
+    Args:
+        n_features: Number of features.
+        p_active: Probability each feature is non-zero. Scalar or per-feature.
+        k: The number of representation to layer.
+        **kwargs: Passed to ``Distribution`` (device, generator).
+    """
+
+    def __init__(self, n_features: int, p_active: float = 0.1, k: int = 2, **kwargs):
         super().__init__(n_features, **kwargs)
         self.p_active = self._broadcast(p_active)
-        self.on_mats: list[Tensor] = [self._rand_On(self.n_features) for _ in range(k)]
+        self.k = k
+        self.new_On_matricies()
 
     def sample(self, batch_size: int) -> Tensor:
         res = torch.zeros((batch_size, self.n_features))
@@ -47,3 +64,8 @@ class MultiRelational(Distribution):
             res += (mask * values) @ mat
 
         return res
+
+    def new_On_matricies(self):
+        self.on_mats: list[Tensor] = [
+            self._rand_On(self.n_features) for _ in range(self.k)
+        ]
