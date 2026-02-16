@@ -1,5 +1,5 @@
 from functools import cached_property
-from typing import Any, Optional
+from typing import Any, Optional, Callable
 
 import torch
 import torch.nn.functional as F
@@ -39,6 +39,8 @@ class ToyModel:
         weight_decay: float = 0.05,
         track_losses: bool = True,
         optimizer: Optimizer | None = None,
+        hooks: list[Callable] = [],
+        hook_freq: int = 1,
         verbose: bool = False,
     ) -> list[float]:
         if optimizer is None:
@@ -60,6 +62,10 @@ class ToyModel:
                 losses.append(loss.item())
             if verbose and (ep + 1) % 1000 == 0:
                 print(f"AE Epoch {ep + 1}/{n_epochs}, Loss: {loss.item():.6f}")
+            if hooks and ep % hook_freq == 0:
+                hook_data = dict(ae=self.ae, episode=ep)
+                for h in hooks:
+                    h(hook_data)
 
         return losses
 
