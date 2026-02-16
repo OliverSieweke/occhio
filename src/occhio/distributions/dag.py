@@ -79,10 +79,6 @@ class DAGDistribution(Distribution):
 class DAGBayesianPropagation(Distribution):
     """DAG-structured distribution with Noisy-OR activation propagation.
 
-    Nodes are organized in a directed acyclic graph (DAG) structure generated using
-    an Erdős-Rényi process. The DAG is represented as an upper triangular adjacency
-    matrix where ``adjacency[i, j] = True`` means edge i → j (i is parent of j).
-
     Root nodes (those without parents) activate with probability ``p_active`` and take
     values ``~ Uniform(0, 1)``. Non-root nodes use Noisy-OR propagation: given active
     parent values v₁, v₂, ..., vₖ, the node activates with probability:
@@ -186,11 +182,6 @@ class DAGBayesianPropagation(Distribution):
 
 class DAGRandomWalkToRoot(Distribution):
     """DAG-structured distribution with maximally sparse random-walk-to-root activation.
-
-    Nodes are organized in a directed acyclic graph (DAG) structure generated using
-    an Erdős-Rényi process. Unlike other DAG distributions that can activate multiple
-    paths, this distribution produces maximally sparse activations by activating
-    exactly one path per sample.
 
     The sampling process:
 
