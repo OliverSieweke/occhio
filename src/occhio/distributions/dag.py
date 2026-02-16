@@ -6,10 +6,27 @@ import torch
 
 
 class DAGDistribution(Distribution):
-    """
-    DAG-structured distribution with simple binary activation.
-    A node is active if any parent is active and a coin flip succeeds.
-    Actual values are Uniform[0,1] when active, 0 otherwise.
+    """DAG-structured distribution with binary activation propagation.
+
+    Nodes are organized in a directed acyclic graph (DAG) structure generated using
+    an Erdős-Rényi process. The DAG is represented as an upper triangular adjacency
+    matrix where ``adjacency[i, j] = True`` means edge i → j (i is parent of j).
+
+    Root nodes (those without parents) activate independently with probability ``p_active``.
+    Non-root nodes activate if at least one parent is active AND an independent coin flip
+    with probability ``p_active`` succeeds. Active nodes take values ``~ Uniform(0, 1)``;
+    inactive nodes have value 0.
+
+    Args:
+        n_features: Number of nodes/features in the DAG.
+        p_active: Probability of activation. Scalar or per-feature. Defaults to 0.1.
+            For root nodes, this is the independent activation probability.
+            For non-root nodes, this is the conditional probability given that
+            at least one parent is active.
+        p_edge: Probability of edge i → j existing (for i < j) in the Erdős-Rényi
+            generation process. Defaults to 0.1.
+        device: Torch device for all generated tensors.
+        generator: Optional ``torch.Generator`` for deterministic sampling.
     """
 
     def __init__(
@@ -60,22 +77,37 @@ class DAGDistribution(Distribution):
 
 
 class DAGBayesianPropagation(Distribution):
-    """
-    DAG-structured distribution with Noisy-OR propagation.
+    """DAG-structured distribution with Noisy-OR activation propagation.
 
-    Structure:
-    - Nodes are indexed 0, 1, ..., n_features-1
-    - causal[i, j] = True means edge i → j (i is parent of j)
-    - Upper triangular ensures DAG (processing in index order is topological)
+    Nodes are organized in a directed acyclic graph (DAG) structure generated using
+    an Erdős-Rényi process. The DAG is represented as an upper triangular adjacency
+    matrix where ``adjacency[i, j] = True`` means edge i → j (i is parent of j).
 
-    Sampling:
-    - Root nodes (no parents) fire with probability p_active
-    - Non-root nodes fire with probability: 1 - prod_{active parent j}(1 - v_j)
-      where v_j is the realized value of parent j
-    - Values are Uniform[0,1] when active, 0 otherwise
+    Root nodes (those without parents) activate with probability ``p_active`` and take
+    values ``~ Uniform(0, 1)``. Non-root nodes use Noisy-OR propagation: given active
+    parent values v₁, v₂, ..., vₖ, the node activates with probability:
 
-    Semantics: activation magnitude = causal influence. A parent with v=0.9
-    almost certainly triggers its children; v=0.1 rarely does.
+    .. math::
+        P(\\text{activate}) = 1 - \\prod_{j \\in \\text{active parents}} (1 - v_j)
+
+    This implements a Bayesian causal model where activation magnitude represents causal
+    influence. A parent with value v=0.9 almost certainly triggers its children, while
+    v=0.1 rarely does. Active nodes take values ``~ Uniform(0, 1)``; inactive nodes
+    have value 0.
+
+    Args:
+        n_features: Number of nodes/features in the DAG.
+        p_active: Probability that root nodes activate. Scalar or per-feature.
+            Defaults to 0.1.
+        p_edge: Probability of edge i → j existing (for i < j) in the Erdős-Rényi
+            generation process. Defaults to 0.1.
+        device: Torch device for all generated tensors.
+        generator: Optional ``torch.Generator`` for deterministic sampling.
+
+    Note:
+        Unlike tree structures, DAG activation probabilities don't have simple closed
+        forms due to the Noisy-OR combination over multiple parent paths. Use
+        :meth:`get_expected_activation` to estimate marginal probabilities empirically.
     """
 
     def __init__(
@@ -85,12 +117,6 @@ class DAGBayesianPropagation(Distribution):
         p_edge: float = 0.1,
         **kwargs,
     ):
-        """
-        Args:
-            n_features: Number of nodes/features
-            p_active: Probability that root nodes fire
-            p_edge: Probability of edge i → j existing (for i < j)
-        """
         super().__init__(n_features, **kwargs)
         self.p_active = self._broadcast(p_active)
         self.p_edge = p_edge
@@ -159,18 +185,40 @@ class DAGBayesianPropagation(Distribution):
 
 
 class DAGRandomWalkToRoot(Distribution):
-    """
-    DAG-structured distribution with random-walk-to-root activation.
+    """DAG-structured distribution with maximally sparse random-walk-to-root activation.
 
-    Sampling:
-    1. Pick one node uniformly at random
-    2. Activate it with value ~ Uniform(0,1)
-    3. Random walk upward: at each node, pick one parent uniformly,
-       activate it with decayed value (beta * current), repeat until root
-    4. If a node has multiple parents, one is chosen uniformly at random
+    Nodes are organized in a directed acyclic graph (DAG) structure generated using
+    an Erdős-Rényi process. Unlike other DAG distributions that can activate multiple
+    paths, this distribution produces maximally sparse activations by activating
+    exactly one path per sample.
 
-    Produces maximally sparse activations: exactly one path from a
-    random node to a root is active per sample.
+    The sampling process:
+
+    1. Select one starting node according to probabilities ``p_active``
+       (uniform by default)
+    2. Activate it with value ``~ Uniform(0, 1)``
+    3. Perform a random walk upward: at each step, pick one parent uniformly at random
+    4. Activate the chosen parent with a decayed value
+    5. Repeat until reaching a root node (no parents)
+
+    Value decay at each step is controlled by ``beta``:
+
+    - If ``beta = 1.0``: deterministic decay, parent value = child value
+    - If ``beta < 1.0``: ``parent_value = beta * child_value + (1 - beta) * child_value * U``
+      where ``U ~ Uniform(0, 1)``
+
+    Args:
+        n_features: Number of nodes/features in the DAG.
+        p_edge: Probability of edge i → j existing (for i < j) in the Erdős-Rényi
+            generation process. Defaults to 0.1.
+        beta: Multiplicative decay factor per step upward. Defaults to 1.0.
+            Values in (0, 1] control how much parent activations decay relative
+            to child activations.
+        p_active: Probability distribution for selecting the starting node.
+            If ``None``, uses uniform distribution. Can be a list or Tensor of
+            length ``n_features``. Defaults to ``None``.
+        device: Torch device for all generated tensors.
+        generator: Optional ``torch.Generator`` for deterministic sampling.
     """
 
     def __init__(
@@ -181,12 +229,6 @@ class DAGRandomWalkToRoot(Distribution):
         p_active: list[float] | Tensor | None = None,
         **kwargs,
     ):
-        """
-        Args:
-            n_features: Number of nodes/features
-            p_edge: Probability of edge i -> j existing (for i < j)
-            beta: Multiplicative decay per step upward
-        """
         super().__init__(n_features, **kwargs)
         self.p_edge = p_edge
         self.beta = beta

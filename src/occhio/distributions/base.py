@@ -8,7 +8,21 @@ from typing import Literal
 
 
 class Distribution(ABC):
-    """Base class for all distributions."""
+    """Abstract base class for sampling distributions.
+
+    Provides a common interface for generating batched samples of shape
+    ``(batch_size, n_features)``, along with utility methods for reproducible
+    random number generation via an optional ``torch.Generator``.
+
+    Subclasses must implement :meth:`sample`. Helper methods :meth:`_rand`,
+    :meth:`_randn`, :meth:`_randint`, and :meth:`_rand_On` all respect the
+    stored generator for reproducibility.
+
+    Args:
+        n_features: Dimensionality of the sample space.
+        device: Torch device for all generated tensors.
+        generator: Optional ``torch.Generator`` for deterministic sampling.
+    """
 
     def __init__(
         self,
@@ -97,20 +111,45 @@ class DistributionStack(Distribution):
 
     Note:
         Device and generator settings are inherited from each sub-distribution
-        individually rather than from a single top-level config.
+        individually rather than from a single top-level config. Use the ``to()``
+        method to move all sub-distributions to a common device. To ensure
+        reproducible sampling, set the generator on each sub-distribution before
+        passing them to DistributionStack.
     """
 
     def __init__(
         self,
         distributions: list[Distribution],
         mode: Literal["independent"] = "independent",
+        **kwargs,
     ):
+        if not distributions:
+            raise ValueError("distributions list cannot be empty")
+
+        if "generator" in kwargs:
+            import warnings
+            warnings.warn(
+                "DistributionStack does not use the generator parameter. "
+                "Set the generator on each sub-distribution individually for reproducible sampling.",
+                UserWarning,
+                stacklevel=2,
+            )
 
         total_features = sum(dist.n_features for dist in distributions)
         self.distributions = distributions
-        super().__init__(total_features)
+        super().__init__(total_features, **kwargs)
 
     def sample(self, batch_size):
         return torch.cat(
             [dist.sample(batch_size) for dist in self.distributions], dim=-1
         )
+
+    def to(self, device: torch.device | str):
+        self.device = device
+        for dist in self.distributions:
+            dist.to(device)
+        return self
+
+    def __repr__(self):
+        dist_reprs = ", ".join(repr(d) for d in self.distributions)
+        return f"DistributionStack([{dist_reprs}])"

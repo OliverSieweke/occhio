@@ -1,4 +1,4 @@
-from .base import Distribution
+from .base import Distribution, DistributionStack
 from .sparse import SparseUniform, SparseExponential
 from .correlated import (
     CorrelatedPairs,
@@ -13,6 +13,7 @@ from .dag import DAGBayesianPropagation, DAGDistribution, DAGRandomWalkToRoot
 
 __all__ = [
     "Distribution",
+    "DistributionStack",
     "SparseUniform",
     "SparseExponential",
     "CorrelatedPairs",

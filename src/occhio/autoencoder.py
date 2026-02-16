@@ -121,12 +121,6 @@ class TiedLinearRelu(AutoEncoderBase):
         return torch.relu(z @ self.W + self.b)
 
 
-"""
-Note that nn.Sequetial / nn.Linear did not allow to control randomness.
-So we are building our own!
-"""
-
-
 class MLPEncoder(AutoEncoderBase):
     def __init__(self, embedding: list[int], unembedding: list[int], **kwargs):
         super().__init__(**kwargs)

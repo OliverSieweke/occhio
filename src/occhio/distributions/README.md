@@ -3,7 +3,10 @@ This document exists to make it easier to find a distribution which might be int
 
 ### base.py
 `Distribution`
-The base class manages the `device` the `generator` and includes helpful functions for sampling distributions using the `generator`. 
+The base class manages the `device` the `generator` and includes helpful functions for sampling distributions using the `generator`.
+
+`DistributionStack`
+A composite distribution that stacks multiple independent distributions along the feature dimension. Useful for combining different distribution types or creating mixed-sparsity patterns across feature groups. The output dimension is the sum of all sub-distribution dimensions. Each sub-distribution maintains its own device and generator settings. 
 
 ### sparse.py
 This contains the simplest of the distributions. Simply a sparse vector with a given probability distribution.
@@ -47,7 +50,7 @@ Directed Acyclic Graphs! Both distributions have an underlying DAG structure, bu
 Here the activations are viewed as binary. A node activates if the parent is active with probability `p_active`. Activations are sampled by Unif([0, 1]).
 
 `DAGBayesianPropagation`
-Here the activation size matters. A node is active with probability $1 - \prod_{j\in \textup{active parents}} (1 - a_j)$. 
-
+Here the activation size matters. A node is active with probability $1 - \prod_{j\in \textup{active parents}} (1 - a_j)$.
 
 `DAGRandomWalkToRoot`
+Maximally sparse DAG distribution. Picks one node uniformly at random, activates it, then performs a random walk upward to a root by choosing one parent uniformly at each step. Each step applies multiplicative decay (`beta`). Produces exactly one active path per sample.
