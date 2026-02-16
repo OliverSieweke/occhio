@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Tuple
-from itertools import product
 
 from torch import Tensor, vmap, meshgrid, cartesian_prod, prod, Generator, arange, logspace
 from stack_data.utils import cached_property
 from tqdm import tqdm
+from math import prod
 
 from .occhio.toy_model import ToyModel
 from .occhio.autoencoder import *
@@ -24,11 +24,11 @@ class ModelGrid:
     def __init__(
         self,
         create_model: Callable[..., ToyModel],
-        axes: list[Axis] = [],                  # TEMPORARY: will remove this in the future
+        axes: List[Axis],                  # TEMPORARY: will remove this in the future
         
         # currently not used, will be used in the future
-        stratified_axes: list[Axis] = [],       
-        vectorized_axes: list[Axis] = [],
+        stratified_axes: List[Axis] = [],       
+        vectorized_axes: List[Axis] = [],
         *args,
         **kwargs
     ):
@@ -54,40 +54,37 @@ class ModelGrid:
         self.build_vmap()
 
 
-    def initialize_models(self):
-        # This initializes a model for every combination of parameters in self.axes,
-        # building a nested list structure matching the shape of the parameter grid,
-        # and uses tqdm for progress tracking.
 
+    def initialize_models(self):
         if not self.axes:
-            self.models = []
-            return
-        
+            raise ValueError("At least one axis must be provided.")
+
+        total: int = int(prod(len(axis.values) for axis in self.axes))
+
         with tqdm(
-            total = int(prod(Tensor([len(v) for v in axis_values])).item()),
-            desc = "Initializing Models",
-            unit = "model",
+            total=total, 
+            desc="Initializing Models", 
+            unit="model"
         ) as pbar:
-            axis_labels = [axis.label for axis in self.axes]
-            axis_values = [axis.values for axis in self.axes]
-            
-            def build_grid(level, params_so_far):
-                axis = self.axes[level]
-                res = []
-                for value in axis.values:
-                    params = params_so_far.copy()
-                    params[axis.label] = value
-                    if level == len(self.axes) - 1:
-                        model = self.create_model(params)
+
+            def build_grid(level: int, current_params: Dict[str, Any]) -> List[ToyModel]:
+                current_axis = self.axes[level]
+                res: List[ToyModel] = []
+
+                # Iterate through all values starting from current_axis=0 to current_axis=len(self.axes)-1
+                for value in current_axis.values:
+                    params = Dict[str, Any](current_params)             # shallow copy of current params   
+                    params[current_axis.label] = value
+
+                    if level != len(self.axes) - 1:
+                        res.append(build_grid(level + 1, params))
+                    else:                                               # If traversed through all axes, initialize model
+                        model = self.create_model(**params)
                         res.append(model)
                         pbar.update(1)
-                    else:
-                        res.append(build_grid(level + 1, params))
                 return res
-
             self.models = build_grid(0, {})
-
-        
+    
     def _to_flat(self):
         pass
 
@@ -97,8 +94,8 @@ class ModelGrid:
     def __getitem__(self, key: tuple[int, ...]) -> ToyModel:
         """Returns the ToyModel at the given indices. Allows for arbitrary indexing."""
         item = self.models
-        for idx in key:
-            item = item[idx]
+        for i in key:
+            item = item[i]
         return item
 
     # TODO: Figure out how to add compatibility for non-vectorized axes
@@ -143,14 +140,13 @@ random_seeds = range(10, 20)
 
 
 def create_model(
-    default_model: ToyModel | None = None, 
     params: Dict[str, Any] = {}, 
+    default_model: ToyModel | None = None, 
     *args, 
     **kwargs
 ) -> ToyModel:
     density = params["Density"]
     relative_importance = params["Importance"]
-    # distribution = params["Distribution"]
     random_seed = params["Random Seeds"]
 
     model = ToyModel(
