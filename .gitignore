@@ -9,3 +9,5 @@ __pycache__/
 .vscode/*
 *.png
 src/occhio/trash_experiment/
+phase_change.ipynb 
+test.ipynb
