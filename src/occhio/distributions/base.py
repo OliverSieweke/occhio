@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from math import prod
 import torch
 from torch import Tensor
+from typing import Literal
 
 
 class Distribution(ABC):
@@ -76,3 +77,40 @@ class Distribution(ABC):
 
     def __str__(self):
         return f"{type(self).__name__}({self.n_features}, {self.device})"
+
+
+class DistributionStack(Distribution):
+    """A composite distribution formed by stacking multiple independent distributions along the feature dimension.
+
+    Concatenates samples from a list of `Distribution` instances, producing outputs
+    of shape `(batch_size, sum(d.n_features for d in distributions))`.
+
+    Args:
+        distributions: List of `Distribution` instances to compose.
+        mode: Composition mode. Currently only ``"independent"`` is supported,
+            meaning each sub-distribution is sampled independently.
+
+    Example::
+
+        d = DistributionStack([Uniform(3), Normal(2)])
+        d.sample(64)  # shape: (64, 5)
+
+    Note:
+        Device and generator settings are inherited from each sub-distribution
+        individually rather than from a single top-level config.
+    """
+
+    def __init__(
+        self,
+        distributions: list[Distribution],
+        mode: Literal["independent"] = "independent",
+    ):
+
+        total_features = sum(dist.n_features for dist in distributions)
+        self.distributions = distributions
+        super().__init__(total_features)
+
+    def sample(self, batch_size):
+        return torch.cat(
+            [dist.sample(batch_size) for dist in self.distributions], dim=-1
+        )
