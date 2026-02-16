@@ -101,8 +101,16 @@ class DistributionStack(Distribution):
 
     Args:
         distributions: List of `Distribution` instances to compose.
-        mode: Composition mode. Currently only ``"independent"`` is supported,
-            meaning each sub-distribution is sampled independently.
+        sampling_mode: Controls how sub-distributions are activated:
+
+            - ``"independent"``: Every sub-distribution is sampled for every
+              row in the batch (default).
+            - ``"single"``: Exactly one sub-distribution is sampled per row;
+              the remaining feature positions are zero.
+            - ``"sparse"``: Each sub-distribution fires independently with
+              probability ``p_meta``; non-firing positions are zero.
+        p_meta: Probability that each sub-distribution fires per sample.
+            Required when ``sampling_mode="sparse"``.
 
     Example::
 
@@ -120,16 +128,21 @@ class DistributionStack(Distribution):
     def __init__(
         self,
         distributions: list[Distribution],
-        mode: Literal["independent"] = "independent",
+        sampling_mode: Literal["independent", "sparse", "single"] = "independent",
+        p_meta: float | None = None,
         **kwargs,
     ):
         if not distributions:
             raise ValueError("distributions list cannot be empty")
 
-        if "generator" in kwargs:
+        if sampling_mode == "sparse" and p_meta is None:
+            raise ValueError("p_meta must be provided when sampling_mode='sparse'")
+
+        if "generator" in kwargs and sampling_mode == "independent":
             import warnings
+
             warnings.warn(
-                "DistributionStack does not use the generator parameter. "
+                "DistributionStack does not use the generator parameter in 'independent' mode. "
                 "Set the generator on each sub-distribution individually for reproducible sampling.",
                 UserWarning,
                 stacklevel=2,
@@ -137,12 +150,42 @@ class DistributionStack(Distribution):
 
         total_features = sum(dist.n_features for dist in distributions)
         self.distributions = distributions
+        self.sampling_mode = sampling_mode
+        self.p_meta = p_meta
         super().__init__(total_features, **kwargs)
 
     def sample(self, batch_size):
-        return torch.cat(
-            [dist.sample(batch_size) for dist in self.distributions], dim=-1
-        )
+        if self.sampling_mode == "independent":
+            return torch.cat(
+                [dist.sample(batch_size) for dist in self.distributions], dim=-1
+            )
+
+        result = torch.zeros(batch_size, self.n_features, device=self.device)
+        offset = 0
+
+        if self.sampling_mode == "single":
+            indices = self._randint(0, len(self.distributions), (batch_size,))
+            for i, dist in enumerate(self.distributions):
+                mask = indices == i
+                n_active = int(mask.sum().item())
+                if n_active > 0:
+                    result[mask, offset : offset + dist.n_features] = dist.sample(
+                        n_active
+                    )
+                offset += dist.n_features
+
+        elif self.sampling_mode == "sparse":
+            assert self.p_meta is not None
+            for dist in self.distributions:
+                fire = self._rand(batch_size) < self.p_meta
+                n_active = int(fire.sum().item())
+                if n_active > 0:
+                    result[fire, offset : offset + dist.n_features] = dist.sample(
+                        n_active
+                    )
+                offset += dist.n_features
+
+        return result
 
     def to(self, device: torch.device | str):
         self.device = device
