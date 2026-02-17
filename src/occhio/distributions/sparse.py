@@ -6,7 +6,7 @@ Inspired / taken from Toy Model of Superposition paper.
 from .base import Distribution
 from torch import Tensor
 import torch
-
+import hashlib
 
 class SparseUniform(Distribution):
     def __init__(
@@ -19,6 +19,11 @@ class SparseUniform(Distribution):
         mask = self._rand(batch_size, self.n_features) < self.p_active
         values = self._rand(batch_size, self.n_features)
         return mask * values
+
+    @property
+    def hash(self) -> str:
+        string = f"{self.__str__()}, {self.p_active.tolist()}"
+        return hashlib.sha256(string.encode("utf-8")).hexdigest()
 
 
 class SparseExponential(Distribution):

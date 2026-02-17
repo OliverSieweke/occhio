@@ -14,6 +14,7 @@ from torch.func import functional_call, stack_module_state
 from torch.optim import AdamW
 from tqdm import tqdm
 
+from occhio.distributions.base import Distribution
 from occhio.toy_model import ToyModel
 
 
@@ -25,16 +26,22 @@ class Axis:
 class ModelGrid:
     models: NDArray[np.object_]
 
-    def __init__(self, create_model: Callable[..., ToyModel], axes: List[Axis]):
+    def __init__(self, create_model: Callable[..., ToyModel], axes: List[Axis], cache_samples: bool = True):
         self._validate_args(create_model, axes)
         self.axes: list[Axis] = axes
         self.create_model: Callable[..., ToyModel] = create_model
         self.models: np.ndarray = self._initialize_models()
         self._validate_autoencoders()
+        self.cache_samples: bool = cache_samples
 
-    def _initialize_models(self) -> np.ndarray:
+        if self.cache_samples:
+            self._unique_distributions, self._sample_index = (
+                self._build_sample_index()
+            )
+
+    def _initialize_models(self) -> NDArray[np.object_]:
         shape: tuple[int, ...] = self.shape
-        models: np.ndarray = np.empty(shape, dtype=object)
+        models: NDArray[np.object_] = np.empty(shape, dtype=object)
 
         # Iterates over combinations of axis indices
         for indices in product(*[range(s) for s in shape]):
@@ -74,6 +81,25 @@ class ModelGrid:
                     f"received: {signature}, "
                     f"expected: {reference_signature}"
                 )
+
+    def _build_sample_index(self) -> tuple[list[Distribution], list[int]]:
+        """Precompute which models share a distribution so the training loop
+        only needs to sample once per unique distribution and index into the
+        results — no hashing or dict lookups at training time."""
+        flattened_models = self.flattened_models
+        hash_to_idx: dict[str, int] = {}
+        unique_distributions: list[Distribution] = []
+        sample_index: list[int] = []
+
+        for model in flattened_models:
+            dist = model.distribution
+            h = dist.hash
+            if h not in hash_to_idx:
+                hash_to_idx[h] = len(unique_distributions)
+                unique_distributions.append(dist)
+            sample_index.append(hash_to_idx[h])
+
+        return unique_distributions, sample_index
 
     def _can_vectorize_loss(self) -> bool:
         flattened_models = self.flattened_models
@@ -148,9 +174,18 @@ class ModelGrid:
             #   - think through which distributions are actually stackable
             #       (make this a property on the distribution?)
             #   - find a good way to expose/use this stackability
-            stacked_samples = torch.stack(
-                [model.distribution.sample(batch_size) for model in flattened_models]
-            )
+
+            if self.cache_samples:
+                unique_samples = [
+                    dist.sample(batch_size) for dist in self._unique_distributions
+                ]
+                stacked_samples = torch.stack(
+                    [unique_samples[i] for i in self._sample_index]
+                )
+            else:
+                stacked_samples = torch.stack(
+                    [model.distribution.sample(batch_size) for model in flattened_models]
+                )
 
             optimizer.zero_grad()
             stacked_x_hat = stacked_forward(
