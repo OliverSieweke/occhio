@@ -1,5 +1,5 @@
 from .base import Distribution, DistributionStack
-from .sparse import SparseUniform, SparseExponential
+from .sparse import SparseUniform, SparseExponential, SingleUniform
 from .correlated import (
     CorrelatedPairs,
     HierarchicalPairs,
@@ -16,6 +16,7 @@ __all__ = [
     "DistributionStack",
     "SparseUniform",
     "SparseExponential",
+    "SingleUniform",
     "CorrelatedPairs",
     "HierarchicalPairs",
     "ScaledHierarchicalPairs",

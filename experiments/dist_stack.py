@@ -1,7 +1,7 @@
 """Example with Distribution Stack. See nice hierarchical structure in embedding matrix."""
 
 # %%
-from occhio.distributions import SparseUniform, DistributionStack
+from occhio.distributions import SparseUniform, SingleUniform, DistributionStack
 from occhio.autoencoder import TiedLinearRelu
 from occhio.toy_model import ToyModel
 import torch
@@ -25,7 +25,11 @@ def my_hook(hook_data):
 
 
 dist = DistributionStack(
-    [SparseUniform(3, 0.5, generator=gen, device=DEVICE) for i in range(3)],
+    [
+        SingleUniform(3, generator=gen, device=DEVICE),
+        SparseUniform(3, 0.5, generator=gen, device=DEVICE),
+        SparseUniform(3, 0.5, generator=gen, device=DEVICE),
+    ],
     "single",
     device=DEVICE,
 )
