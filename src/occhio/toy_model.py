@@ -1,5 +1,4 @@
-from functools import cached_property
-from typing import Any, Optional
+from typing import Any, Optional, Callable
 
 import torch
 import torch.nn.functional as F
@@ -39,14 +38,17 @@ class ToyModel:
         weight_decay: float = 0.05,
         track_losses: bool = True,
         optimizer: Optimizer | None = None,
+        hooks: list[Callable] = [],
+        hook_freq: int = 1,
         verbose: bool = False,
-    ) -> list[float]:
+    ) -> tuple[list[float], list]:
         if optimizer is None:
             optimizer = AdamW(
                 self.ae.parameters(), lr=learning_rate, weight_decay=weight_decay
             )
 
         losses = []
+        hook_returns = [[] for _ in hooks]
 
         for ep in range(n_epochs):
             x = self.distribution.sample(batch_size)
@@ -60,8 +62,15 @@ class ToyModel:
                 losses.append(loss.item())
             if verbose and (ep + 1) % 1000 == 0:
                 print(f"AE Epoch {ep + 1}/{n_epochs}, Loss: {loss.item():.6f}")
+            if hooks and (ep % hook_freq == 0 or ep == n_epochs - 1):
+                with torch.no_grad():
+                    hook_data = dict(
+                        tm=self, epoch=ep, loss=loss.item(), x=x, x_hat=x_hat
+                    )
+                    for i, h in enumerate(hooks):
+                        hook_returns[i].append(h(hook_data))
 
-        return losses
+        return losses, hook_returns
 
     def sample_latent(self, batch_size) -> Tensor:
         inputs = self.distribution.sample(batch_size)
@@ -82,22 +91,22 @@ class ToyModel:
 
         raise AttributeError(f"'{type(self).__name__}' has no attribute '{name}'")
 
-    @cached_property
+    @property
     @torch.no_grad()
     def froebenius_norm_squared(self):
         return torch.linalg.norm(self.W, ord="fro") ** 2
 
-    @cached_property
+    @property
     @torch.no_grad()
     def hidden_dimensions_per_embedded_features(self) -> Any:
         return self.ae.n_hidden / self.froebenius_norm_squared
 
-    @cached_property
+    @property
     @torch.no_grad()
     def embedded_features_per_hidden_dimensions(self) -> Any:
         return self.froebenius_norm_squared / self.ae.n_hidden
 
-    @cached_property
+    @property
     @torch.no_grad()
     def feature_dimensionalities(self):
         return (
@@ -105,48 +114,48 @@ class ToyModel:
             / self.total_feature_interferences_including_self
         )
 
-    @cached_property
+    @property
     @torch.no_grad()
     def mean_feature_dimensionalities(self):
         return self.feature_dimensionalities.mean()
 
-    @cached_property
+    @property
     @torch.no_grad()
     def total_feature_dimensionalities_per_hidden_dimension(self):
         return self.feature_dimensionalities.sum() / self.ae.n_hidden
 
-    @cached_property
+    @property
     @torch.no_grad()
     def W(self) -> Tensor:
         return self.get_one_hot_embeddings().T
 
-    @cached_property
+    @property
     @torch.no_grad()
     def W_normalized_features(self) -> Tensor:
         return F.normalize(self.W, dim=0)
 
-    @cached_property
+    @property
     @torch.no_grad()
     def feature_norms(self) -> Tensor:
         return torch.linalg.vector_norm(self.W, dim=0)
 
-    @cached_property
+    @property
     @torch.no_grad()
     def feature_representations(self) -> Tensor:
         return (self.W**2).sum(dim=0)
 
-    @cached_property
+    @property
     @torch.no_grad()
     def interferences(self) -> Tensor:
         return (self.W_normalized_features.T @ self.W) ** 2
 
-    @cached_property
+    @property
     @torch.no_grad()
     def total_feature_interferences(self) -> Tensor:
         interferences = self.interferences.clone()
         return interferences.fill_diagonal_(0).sum(dim=1)
 
-    @cached_property
+    @property
     @torch.no_grad()
     def total_feature_interferences_including_self(self) -> Tensor:
         return self.interferences.sum(dim=1)
