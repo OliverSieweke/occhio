@@ -56,3 +56,25 @@ class SparseExponential(Distribution):
             1.0 - self._rand(batch_size, self.n_features)
         )
         return mask * values
+
+
+class SingleUniform(Distribution):
+    """Single-feature uniform distribution.
+
+    Exactly one feature fires per sample, chosen uniformly at random.
+    The active feature takes a value sampled from Uniform(0, 1).
+
+    Args:
+        n_features: Number of features.
+        **kwargs: Passed to ``Distribution`` (device, generator).
+    """
+
+    def __init__(self, n_features: int, **kwargs):
+        super().__init__(n_features, **kwargs)
+
+    def sample(self, batch_size: int) -> Tensor:
+        indices = self._randint(0, self.n_features, (batch_size,))
+        values = self._rand(batch_size)
+        result = torch.zeros(batch_size, self.n_features, device=self.device)
+        result[torch.arange(batch_size, device=self.device), indices] = values
+        return result
