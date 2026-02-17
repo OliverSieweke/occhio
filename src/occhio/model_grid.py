@@ -2,17 +2,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import cached_property
+from inspect import signature
 from itertools import product
 from typing import Any, Callable, Dict, List
 
+import numpy as np
 import torch
-from torch import Generator, Tensor, arange, cartesian_prod, logspace, meshgrid
+from numpy.typing import NDArray
+from torch import Tensor, meshgrid
 from torch.func import functional_call, stack_module_state
 from torch.optim import AdamW
 from tqdm import tqdm
 
-from occhio.autoencoder import *
-from occhio.distributions import *
 from occhio.toy_model import ToyModel
 
 
@@ -23,36 +24,43 @@ class Axis:
 
 
 class ModelGrid:
-    models: List[ToyModel]
+    models: NDArray[np.object_]
 
-    def __init__(
-        self,
-        create_model: Callable[..., ToyModel],
-        axes: List[Axis],
-    ):
-        if not axes:
-            raise ValueError("At least one axis must be provided.")
-        self.axes = axes
-
-        self.models = []
-        for values in product(*[axis.values for axis in self.axes]):
-            params = {axis.label: value for axis, value in zip(self.axes, values)}
-            self.models.append(create_model(params))
-
+    def __init__(self, create_model: Callable[..., ToyModel], axes: List[Axis]):
+        self._validate_args(create_model, axes)
+        self.axes: list[Axis] = axes
+        self.create_model: Callable[..., ToyModel] = create_model
+        self.models: np.ndarray = self._initialize_models()
         self._validate_autoencoders()
+
+    def _initialize_models(self) -> np.ndarray:
+        shape: tuple[int, ...] = self.shape
+        models: np.ndarray = np.empty(shape, dtype=object)
+
+        # Iterates over combinations of axis indices
+        for indices in product(*[range(s) for s in shape]):
+            # Build a parameter dictionary mapping axis labels to selected values at current index
+            params: Dict[str, Any] = {
+                axis.label: axis.values[i] for axis, i in zip(self.axes, indices)
+            }
+            models[indices] = self.create_model(params=params)
+
+        return models
 
     def _validate_autoencoders(self):
         if len(self.models) < 2:
             return
 
-        reference = self.models[0].ae
+        flattened_models = self.flattened_models
+
+        reference = flattened_models[0].ae
         reference_signature = (
             type(reference),
             {k: v.shape for k, v in reference.state_dict().items()},
             reference.device,
         )
 
-        for i, model in enumerate(self.models[1:], start=1):
+        for i, model in enumerate(flattened_models[1:], start=1):
             ae = model.ae
             signature = (
                 type(ae),
@@ -69,12 +77,14 @@ class ModelGrid:
                 )
 
     def _can_vectorize_loss(self) -> bool:
-        if len(self.models) < 2:
+        flattened_models = self.flattened_models
+
+        if len(flattened_models) < 2:
             return True
 
         return all(
-            type(model.ae).loss is type(self.models[0].ae).loss
-            for model in self.models[1:]
+            type(model.ae).loss is type(flattened_models[0].ae).loss
+            for model in flattened_models[1:]
         )
 
     # If you change the signature or implementation here, make sure you keep it
@@ -88,16 +98,20 @@ class ModelGrid:
         verbose: bool = False,
         track_losses: bool = False,
     ):
+        flattened_models = self.flattened_models
+
         # Stack Model Characteristics --------------------------------------------------
         stacked_params, stacked_buffers = stack_module_state(
-            [model.ae for model in self.models]
+            [model.ae for model in flattened_models]
         )
         # NB: We enable gradients on params as stack_module_state returns detached
         # tensors
         stacked_params = {
             key: value.requires_grad_(True) for key, value in stacked_params.items()
         }
-        stacked_importances = torch.stack([model.importances for model in self.models])
+        stacked_importances = torch.stack(
+            [model.importances for model in flattened_models]
+        )
 
         # Optimizer --------------------------------------------------------------------
         optimizer = AdamW(
@@ -108,7 +122,7 @@ class ModelGrid:
         # The forward pass operation is based on the first Auto-Encoder, which stands as
         # a representative for all the Auto-Encoders. This relies on the models using
         # the same Auto-Encoder kind, which is enforced in the initialization.
-        representative_ae = self.models[0].ae
+        representative_ae = flattened_models[0].ae
         stacked_forward = torch.vmap(
             lambda params, buffers, x: functional_call(
                 representative_ae, (params, buffers), (x,)
@@ -136,7 +150,7 @@ class ModelGrid:
             #       (make this a property on the distribution?)
             #   - find a good way to expose/use this stackability
             stacked_samples = torch.stack(
-                [model.distribution.sample(batch_size) for model in self.models]
+                [model.distribution.sample(batch_size) for model in flattened_models]
             )
 
             optimizer.zero_grad()
@@ -152,7 +166,7 @@ class ModelGrid:
                     [
                         model.ae.loss(samples, x_hat, importances)
                         for model, samples, x_hat, importances in zip(
-                            self.models,
+                            flattened_models,
                             stacked_samples,
                             stacked_x_hat,
                             stacked_importances,
@@ -170,7 +184,7 @@ class ModelGrid:
                 print(f"Epoch {ep + 1}/{n_epochs}, Mean Loss: {total_loss.item():.6f}")
 
         with torch.no_grad():
-            for i, model in enumerate(self.models):
+            for i, model in enumerate(flattened_models):
                 model.ae.load_state_dict(
                     {
                         name: (
@@ -205,3 +219,30 @@ class ModelGrid:
     def describe(self) -> dict[str, int]:
         """Returns a dictionary of the axis labels and their lengths."""
         return {axis.label: len(axis.values) for axis in self.axes}
+
+    @property
+    def flattened_models(self) -> NDArray[np.object_]:
+        """Returns a flattened list of all models in the grid."""
+        return self.models.ravel()
+
+    def _validate_args(
+        self, create_model: Callable[..., ToyModel], axes: List[Axis]
+    ) -> None:
+        if not axes:
+            raise ValueError("At least one axis must be provided.")
+
+        # if not all(isinstance(axis.values, Tensor) for axis in vectorized_axes):
+        #     labels = [axis.label for axis in vectorized_axes if not isinstance(axis.values, Tensor)]
+        #     raise TypeError(
+        #         f"Axes {labels} must have values as torch.Tensor"
+        #     )
+
+        # assert set(vectorized_axes).isdisjoint(set(stratified_axes)), "vectorized_axes and stratified_axes must be disjoint sets."
+        #
+        # if not vectorized_axes and not stratified_axes:
+        #     raise ValueError("At least one of 'vectorized_axes' or 'stratified_axes' must be provided and non-empty.")
+        #
+        if "params" not in signature(create_model).parameters:
+            raise TypeError(
+                "create_model must accept a 'params' parameter (Dict[str, Any])."
+            )
