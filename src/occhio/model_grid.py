@@ -1,18 +1,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import cached_property
 from inspect import signature
 from itertools import product
 from typing import Any, Callable, Dict, List
 
 import numpy as np
+import torch
+from numpy.typing import NDArray
+from torch import Tensor, meshgrid
+from torch.func import functional_call, stack_module_state
+from torch.optim import AdamW
+from tqdm import tqdm
 
-from torch import Tensor, meshgrid, cartesian_prod, Generator, arange, as_tensor, logspace
-from stack_data.utils import cached_property
-
-from .occhio.toy_model import ToyModel
-from .occhio.autoencoder import *
-from .occhio.distributions import *
+from occhio.toy_model import ToyModel
 
 
 @dataclass
@@ -21,60 +23,191 @@ class Axis:
     values: list | Tensor
 
 class ModelGrid:
+    models: NDArray[np.object_]
+
     def __init__(self, create_model: Callable[..., ToyModel], axes: List[Axis]):
         self._validate_args(create_model, axes)
         self.axes: list[Axis] = axes
         self.create_model: Callable[..., ToyModel] = create_model
         self.models: np.ndarray = self._initialize_models()
+        self._validate_autoencoders()
 
     def _initialize_models(self) -> np.ndarray:
-        if not self.axes:
-            raise ValueError("At least one axis must be provided.")
-
-        shape: tuple[int, ...] = self.shape()
+        shape: tuple[int, ...] = self.shape
         models: np.ndarray = np.empty(shape, dtype=object)
 
         # Iterates over combinations of axis indices
         for indices in product(*[range(s) for s in shape]):
             # Build a parameter dictionary mapping axis labels to selected values at current index
-            params: Dict[str, Any] = {str(axis.label): axis.values[i] for axis, i in zip(self.axes, indices)}
+            params: Dict[str, Any] = {
+                axis.label: axis.values[i] for axis, i in zip(self.axes, indices)
+            }
             models[indices] = self.create_model(params=params)
+
         return models
+
+    def _validate_autoencoders(self):
+        if len(self.models) < 2:
+            return
+
+        flattened_models = self.flattened_models
+
+        reference = flattened_models[0].ae
+        reference_signature = (
+            type(reference),
+            {k: v.shape for k, v in reference.state_dict().items()},
+            reference.device,
+        )
+
+        for i, model in enumerate(flattened_models[1:], start=1):
+            ae = model.ae
+            signature = (
+                type(ae),
+                {k: v.shape for k, v in ae.state_dict().items()},
+                ae.device,
+            )
+            if signature != reference_signature:
+                # [17.02.26 | OliverSieweke] TODO: unstack the index here
+                raise ValueError(
+                    f"All Autoencoders should share the same architecture"
+                    f"Autoencoder at index {i} has incompatible architecture with the first Autoencoder."
+                    f"received: {signature}, "
+                    f"expected: {reference_signature}"
+                )
+
+    def _can_vectorize_loss(self) -> bool:
+        flattened_models = self.flattened_models
+
+        if len(flattened_models) < 2:
+            return True
+
+        return all(
+            type(model.ae).loss is type(flattened_models[0].ae).loss
+            for model in flattened_models[1:]
+        )
+
+    # If you change the signature or implementation here, make sure you keep it
+    # consistent with ToyModel.fit()
+    def fit(
+        self,
+        n_epochs: int = 10000,
+        batch_size: int = 1024,
+        learning_rate: float = 3e-4,
+        weight_decay: float = 0.05,
+        verbose: bool = False,
+        track_losses: bool = False,
+    ):
+        flattened_models = self.flattened_models
+
+        # Stack Model Characteristics --------------------------------------------------
+        stacked_params, stacked_buffers = stack_module_state(
+            [model.ae for model in flattened_models]
+        )
+        # NB: We enable gradients on params as stack_module_state returns detached
+        # tensors
+        stacked_params = {
+            key: value.requires_grad_(True) for key, value in stacked_params.items()
+        }
+        stacked_importances = torch.stack(
+            [model.importances for model in flattened_models]
+        )
+
+        # Optimizer --------------------------------------------------------------------
+        optimizer = AdamW(
+            list(stacked_params.values()), lr=learning_rate, weight_decay=weight_decay
+        )
+
+        # Define Stacked Forward Pass and Loss -----------------------------------------
+        # The forward pass operation is based on the first Auto-Encoder, which stands as
+        # a representative for all the Auto-Encoders. This relies on the models using
+        # the same Auto-Encoder kind, which is enforced in the initialization.
+        representative_ae = flattened_models[0].ae
+        stacked_forward = torch.vmap(
+            lambda params, buffers, x: functional_call(
+                representative_ae, (params, buffers), (x,)
+            )[0],
+            in_dims=(0, 0, 0),
+        )
+
+        use_vectorized_loss = self._can_vectorize_loss()
+        if use_vectorized_loss:
+            stacked_loss = torch.vmap(
+                lambda x_true, x_hat, importances: representative_ae.loss(
+                    x_true, x_hat, importances
+                ),
+                in_dims=(0, 0, 0),
+            )
+
+        # Training ---------------------------------------------------------------------
+        losses = [] if track_losses else None
+
+        for ep in tqdm(range(n_epochs), desc="Training", unit="epoch"):
+            # [17.02.26 | OliverSieweke] TODO: Could attempt to vectorize when possible
+            # here. This is not trivial though, one would need to:
+            #   - group the distributions of the same kind
+            #   - think through which distributions are actually stackable
+            #       (make this a property on the distribution?)
+            #   - find a good way to expose/use this stackability
+            stacked_samples = torch.stack(
+                [model.distribution.sample(batch_size) for model in flattened_models]
+            )
+
+            optimizer.zero_grad()
+            stacked_x_hat = stacked_forward(
+                stacked_params, stacked_buffers, stacked_samples
+            )
+            if use_vectorized_loss:
+                stacked_losses = stacked_loss(
+                    stacked_samples, stacked_x_hat, stacked_importances
+                )
+            else:  # Fallback for heterogeneous losses
+                stacked_losses = torch.stack(
+                    [
+                        model.ae.loss(samples, x_hat, importances)
+                        for model, samples, x_hat, importances in zip(
+                            flattened_models,
+                            stacked_samples,
+                            stacked_x_hat,
+                            stacked_importances,
+                        )
+                    ]
+                )
+
+            total_loss = stacked_losses.mean()
+            total_loss.backward()
+            optimizer.step()
+
+            if track_losses:
+                losses.append(total_loss.item())
+            if verbose and (ep + 1) % 1000 == 0:
+                print(f"Epoch {ep + 1}/{n_epochs}, Mean Loss: {total_loss.item():.6f}")
+
+        with torch.no_grad():
+            for i, model in enumerate(flattened_models):
+                model.ae.load_state_dict(
+                    {
+                        name: (
+                            stacked_params[name]
+                            if name in stacked_params
+                            else stacked_buffers[name]
+                        )[i]
+                        for name in model.ae.state_dict()
+                    }
+                )
+
+        return losses
+
+    def __getitem__(self, key: tuple[int, ...]) -> ToyModel:
+        """Returns the ToyModel at the given indices. Allows for arbitrary indexing."""
+        item = self.models
+        for i in key:
+            item = item[i]
+        return item
 
     @cached_property
     def parameters_mesh(self):
-        """
-        Returns a tuple of the meshgrid of the axes.
-        """
-        if all(isinstance(axis.values, Tensor) for axis in self.axes):
-            return meshgrid(*(axis.values for axis in self.axes), indexing="ij")
-        # If any axis' values are not Tensors, produce an object meshgrid manually
-        index_mesh = meshgrid(*(arange(len(axis.values)) for axis in self.axes), indexing="ij")
-        result = []
-        for axis, idx_grid in zip(self.axes, index_mesh):
-            vals = axis.values
-            if isinstance(vals, Tensor):
-                result.append(vals[idx_grid])
-            else:
-                # as_tensor might not work if vals is not numeric; fallback to pure Python
-                try:
-                    tensor_vals = as_tensor(vals)
-                    result.append(tensor_vals[idx_grid])
-                except Exception:
-                    # Fallback: object array mesh, matching meshgrid shape
-                    v = np.array(vals, dtype=object)
-                    # mesh index will be the right shape; get values by advanced indexing
-                    result.append(np.array(v)[idx_grid.numpy()])
-        return tuple(result)
-
-
-    @cached_property
-    def cartesian_parameters(self):
-        """
-        Returns a tuple of the cartesian product of the axes.
-        Warning: This may cause memory explosions for large grids.
-        """
-        return cartesian_prod(*(axis.values for axis in self.axes))
+        """Returns a tuple of the meshgrid of the axes."""
+        return meshgrid(*(axis.values for axis in self.axes), indexing="ij")
 
     @property
     def shape(self) -> tuple[int, ...]:
@@ -86,86 +219,29 @@ class ModelGrid:
         """Returns a dictionary of the axis labels and their lengths."""
         return {axis.label: len(axis.values) for axis in self.axes}
 
-    def __getitem__(self, key):
-        return self.models[key]
+    @property
+    def flattened_models(self) -> NDArray[np.object_]:
+        """Returns a flattened list of all models in the grid."""
+        return self.models.ravel()
 
-    def _validate_args(self, create_model: Callable[..., ToyModel], axes: List[Axis]) -> None:
-        if not all(isinstance(axis.values, Tensor) for axis in vectorized_axes):
-            labels = [axis.label for axis in vectorized_axes if not isinstance(axis.values, Tensor)]
-            raise TypeError(
-                f"Axes {labels} must have values as torch.Tensor"
-            )
+    def _validate_args(
+        self, create_model: Callable[..., ToyModel], axes: List[Axis]
+    ) -> None:
+        if not axes:
+            raise ValueError("At least one axis must be provided.")
 
-        assert set(vectorized_axes).isdisjoint(set(stratified_axes)), "vectorized_axes and stratified_axes must be disjoint sets."
+        # if not all(isinstance(axis.values, Tensor) for axis in vectorized_axes):
+        #     labels = [axis.label for axis in vectorized_axes if not isinstance(axis.values, Tensor)]
+        #     raise TypeError(
+        #         f"Axes {labels} must have values as torch.Tensor"
+        #     )
 
-        if not vectorized_axes and not stratified_axes:
-            raise ValueError("At least one of 'vectorized_axes' or 'stratified_axes' must be provided and non-empty.")
-
+        # assert set(vectorized_axes).isdisjoint(set(stratified_axes)), "vectorized_axes and stratified_axes must be disjoint sets."
+        #
+        # if not vectorized_axes and not stratified_axes:
+        #     raise ValueError("At least one of 'vectorized_axes' or 'stratified_axes' must be provided and non-empty.")
+        #
         if "params" not in signature(create_model).parameters:
-            raise TypeError("create_model must accept a 'params' parameter (Dict[str, Any]).")
-
-
-
-
-# CONSTANTS
-N_FEATURES = 2
-N_HIDDEN = 1
-P_INDIVIDUAL = 1
-P_FOLLOW = 1
-DATA = "uniform"
-EXPERIMENT_SIZE = 24
-distribution_generator = Generator("cpu").manual_seed(7)
-
-# EXPERIMENTAL SETUP
-densities = logspace(0, -2, EXPERIMENT_SIZE)
-importances = logspace(-1, 1, EXPERIMENT_SIZE)
-random_seeds = range(10, 20)
-
-
-def create_model(
-    params: Dict[str, Any] = {}, 
-    default_model: ToyModel | None = None, 
-    *args, 
-    **kwargs
-) -> ToyModel:
-    density = params["Density"]
-    relative_importance = params["Importance"]
-    random_seed = params["Random Seeds"]
-
-    model = ToyModel(
-        distribution=SparseUniform(N_FEATURES, p_active=density, generator=Generator(device="cpu").manual_seed(42)),
-        ae=TiedLinearRelu(N_FEATURES, N_HIDDEN, generator=Generator(device="cpu").manual_seed(random_seed)),
-        importances=relative_importance ** arange(N_FEATURES),
-    ) 
-    return model
-
-
-model_grid = ModelGrid(
-
-    create_model, 
-    axes = [
-        Axis(label="Density", values=densities),
-        Axis(label="Importance", values=importances),
-        Axis(label="Random Seeds", values=random_seeds)
-        ],
-
-    # vectorized_axes = [Axis(label="Density", values=densities), 
-    #         Axis(label="Density", values=densities),
-    #         Axis(label="Importance", values=importances),
-    #         Axis(label="Random Seeds", values=random_seeds)
-    #     ],
-    # stratified_axes = [
-    #     Axis(label="Distribution", values=distributions)
-    #     ],
-    )
-
-"""
-Things not to forget about:
-- Vectorized axes are not implemented yet.
-- Stratified axes are not implemented yet.
-- Slice some subset of ModelGrid for training and evaluation independetly
----> if users slice subset of ModelGrid for training, and the slice returns a new ModelGrid object, make sure to update the original ModelGrid object in place.
----> Make sure we're not overriting the newly-trained models
-- Have some kind of "get_attribute" method (or similar) that returns a subset of models
-- Pass a default model for intialization simplicity, then update the model in place???
-"""
+            raise TypeError(
+                "create_model must accept a 'params' parameter (Dict[str, Any])."
+            )
