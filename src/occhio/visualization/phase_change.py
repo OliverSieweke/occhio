@@ -7,11 +7,17 @@ from occhio.model_grid import ModelGrid
 
 
 def plot_phase_change(model_grid: ModelGrid, *, tracked_feature=1):
+    if len(model_grid.shape) != 2:
+        raise ValueError(
+            f"plot_phase_change requires a 2-dimensional ModelGrid, "
+            f"got {len(model_grid.shape)}-dimensional (shape: {model_grid.shape})."
+        )
+
     fig = make_subplots(
         rows=1,
         cols=2,
         column_widths=[0.8, 0.2],
-        subplot_titles=(f"Phase Change [Feature {tracked_feature}]", "Colormaddp"),
+        subplot_titles=(f"Phase Change [Feature {tracked_feature}]", "Colormap"),
     )
 
     _add_model_phases_trace(model_grid, tracked_feature, fig, col=1, row=1)
@@ -31,9 +37,11 @@ def _get_phase_color(norm: float, interference: float) -> NDArray[np.uint8]:
 
 
 def _add_model_phases_trace(model_grid: ModelGrid, tracked_feature, fig, *, col, row):
-    norm = np.vectorize(lambda m: m.feature_norms[tracked_feature])(model_grid.models)
+    norm = np.vectorize(lambda m: m.feature_norms[tracked_feature].cpu().item())(
+        model_grid.models
+    )
     interference = np.vectorize(
-        lambda m: m.total_feature_interferences[tracked_feature]
+        lambda m: m.total_feature_interferences[tracked_feature].cpu().item()
     )(model_grid.models)
 
     phase_colors = _get_phase_color(norm, interference)
@@ -52,32 +60,32 @@ def _add_model_phases_trace(model_grid: ModelGrid, tracked_feature, fig, *, col,
         go.Image(
             z=phase_colors,
             customdata=metadata,
-            hovertemplate=f"Norm: %{{customdata[0]:.2f}}<br>Interference: %{{customdata[1]:.2f}}<br>{model_grid.x_axis.label}: %{{customdata[2]:.2f}}<br>{model_grid.y_axis.label}: %{{customdata[3]:.2f}}<br><extra></extra>",
+            hovertemplate=f"Norm: %{{customdata[0]:.2f}}<br>Interference: %{{customdata[1]:.2f}}<br>{model_grid.axes[0].label}: %{{customdata[2]:.2f}}<br>{model_grid.axes[1].label}: %{{customdata[3]:.2f}}<br><extra></extra>",
         ),
         row=row,
         col=col,
     )
 
-    x_axis_values = model_grid.x_axis.values
+    x_axis_values = model_grid.axes[0].values
     x_tick_indices = [0, len(x_axis_values) // 2, len(x_axis_values) - 1]
     x_tick_labels = [f"{x_axis_values[i]:.3f}" for i in x_tick_indices]
     fig.update_xaxes(
         tickmode="array",
         tickvals=x_tick_indices,
         ticktext=x_tick_labels,
-        title=dict(text=f"<b>{model_grid.x_axis.label}</b>", font=dict(size=10)),
+        title=dict(text=f"<b>{model_grid.axes[0].label}</b>", font=dict(size=10)),
         row=row,
         col=col,
     )
 
-    y_axis_values = model_grid.y_axis.values
+    y_axis_values = model_grid.axes[1].values
     y_tick_indices = [0, len(y_axis_values) // 2, len(y_axis_values) - 1]
     y_tick_labels = [f"{y_axis_values[i]:.3f}" for i in y_tick_indices]
     fig.update_yaxes(
         tickmode="array",
         tickvals=y_tick_indices,
         ticktext=y_tick_labels,
-        title=dict(text=f"<b>{model_grid.y_axis.label}</b>", font=dict(size=10)),
+        title=dict(text=f"<b>{model_grid.axes[1].label}</b>", font=dict(size=10)),
         row=row,
         col=col,
     )

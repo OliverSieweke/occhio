@@ -1,10 +1,7 @@
-from __future__ import annotations
-
 from dataclasses import dataclass
 from functools import cached_property
 from inspect import signature
-from itertools import product
-from typing import Any, Callable, Dict, List
+from typing import Any, Dict, List, Protocol
 
 import numpy as np
 import torch
@@ -23,35 +20,36 @@ class Axis:
     values: list | Tensor
 
 
+class ModelFactory(Protocol):
+    def __call__(self, *, params: Dict[str, Any]) -> ToyModel: ...
+
+
 class ModelGrid:
     models: NDArray[np.object_]
 
-    def __init__(self, create_model: Callable[..., ToyModel], axes: List[Axis]):
-        self._validate_args(create_model, axes)
-        self.axes: list[Axis] = axes
-        self.create_model: Callable[..., ToyModel] = create_model
-        self.models: np.ndarray = self._initialize_models()
+    def __init__(self, create_model: ModelFactory, axes: List[Axis]):
+        self._validate_args(
+            create_model=create_model,
+            axes=axes,
+        )
+        self.axes = axes
+
+        self.models = np.empty(self.shape, dtype=object)
+        for indices in np.ndindex(*self.shape):
+            self.models[indices] = create_model(
+                params={
+                    axis.label: axis.values[axis_index]
+                    for axis, axis_index in zip(self.axes, indices)
+                }
+            )
+
         self._validate_autoencoders()
-
-    def _initialize_models(self) -> np.ndarray:
-        shape: tuple[int, ...] = self.shape
-        models: np.ndarray = np.empty(shape, dtype=object)
-
-        # Iterates over combinations of axis indices
-        for indices in product(*[range(s) for s in shape]):
-            # Build a parameter dictionary mapping axis labels to selected values at current index
-            params: Dict[str, Any] = {
-                axis.label: axis.values[i] for axis, i in zip(self.axes, indices)
-            }
-            models[indices] = self.create_model(params=params)
-
-        return models
 
     def _validate_autoencoders(self):
         if len(self.models) < 2:
             return
 
-        flattened_models = self.flattened_models
+        flattened_models = self.models_flat
 
         reference = flattened_models[0].ae
         reference_signature = (
@@ -77,7 +75,7 @@ class ModelGrid:
                 )
 
     def _can_vectorize_loss(self) -> bool:
-        flattened_models = self.flattened_models
+        flattened_models = self.models_flat
 
         if len(flattened_models) < 2:
             return True
@@ -98,7 +96,7 @@ class ModelGrid:
         verbose: bool = False,
         track_losses: bool = False,
     ):
-        flattened_models = self.flattened_models
+        flattened_models = self.models_flat
 
         # Stack Model Characteristics --------------------------------------------------
         stacked_params, stacked_buffers = stack_module_state(
@@ -198,12 +196,9 @@ class ModelGrid:
 
         return losses
 
-    def __getitem__(self, key: tuple[int, ...]) -> ToyModel:
+    def __getitem__(self, key: tuple[int, ...]) -> ToyModel | NDArray[np.object_]:
         """Returns the ToyModel at the given indices. Allows for arbitrary indexing."""
-        item = self.models
-        for i in key:
-            item = item[i]
-        return item
+        return self.models[key]
 
     @cached_property
     def parameters_mesh(self):
@@ -220,28 +215,15 @@ class ModelGrid:
         """Returns a dictionary of the axis labels and their lengths."""
         return {axis.label: len(axis.values) for axis in self.axes}
 
-    @property
-    def flattened_models(self) -> NDArray[np.object_]:
-        """Returns a flattened list of all models in the grid."""
+    @cached_property
+    def models_flat(self) -> NDArray[np.object_]:
         return self.models.ravel()
 
-    def _validate_args(
-        self, create_model: Callable[..., ToyModel], axes: List[Axis]
-    ) -> None:
+    @staticmethod
+    def _validate_args(create_model, axes) -> None:
         if not axes:
             raise ValueError("At least one axis must be provided.")
 
-        # if not all(isinstance(axis.values, Tensor) for axis in vectorized_axes):
-        #     labels = [axis.label for axis in vectorized_axes if not isinstance(axis.values, Tensor)]
-        #     raise TypeError(
-        #         f"Axes {labels} must have values as torch.Tensor"
-        #     )
-
-        # assert set(vectorized_axes).isdisjoint(set(stratified_axes)), "vectorized_axes and stratified_axes must be disjoint sets."
-        #
-        # if not vectorized_axes and not stratified_axes:
-        #     raise ValueError("At least one of 'vectorized_axes' or 'stratified_axes' must be provided and non-empty.")
-        #
         if "params" not in signature(create_model).parameters:
             raise TypeError(
                 "create_model must accept a 'params' parameter (Dict[str, Any])."
