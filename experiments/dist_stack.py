@@ -10,18 +10,21 @@ from occhio.visualization import plot_dynamic_scatter
 # %%
 DEVICE = "cpu"
 gen = torch.Generator("cpu")
-gen.manual_seed(7)
+gen.manual_seed(8)
 
 
 def my_hook(hook_data):
     return hook_data["epoch"], hook_data["tm"].ae.W.detach().numpy().copy()
 
 
-# # Another hook here!
-# def my_hook(hook_data):
-#     return hook_data["epoch"], torch.stack(
-#         [hook_data["tm"].feature_dimensionalities, hook_data["tm"].total_feature_interferences]
-#     )
+# Another hook here!
+def feat_dim_and_interference(hook_data):
+    return hook_data["epoch"], torch.stack(
+        [
+            hook_data["tm"].feature_dimensionalities,
+            hook_data["tm"].total_feature_interferences,
+        ]
+    )
 
 
 dist = DistributionStack(
@@ -39,7 +42,7 @@ dist = DistributionStack(
 
 
 n_hidden = 2
-importances = torch.tensor([1.0**i for i in range(dist.n_features)])
+importances = torch.tensor([0.9**i for i in range(dist.n_features)])
 
 # %%
 ae = TiedLinearRelu(dist.n_features, n_hidden, generator=gen)
@@ -48,7 +51,7 @@ losses, hook_returns = tm.fit(
     40_000,
     batch_size=512,
     verbose=False,
-    hooks=[my_hook],
+    hooks=[my_hook, feat_dim_and_interference],
     hook_freq=2000,
     learning_rate=3e-4,
     weight_decay=0.05,
@@ -57,5 +60,8 @@ losses, hook_returns = tm.fit(
 
 # %%
 plot_dynamic_scatter(losses, hook_returns[0], loss_stride=20)
+
+# %%
+plot_dynamic_scatter(losses, hook_returns[1], loss_stride=20)
 
 # %%

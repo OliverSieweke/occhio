@@ -32,6 +32,16 @@ def plot_dynamic_scatter(
     )
     n: int = hooks_list[0][-1].shape[-1]
 
+    # Compute global axis limits across all frames for fixed scatter axes
+    all_x = [emb_mat[0] for _, emb_mat in hooks_list]
+    all_y = [emb_mat[1] for _, emb_mat in hooks_list]
+    x_min = min(v.min().item() for v in all_x)
+    x_max = max(v.max().item() for v in all_x)
+    y_min = min(v.min().item() for v in all_y)
+    y_max = max(v.max().item() for v in all_y)
+    x_pad = (x_max - x_min) * 0.05 or 0.5
+    y_pad = (y_max - y_min) * 0.05 or 0.5
+
     # Add loss line plot (static)
     fig.add_trace(
         go.Scatter(x=loss_x, y=loss_y, mode="lines", name="Loss"),
@@ -129,6 +139,8 @@ def plot_dynamic_scatter(
         sliders=sliders,
         height=500,
         showlegend=False,
+        xaxis2=dict(range=[x_min - x_pad, x_max + x_pad]),
+        yaxis2=dict(range=[y_min - y_pad, y_max + y_pad]),
         shapes=[
             dict(
                 type="line",
