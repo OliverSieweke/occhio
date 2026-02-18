@@ -9,6 +9,14 @@ import torch
 
 
 class SparseUniform(Distribution):
+    """Sparse uniform distribution with per-feature sparsity.
+
+    Args:
+        n_features: Number of features.
+        p_active: Probability each feature is non-zero. Scalar or per-feature.
+        **kwargs: Passed to ``Distribution`` (device, generator).
+    """
+
     def __init__(
         self, n_features: int, p_active: float | list[float] | Tensor, **kwargs
     ):
@@ -22,10 +30,25 @@ class SparseUniform(Distribution):
 
 
 class SparseExponential(Distribution):
-    def __init__(self, n_features: int, p_active: float, scale: float = 1.0, **kwargs):
+    """Sparse exponential distribution with per-feature sparsity and rate.
+
+    Args:
+        n_features: Number of features.
+        p_active: Probability each feature is non-zero. Scalar or per-feature.
+        scale: Rate parameter (mean = 1/scale). Scalar or per-feature.
+        **kwargs: Passed to ``Distribution`` (device, generator).
+    """
+
+    def __init__(
+        self,
+        n_features: int,
+        p_active: float | list[float] | Tensor,
+        scale: float | list[float] | Tensor = 1.0,
+        **kwargs,
+    ):
         super().__init__(n_features, **kwargs)
         self.p_active = self._broadcast(p_active)
-        self.scale = scale
+        self.scale = self._broadcast(scale)
 
     def sample(self, batch_size: int) -> Tensor:
         mask = self._rand(batch_size, self.n_features) < self.p_active
@@ -33,3 +56,25 @@ class SparseExponential(Distribution):
             1.0 - self._rand(batch_size, self.n_features)
         )
         return mask * values
+
+
+class SingleUniform(Distribution):
+    """Single-feature uniform distribution.
+
+    Exactly one feature fires per sample, chosen uniformly at random.
+    The active feature takes a value sampled from Uniform(0, 1).
+
+    Args:
+        n_features: Number of features.
+        **kwargs: Passed to ``Distribution`` (device, generator).
+    """
+
+    def __init__(self, n_features: int, **kwargs):
+        super().__init__(n_features, **kwargs)
+
+    def sample(self, batch_size: int) -> Tensor:
+        indices = self._randint(0, self.n_features, (batch_size,))
+        values = self._rand(batch_size)
+        result = torch.zeros(batch_size, self.n_features, device=self.device)
+        result[torch.arange(batch_size, device=self.device), indices] = values
+        return result

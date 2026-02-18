@@ -17,6 +17,29 @@ class TreeNode:
 
 
 class HierarchicalSparse(Distribution):
+    """Tree-structured sparse distribution with hierarchical conditional activation.
+
+    Features are organized in a random tree where activation cascades from root to leaves.
+    The root (depth 0) always activates. Non-root nodes at depth d activate with probability
+    ``p(d)`` IF their parent is active. Active nodes take values ``~ Uniform(0, 1)``.
+
+    Activation probabilities decrease with depth via geometric decay:
+    ``p(d) = p_base * depth_decay^(d-1)``, or can be specified explicitly via ``p_by_depth``.
+
+    Args:
+        n_features: Number of nodes/features in the tree.
+        p_base: Base activation probability at depth 1. Defaults to 0.8.
+        depth_decay: Geometric decay per depth level. Defaults to 0.9.
+        p_by_depth: If provided, overrides ``p_base``/``depth_decay`` with explicit
+            per-depth probabilities. Defaults to ``None``.
+        max_children: Maximum children per node during tree generation. Defaults to 5.
+        device: Torch device for all generated tensors.
+        generator: Optional ``torch.Generator`` for deterministic sampling.
+
+    Note:
+        Tree structure is fixed at init. Use :meth:`generate_new_tree` to resample.
+        See :meth:`get_tree_stats` and :meth:`get_expected_active` for analysis.
+    """
 
     def __init__(
         self,
@@ -28,16 +51,6 @@ class HierarchicalSparse(Distribution):
         device: torch.device | str = "cpu",
         generator: torch.Generator | None = None,
     ):
-        """
-        Args:
-            n_features: Number of nodes/features in the tree
-            p_base: Base firing probability (at depth 1)
-            depth_decay: Geometric decay per depth level. p(d) = p_base * decay^(d-1)
-            p_by_depth: If provided, overrides p_base/depth_decay. p_by_depth[d] is
-                        firing prob at depth d (depth 0 = root, always fires).
-                        Extended with last value if tree is deeper.
-            max_children: Maximum children per node during tree generation
-        """
         super().__init__(n_features, device, generator)
 
         self.p_base = p_base
