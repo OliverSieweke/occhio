@@ -47,6 +47,11 @@ class HierarchicalPairs(Distribution):
         values = self._rand(batch_size, self.n_features)
         return mask * values
 
+    def __str__(self):
+        return f"{super().__str__()}, {self.p_active}, {self.p_follow}"
+
+    def __repr__(self):
+        return f"{super().__repr__()}, {self.p_active}, {self.p_follow}"
 
 class ScaledHierarchicalPairs(Distribution):
     """
@@ -86,6 +91,12 @@ class ScaledHierarchicalPairs(Distribution):
         out[:, 0::2] = primary_mask * primary_values
         out[:, 1::2] = secondary_mask * secondary_values
         return out
+
+    def __str__(self):
+        return f"{super().__str__()}, {self.p_active}, {self.p_follow}"
+
+    def __repr__(self):
+        return f"{super().__repr__()}, {self.p_active}, {self.p_follow}"
 
 
 class CorrelatedPairs(Distribution):
@@ -133,6 +144,12 @@ class CorrelatedPairs(Distribution):
         values = self._rand(batch_size, self.n_features)
         return mask * values
 
+    def __str__(self):
+        return f"{super().__str__()}, {self.p_active}, {self.p_individual}"
+
+    def __repr__(self):
+        return f"{super().__repr__()}, {self.p_active}, {self.p_individual}"
+
 
 class AnticorrelatedPairs(Distribution):
     """
@@ -165,3 +182,9 @@ class AnticorrelatedPairs(Distribution):
 
         values = self._rand(batch_size, self.n_features)
         return mask * values
+
+    def __str__(self):
+        return f"{super().__str__()}, {self.p_active}"
+
+    def __repr__(self):
+        return f"{super().__repr__()}, {self.p_active}"

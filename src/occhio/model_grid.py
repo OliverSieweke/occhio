@@ -288,7 +288,7 @@ class ModelGrid:
         #
         # if not vectorized_axes and not stratified_axes:
         #     raise ValueError("At least one of 'vectorized_axes' or 'stratified_axes' must be provided and non-empty.")
-        #
+        
         if "params" not in signature(create_model).parameters:
             raise TypeError(
                 "create_model must accept a 'params' parameter (Dict[str, Any])."

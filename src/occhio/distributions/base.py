@@ -3,7 +3,9 @@
 from abc import ABC, abstractmethod
 import torch
 from torch import Tensor
-
+from base64 import b64encode
+from hashlib import sha256
+from functools import cached_property
 
 class Distribution(ABC):
     """Base class for all distributions."""
@@ -54,7 +56,15 @@ class Distribution(ABC):
         return self
 
     def __repr__(self):
-        return f"{type(self).__name__}({self.n_features}, {self.device})"
+        generator_state = self.generator.get_state()
+        state_b64 = b64encode(generator_state.numpy().tobytes()).decode("ascii")
+        return f"{type(self).__name__}({self.n_features}, {self.device}, {state_b64})"
 
     def __str__(self):
-        return f"{type(self).__name__}({self.n_features}, {self.device})"
+        generator_state = self.generator.get_state()
+        state_b64 = b64encode(generator_state.numpy().tobytes()).decode("ascii")
+        return f"{type(self).__name__}({self.n_features}, {self.device}, {state_b64})"
+
+    @cached_property
+    def hash(self) -> str:
+        return sha256(str(self).encode("utf-8")).hexdigest()

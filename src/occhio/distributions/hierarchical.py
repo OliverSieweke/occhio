@@ -62,6 +62,12 @@ class HierarchicalSparse(Distribution):
 
         self.generate_new_tree()
 
+    def __str__(self):
+        return f"{super().__str__()}, {self.p_base}, {self.depth_decay}, {self.p_by_depth}, {self.max_children}"
+
+    def __repr__(self):
+        return f"{super().__repr__()}, {self.p_base}, {self.depth_decay}, {self.p_by_depth}, {self.max_children}"
+
     def generate_new_tree(self) -> None:
         """Generate a new random tree structure.
 
