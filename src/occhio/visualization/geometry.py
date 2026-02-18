@@ -16,7 +16,7 @@ class GeometryPlotComponent(Enum):
 
 
 def plot_geometry(
-    model_grid: ModelGrid, *, components: set[GeometryPlotComponent] | None = None
+    model_grid: ModelGrid, components: set[GeometryPlotComponent] | None = None
 ):
     if len(model_grid.shape) != 1:
         raise ValueError(
