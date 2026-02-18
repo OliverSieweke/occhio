@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from functools import cached_property
 from inspect import signature
-from typing import Any, Dict, List, Callable
+from typing import Any, Callable, Dict, List
 
 import numpy as np
 import torch
@@ -21,6 +21,36 @@ class Axis:
 
 
 class ModelGrid:
+    """A multi-dimensional grid of ``ToyModel`` instances, parameterized over one or
+    more named axes.
+
+    Each point in the grid corresponds to a ``ToyModel`` created by a factory
+    function that receives the axis values as a ``params`` dict.
+
+    Args:
+        create_model: A factory function that accepts a ``Dict[str, Any]`` containing
+         axes values at a given grid point, and returns an initialised ``ToyModel``.
+        axes: An ordered list of ``Axis`` objects defining the grid dimensions.
+            At least one axis must be provided.
+
+    Example::
+        def create_model(params):
+            return ToyModel(
+                distribution=SparseUniform(5, p_active=params["Density"]),
+                ae=TiedLinearRelu(5, 2),
+                importances=params["Relative Importance" ** torch.arange(5),
+            )
+
+
+        model_grid = ModelGrid(
+            create_model,
+            axes=[
+                Axis(label="Density", values=logspace(0, -2, 32)),
+                Axis(label="Relative Importance", values=logspace(-1, 1, 32)),
+            ],
+        )
+    """
+
     models: NDArray[np.object_]
 
     def __init__(
