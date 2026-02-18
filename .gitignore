@@ -6,8 +6,9 @@ AGENTS.md
 __pycache__/
 *.pyc
 *.DS_Store
-.vscode/*
 *.png
 src/occhio/trash_experiment/
 phase_change.ipynb 
 test.ipynb
+.pytest_cache/
+.vscode/
