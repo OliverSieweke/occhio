@@ -18,7 +18,6 @@ from occhio.autoencoder import AutoEncoderBase
 from occhio.distributions.base import Distribution
 from occhio.toy_model import ToyModel
 
-
 @dataclass
 class Axis:
     label: str
