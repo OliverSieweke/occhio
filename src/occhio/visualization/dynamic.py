@@ -2,13 +2,28 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 
-def plot_dynamic_scatter(losses: list[float], hooks_list: list[tuple]):
+def plot_dynamic_scatter(
+    losses: list[float], hooks_list: list[tuple], loss_stride: int = 1
+):
     """Creates a dynamic plot of loss and another property as a scatter.
 
     Args:
         losses: list of losses.
         hooks_list: list of tuples of (loss_epoch, Tensor[k, n]) with k>=2
+        loss_stride: plot every nth loss entry (first and last are always included).
     """
+    # Thin the losses for faster plotting
+    all_indices = list(range(len(losses)))
+    if loss_stride > 1 and len(losses) > 2:
+        sampled = list(range(0, len(losses), loss_stride))
+        if sampled[-1] != len(losses) - 1:
+            sampled.append(len(losses) - 1)
+        loss_x = sampled
+        loss_y = [losses[i] for i in sampled]
+    else:
+        loss_x = all_indices
+        loss_y = losses
+
     fig = make_subplots(
         rows=1,
         cols=2,
@@ -19,7 +34,7 @@ def plot_dynamic_scatter(losses: list[float], hooks_list: list[tuple]):
 
     # Add loss line plot (static)
     fig.add_trace(
-        go.Scatter(x=list(range(len(losses))), y=losses, mode="lines", name="Loss"),
+        go.Scatter(x=loss_x, y=loss_y, mode="lines", name="Loss"),
         row=1,
         col=1,
     )
@@ -30,7 +45,7 @@ def plot_dynamic_scatter(losses: list[float], hooks_list: list[tuple]):
         frames.append(
             go.Frame(
                 data=[
-                    go.Scatter(x=list(range(len(losses))), y=losses, mode="lines"),
+                    go.Scatter(x=loss_x, y=loss_y, mode="lines"),
                     go.Scatter(
                         x=emb_mat[0],
                         y=emb_mat[1],

@@ -10,7 +10,7 @@ from occhio.visualization import plot_dynamic_scatter
 # %%
 DEVICE = "cpu"
 gen = torch.Generator("cpu")
-gen.manual_seed(2)
+gen.manual_seed(7)
 
 
 def my_hook(hook_data):
@@ -26,27 +26,36 @@ def my_hook(hook_data):
 
 dist = DistributionStack(
     [
-        SingleUniform(3, generator=gen, device=DEVICE),
-        SparseUniform(5, 0.3, generator=gen, device=DEVICE),
+        SparseUniform(3, p_active=0.366, generator=gen, device=DEVICE),
+        SparseUniform(3, 0.366, generator=gen, device=DEVICE),
+        SparseUniform(3, 0.366, generator=gen, device=DEVICE),
     ],
     "single",
+    generator=gen,
     device=DEVICE,
 )
 
+# %%
 
-n_hidden = 3
-importances = torch.tensor([0.95**i for i in range(dist.n_features)])
+
+n_hidden = 2
+importances = torch.tensor([1.0**i for i in range(dist.n_features)])
 
 # %%
 ae = TiedLinearRelu(dist.n_features, n_hidden, generator=gen)
 tm = ToyModel(dist, ae, importances=importances, generator=gen, device=DEVICE)
 losses, hook_returns = tm.fit(
-    30_000, batch_size=512, verbose=False, hooks=[my_hook], hook_freq=1000
+    40_000,
+    batch_size=512,
+    verbose=False,
+    hooks=[my_hook],
+    hook_freq=2000,
+    learning_rate=3e-4,
+    weight_decay=0.05,
 )
 
 
 # %%
-# Interactive version with slider to explore embeddings at different epochs
-plot_dynamic_scatter(losses, hook_returns[0])
+plot_dynamic_scatter(losses, hook_returns[0], loss_stride=20)
 
 # %%
