@@ -42,15 +42,18 @@ class ModelGrid:
     def _initialize_models(self) -> NDArray[np.object_]:
         shape: tuple[int, ...] = self.shape
         models: NDArray[np.object_] = np.empty(shape, dtype=object)
-
-        # Iterates over combinations of axis indices
-        for indices in product(*[range(s) for s in shape]):
-            # Build a parameter dictionary mapping axis labels to selected values at current index
+        total = int(np.prod(shape))
+        for indices in tqdm(
+            product(*[range(s) for s in shape]),
+            total=total,
+            desc="Initializing models",
+            unit="model",
+            leave=True,
+        ):
             params: Dict[str, Any] = {
                 axis.label: axis.values[i] for axis, i in zip(self.axes, indices)
             }
             models[indices] = self.create_model(params=params)
-
         return models
 
     def _validate_autoencoders(self):
@@ -66,7 +69,13 @@ class ModelGrid:
             reference.device,
         )
 
-        for i, model in enumerate(flattened_models[1:], start=1):
+        for i, model in tqdm(
+            enumerate(flattened_models[1:], start=1),
+            total=len(flattened_models) - 1,
+            desc="Validating Autoencoders",
+            unit="model",
+            leave=True,
+        ):
             ae = model.ae
             signature = (
                 type(ae),
@@ -126,7 +135,7 @@ class ModelGrid:
         flattened_models = self.flattened_models
 
         # Stack Model Characteristics --------------------------------------------------
-        stacked_params, stacked_buffers = stack_module_state(
+        stacked_params, stacked_buffers = stack_module_state( 
             [model.ae for model in flattened_models]
         )
         # NB: We enable gradients on params as stack_module_state returns detached
