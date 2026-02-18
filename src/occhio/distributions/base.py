@@ -27,11 +27,11 @@ class Distribution(ABC):
     def __init__(
         self,
         n_features: int,
-        device: torch.device | str = "cpu",
+        device: torch.device | str | None = None,
         generator: torch.Generator | None = None,
     ):
         self.n_features = n_features
-        self.device = device
+        self.device = torch.device(device) if device is not None else None
         self.generator = generator
 
     @abstractmethod
@@ -84,6 +84,14 @@ class Distribution(ABC):
 
     def to(self, device: torch.device | str):
         self.device = torch.device(device)
+        for attr_name in vars(self):
+            val = getattr(self, attr_name)
+            if isinstance(val, Tensor):
+                setattr(self, attr_name, val.to(self.device))
+            elif isinstance(val, list):
+                for i, item in enumerate(val):
+                    if isinstance(item, Tensor):
+                        val[i] = item.to(self.device)
         return self
 
     def __repr__(self):
@@ -188,7 +196,7 @@ class DistributionStack(Distribution):
         return result
 
     def to(self, device: torch.device | str):
-        self.device = device
+        self.device = torch.device(device)
         for dist in self.distributions:
             dist.to(device)
         return self

@@ -15,9 +15,9 @@ class ToyModel:
 
     def __init__(
         self,
-        distribution: Optional[Distribution],
-        ae: Optional[AutoEncoderBase],
-        device: torch.device | str = "cpu",
+        distribution: Distribution,
+        ae: AutoEncoderBase,
+        device: torch.device | str | None = None,
         generator: torch.Generator | None = None,
         importances=None,
     ):
@@ -25,8 +25,18 @@ class ToyModel:
         self.distribution = distribution
         self.ae = ae
 
-        assert distribution.n_features == ae.n_features  # ty:ignore
-        self.n_features: int = ae.n_features  # ty:ignore
+        assert distribution.n_features == ae.n_features
+        self.n_features: int = ae.n_features
+
+        if device is None:
+            # Infer from ae (reliable once it has parameters)
+            device = ae.device or torch.device("cpu")
+        else:
+            device = torch.device(device)
+
+        ae.to(device)
+        distribution.to(device)
+        self.device = device
 
         if importances is None:
             self.importances = torch.ones(self.n_features, device=ae.device)

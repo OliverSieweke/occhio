@@ -30,17 +30,27 @@ class AutoEncoderBase(nn.Module, ABC):
     def loss(self, x_true: Tensor, x_hat: Tensor, importances: Tensor | None):
         """The associated loss function."""
         if importances is None:
-            importances = torch.ones(self.n_features)  # ty:ignore
+            importances = torch.ones(self.n_features, device=self.device)  # ty:ignore
         return torch.mean(torch.sum(importances * torch.square(x_true - x_hat), dim=-1))
 
     def __init__(
         self,
-        device: torch.device | str = "cpu",
+        device: torch.device | str | None = None,
         generator: torch.Generator | None = None,
     ):
         super().__init__()
-        self.device = device
+        self._init_device = torch.device(device) if device is not None else None
         self.generator = generator
+
+    @property
+    def device(self) -> torch.device | None:
+        """Return the device of the first parameter, falling back to the
+        device passed at construction time (needed during ``__init__`` before
+        any parameters have been created)."""
+        try:
+            return next(self.parameters()).device
+        except StopIteration:
+            return self._init_device
 
     def __init_subclass__(cls, **kwargs):
         """This ensures that `n_features` and `n_hidden` are defined at creation"""
