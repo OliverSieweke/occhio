@@ -52,7 +52,7 @@ losses, hook_returns = tm.fit(
     batch_size=512,
     verbose=False,
     hooks=[my_hook, feat_dim_and_interference],
-    hook_freq=2000,
+    hook_freq=250,
     learning_rate=3e-4,
     weight_decay=0.05,
 )
