@@ -71,7 +71,7 @@ class ModelGrid:
         for i, model in tqdm(
             enumerate(flattened_models, start=1),
             total=len(flattened_models),
-            desc="Validating Autoencoder",
+            desc="Validating Models",
             unit="model",
             leave=True,
         ):
@@ -106,7 +106,7 @@ class ModelGrid:
 
         for model in tqdm(
             flattened_models,
-            desc="Grouping training samples",
+            desc="Grouping distributions",
             unit="model",
             leave=True,
         ):
@@ -304,17 +304,6 @@ class ModelGrid:
     ) -> None:
         if not axes:
             raise ValueError("At least one axis must be provided.")
-
-        # if not all(isinstance(axis.values, Tensor) for axis in vectorized_axes):
-        #     labels = [axis.label for axis in vectorized_axes if not isinstance(axis.values, Tensor)]
-        #     raise TypeError(
-        #         f"Axes {labels} must have values as torch.Tensor"
-        #     )
-
-        # assert set(vectorized_axes).isdisjoint(set(stratified_axes)), "vectorized_axes and stratified_axes must be disjoint sets."
-        #
-        # if not vectorized_axes and not stratified_axes:
-        #     raise ValueError("At least one of 'vectorized_axes' or 'stratified_axes' must be provided and non-empty.")
         
         if "params" not in signature(create_model).parameters:
             raise TypeError(
