@@ -10,6 +10,9 @@ from .distributions.base import Distribution
 
 
 class ToyModel:
+    distribution: Distribution
+    ae: AutoEncoderBase
+
     def __init__(
         self,
         distribution: Optional[Distribution],
@@ -26,10 +29,12 @@ class ToyModel:
         self.n_features: int = ae.n_features  # ty:ignore
 
         if importances is None:
-            self.importances = torch.ones(self.n_features)
+            self.importances = torch.ones(self.n_features, device=ae.device)
         else:
-            self.importances = importances
+            self.importances = importances.to(ae.device)
 
+    # If you change the signature or implementation here, make sure you keep it
+    # consistent with ModelGrid.fit()
     def fit(
         self,
         n_epochs: int,
@@ -77,7 +82,7 @@ class ToyModel:
         return self.ae.encode(inputs)
 
     def get_one_hot_embeddings(self) -> Tensor:
-        return self.ae.encode(torch.eye(self.n_features))
+        return self.ae.encode(torch.eye(self.n_features, device=self.ae.device))
 
     def __repr__(self):
         return f"ToyModel({self.distribution})"
