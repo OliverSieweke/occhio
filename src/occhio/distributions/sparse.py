@@ -22,7 +22,7 @@ class SparseUniform(Distribution):
 
     @property
     def hash(self) -> str:
-        string = f"{self.__str__()}, {self.p_active.tolist()}"
+        string = f"{self.__str__()}, {self.p_active}"
         return hashlib.sha256(string.encode("utf-8")).hexdigest()
 
 

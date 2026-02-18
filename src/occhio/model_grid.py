@@ -24,13 +24,11 @@ class Axis:
     values: list | Tensor
 
 class ModelGrid:
-    models: NDArray[np.object_]
-
     def __init__(self, create_model: Callable[..., ToyModel], axes: List[Axis], cache_samples: bool = True):
         self._validate_args(create_model, axes)
         self.axes: list[Axis] = axes
         self.create_model: Callable[..., ToyModel] = create_model
-        self.models: np.ndarray = self._initialize_models()
+        self.models: NDArray[np.object_] = self._initialize_models()
         self._validate_autoencoders()
         self.cache_samples: bool = cache_samples
 
@@ -57,7 +55,7 @@ class ModelGrid:
         return models
 
     def _validate_autoencoders(self):
-        if len(self.models) < 2:
+        if self.models.size <= 1:
             return
 
         flattened_models = self.flattened_models
@@ -70,28 +68,28 @@ class ModelGrid:
         )
 
         for i, model in tqdm(
-            enumerate(flattened_models[1:], start=1),
-            total=len(flattened_models) - 1,
-            desc="Validating Autoencoders",
+            enumerate(flattened_models, start=1),
+            total=len(flattened_models),
+            desc="Validating Autoencoder",
             unit="model",
             leave=True,
         ):
             ae = model.ae
-            signature = (
+            ae_signature = (
                 type(ae),
                 {k: v.shape for k, v in ae.state_dict().items()},
                 ae.device,
             )
-            if signature != reference_signature:
+            if ae_signature != reference_signature:
                 # [17.02.26 | OliverSieweke] TODO: unstack the index here
                 raise ValueError(
-                    f"All Autoencoders should share the same architecture"
-                    f"Autoencoder at index {i} has incompatible architecture with the first Autoencoder."
-                    f"received: {signature}, "
+                    f"All Autoencoders should share the same architecture. "
+                    f"Autoencoder at index {i} has incompatible architecture with the first Autoencoder. "
+                    f"received: {ae_signature}, "
                     f"expected: {reference_signature}"
                 )
 
-    def _build_sample_index(self) -> tuple[list[Distribution], list[int]]:
+    def _build_sample_index(self) -> tuple[list[Distribution], Tensor]:
         """Precompute which models share a distribution so the training loop
         only needs to sample once per unique distribution and index into the
         results — no hashing or dict lookups at training time."""
@@ -100,7 +98,12 @@ class ModelGrid:
         unique_distributions: list[Distribution] = []
         sample_index: list[int] = []
 
-        for model in flattened_models:
+        for model in tqdm(
+            flattened_models,
+            desc="Building sample index",
+            unit="model",
+            leave=True,
+        ):
             dist = model.distribution
             h = dist.hash
             if h not in hash_to_idx:
@@ -108,7 +111,8 @@ class ModelGrid:
                 unique_distributions.append(dist)
             sample_index.append(hash_to_idx[h])
 
-        return unique_distributions, sample_index
+        device = flattened_models[0].ae.device
+        return unique_distributions, torch.tensor(sample_index, dtype=torch.long, device=device)
 
     def _can_vectorize_loss(self) -> bool:
         flattened_models = self.flattened_models
@@ -185,12 +189,10 @@ class ModelGrid:
             #   - find a good way to expose/use this stackability
 
             if self.cache_samples:
-                unique_samples = [
-                    dist.sample(batch_size) for dist in self._unique_distributions
-                ]
-                stacked_samples = torch.stack(
-                    [unique_samples[i] for i in self._sample_index]
+                unique_samples = torch.stack(
+                    [dist.sample(batch_size) for dist in self._unique_distributions]
                 )
+                stacked_samples = unique_samples[self._sample_index]
             else:
                 stacked_samples = torch.stack(
                     [model.distribution.sample(batch_size) for model in flattened_models]
@@ -241,8 +243,10 @@ class ModelGrid:
 
         return losses
 
-    def __getitem__(self, key: tuple[int, ...]) -> ToyModel:
+    def __getitem__(self, key) -> ToyModel:
         """Returns the ToyModel at the given indices. Allows for arbitrary indexing."""
+        if not isinstance(key, tuple):
+            key = (key,)
         item = self.models
         for i in key:
             item = item[i]
