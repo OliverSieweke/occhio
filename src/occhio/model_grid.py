@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from functools import cached_property
 from inspect import signature
-from typing import Any, Dict, List, Protocol, Callable
+from typing import Any, Dict, List, Callable
 
 import numpy as np
 import torch
