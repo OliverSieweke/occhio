@@ -47,7 +47,7 @@ class ModelGrid:
         if len(self.models) < 2:
             return
 
-        flattened_models = self.models_flat
+        flattened_models = self.models.ravel()
 
         reference = flattened_models[0].ae
         reference_signature = (
@@ -73,7 +73,7 @@ class ModelGrid:
                 )
 
     def _can_vectorize_loss(self) -> bool:
-        flattened_models = self.models_flat
+        flattened_models = self.models.ravel()
 
         if len(flattened_models) < 2:
             return True
@@ -94,7 +94,7 @@ class ModelGrid:
         verbose: bool = False,
         track_losses: bool = False,
     ):
-        flattened_models = self.models_flat
+        flattened_models = self.models.ravel()
 
         # Stack Model Characteristics --------------------------------------------------
         stacked_params, stacked_buffers = stack_module_state(
@@ -212,10 +212,6 @@ class ModelGrid:
     def describe(self) -> dict[str, int]:
         """Returns a dictionary of the axis labels and their lengths."""
         return {axis.label: len(axis.values) for axis in self.axes}
-
-    @cached_property
-    def models_flat(self) -> NDArray[np.object_]:
-        return self.models.ravel()
 
     @staticmethod
     def _validate_args(create_model, axes) -> None:
