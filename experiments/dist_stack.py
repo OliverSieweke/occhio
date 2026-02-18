@@ -27,22 +27,21 @@ def my_hook(hook_data):
 dist = DistributionStack(
     [
         SingleUniform(3, generator=gen, device=DEVICE),
-        SparseUniform(3, 0.5, generator=gen, device=DEVICE),
-        SparseUniform(3, 0.5, generator=gen, device=DEVICE),
+        SparseUniform(5, 0.3, generator=gen, device=DEVICE),
     ],
     "single",
     device=DEVICE,
 )
 
 
-n_hidden = 2
+n_hidden = 3
 importances = torch.tensor([0.95**i for i in range(dist.n_features)])
 
 # %%
 ae = TiedLinearRelu(dist.n_features, n_hidden, generator=gen)
 tm = ToyModel(dist, ae, importances=importances, generator=gen, device=DEVICE)
 losses, hook_returns = tm.fit(
-    40_000, batch_size=256, verbose=False, hooks=[my_hook], hook_freq=1000
+    30_000, batch_size=512, verbose=False, hooks=[my_hook], hook_freq=1000
 )
 
 

@@ -7,7 +7,7 @@ def plot_dynamic_scatter(losses: list[float], hooks_list: list[tuple]):
 
     Args:
         losses: list of losses.
-        hooks_list: list of tuples of (loss_epoch, Tensor[2, n])
+        hooks_list: list of tuples of (loss_epoch, Tensor[k, n]) with k>=2
     """
     fig = make_subplots(
         rows=1,
@@ -40,6 +40,8 @@ def plot_dynamic_scatter(losses: list[float], hooks_list: list[tuple]):
                             color=list(range(n)),
                             colorscale="Viridis",
                         ),
+                        text=list(range(n)),
+                        hoverinfo="text",
                         showlegend=False,
                     ),
                 ],
@@ -70,6 +72,8 @@ def plot_dynamic_scatter(losses: list[float], hooks_list: list[tuple]):
             y=emb_mat[1],
             mode="markers",
             marker=dict(size=10, color=list(range(n)), colorscale="Viridis"),
+            text=list(range(n)),
+            hoverinfo="text",
             showlegend=False,
         ),
         row=1,
