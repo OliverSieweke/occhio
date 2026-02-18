@@ -2,13 +2,28 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 
-def plot_dynamic_scatter(losses: list[float], hooks_list: list[tuple]):
+def plot_dynamic_scatter(
+    losses: list[float], hooks_list: list[tuple], loss_stride: int = 1
+):
     """Creates a dynamic plot of loss and another property as a scatter.
 
     Args:
         losses: list of losses.
-        hooks_list: list of tuples of (loss_epoch, Tensor[2, n])
+        hooks_list: list of tuples of (loss_epoch, Tensor[k, n]) with k>=2
+        loss_stride: plot every nth loss entry (first and last are always included).
     """
+    # Thin the losses for faster plotting
+    all_indices = list(range(len(losses)))
+    if loss_stride > 1 and len(losses) > 2:
+        sampled = list(range(0, len(losses), loss_stride))
+        if sampled[-1] != len(losses) - 1:
+            sampled.append(len(losses) - 1)
+        loss_x = sampled
+        loss_y = [losses[i] for i in sampled]
+    else:
+        loss_x = all_indices
+        loss_y = losses
+
     fig = make_subplots(
         rows=1,
         cols=2,
@@ -17,9 +32,19 @@ def plot_dynamic_scatter(losses: list[float], hooks_list: list[tuple]):
     )
     n: int = hooks_list[0][-1].shape[-1]
 
+    # Compute global axis limits across all frames for fixed scatter axes
+    all_x = [emb_mat[0] for _, emb_mat in hooks_list]
+    all_y = [emb_mat[1] for _, emb_mat in hooks_list]
+    x_min = min(v.min().item() for v in all_x)
+    x_max = max(v.max().item() for v in all_x)
+    y_min = min(v.min().item() for v in all_y)
+    y_max = max(v.max().item() for v in all_y)
+    x_pad = (x_max - x_min) * 0.05 or 0.5
+    y_pad = (y_max - y_min) * 0.05 or 0.5
+
     # Add loss line plot (static)
     fig.add_trace(
-        go.Scatter(x=list(range(len(losses))), y=losses, mode="lines", name="Loss"),
+        go.Scatter(x=loss_x, y=loss_y, mode="lines", name="Loss"),
         row=1,
         col=1,
     )
@@ -30,7 +55,7 @@ def plot_dynamic_scatter(losses: list[float], hooks_list: list[tuple]):
         frames.append(
             go.Frame(
                 data=[
-                    go.Scatter(x=list(range(len(losses))), y=losses, mode="lines"),
+                    go.Scatter(x=loss_x, y=loss_y, mode="lines"),
                     go.Scatter(
                         x=emb_mat[0],
                         y=emb_mat[1],
@@ -40,6 +65,8 @@ def plot_dynamic_scatter(losses: list[float], hooks_list: list[tuple]):
                             color=list(range(n)),
                             colorscale="Viridis",
                         ),
+                        text=list(range(n)),
+                        hoverinfo="text",
                         showlegend=False,
                     ),
                 ],
@@ -70,6 +97,8 @@ def plot_dynamic_scatter(losses: list[float], hooks_list: list[tuple]):
             y=emb_mat[1],
             mode="markers",
             marker=dict(size=10, color=list(range(n)), colorscale="Viridis"),
+            text=list(range(n)),
+            hoverinfo="text",
             showlegend=False,
         ),
         row=1,
@@ -110,6 +139,8 @@ def plot_dynamic_scatter(losses: list[float], hooks_list: list[tuple]):
         sliders=sliders,
         height=500,
         showlegend=False,
+        xaxis2=dict(range=[x_min - x_pad, x_max + x_pad]),
+        yaxis2=dict(range=[y_min - y_pad, y_max + y_pad]),
         shapes=[
             dict(
                 type="line",
