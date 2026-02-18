@@ -2,8 +2,7 @@
 
 from abc import ABC, abstractmethod
 import torch
-from torch import Tensor
-from base64 import b64encode
+from torch import Tensor, hash_tensor
 from hashlib import sha256
 from functools import cached_property
 
@@ -62,7 +61,7 @@ class Distribution(ABC):
         return f"{type(self).__name__}({self.n_features}, {self.device})"
 
     @cached_property
-    def _init_equivalence_hash(self) -> str:
+    def _sampling_equivalence_hash(self) -> str:
         """
         We use this hash to determine if two distributions are equivalent at initialization. This is useful for caching samples. It's not reccomended to modify this hash.
         """
@@ -72,8 +71,11 @@ class Distribution(ABC):
 
         if generator:
             state = generator.get_state()
-            state_b64 = b64encode(state.tolist().tobytes()).decode("ascii")
-            equivalence_dict["generator"] = state_b64
-        equivalence_dict.sort(key=lambda x: x[0])
+            state_hash = hash_tensor(state, mode=0)
+            equivalence_dict["generator"] = state_hash
+        for k, v in equivalence_dict.items():
+            if isinstance(v, Tensor):
+                equivalence_dict[k] = v.tolist()
+        equivalence_dict = dict(sorted(equivalence_dict.items(), key=lambda x: x[0]))
         equivalence_string = str(equivalence_dict)
         return sha256(equivalence_string.encode("utf-8")).hexdigest()

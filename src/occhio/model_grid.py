@@ -14,6 +14,7 @@ from torch.func import functional_call, stack_module_state
 from torch.optim import AdamW
 from tqdm import tqdm
 
+from occhio.autoencoder import AutoEncoderBase
 from occhio.distributions.base import Distribution
 from occhio.toy_model import ToyModel
 
@@ -25,12 +26,12 @@ class Axis:
 
 class ModelGrid:
     def __init__(self, create_model: Callable[..., ToyModel], axes: List[Axis], cache_samples: bool = True):
+        self.cache_samples: bool = cache_samples
         self._validate_args(create_model, axes)
         self.axes: list[Axis] = axes
         self.create_model: Callable[..., ToyModel] = create_model
         self.models: NDArray[np.object_] = self._initialize_models()
         self._validate_autoencoders()
-        self.cache_samples: bool = cache_samples
 
         if self.cache_samples:
             self._unique_distributions, self._sample_index = (
@@ -54,14 +55,14 @@ class ModelGrid:
             models[indices] = self.create_model(params=params)
         return models
 
-    def _validate_autoencoders(self):
+    def _validate_autoencoders(self) -> None:
         if self.models.size <= 1:
             return
 
-        flattened_models = self.flattened_models
+        flattened_models: NDArray[np.object_] = self.flattened_models
 
-        reference = flattened_models[0].ae
-        reference_signature = (
+        reference: AutoEncoderBase = flattened_models[0].ae
+        reference_signature: tuple = (
             type(reference),
             {k: v.shape for k, v in reference.state_dict().items()},
             reference.device,
@@ -74,8 +75,8 @@ class ModelGrid:
             unit="model",
             leave=True,
         ):
-            ae = model.ae
-            ae_signature = (
+            ae: AutoEncoderBase = model.ae
+            ae_signature: tuple = (
                 type(ae),
                 {k: v.shape for k, v in ae.state_dict().items()},
                 ae.device,
@@ -98,26 +99,37 @@ class ModelGrid:
         """Precompute which models share a distribution so the training loop
         only needs to sample once per unique distribution and index into the
         results — no hashing or dict lookups at training time."""
-        flattened_models = self.flattened_models
+        flattened_models: NDArray[np.object_] = self.flattened_models
         hash_to_idx: dict[str, int] = {}
         unique_distributions: list[Distribution] = []
         sample_index: list[int] = []
 
         for model in tqdm(
             flattened_models,
-            desc="Building sample index",
+            desc="Grouping training samples",
             unit="model",
             leave=True,
         ):
-            dist = model.distribution
-            h = dist._init_equivalence_hash
-            if h not in hash_to_idx:
-                hash_to_idx[h] = len(unique_distributions)
+            dist: Distribution = model.distribution
+            hash: str = dist._sampling_equivalence_hash
+            if hash not in hash_to_idx:
+                hash_to_idx[str(hash)] = len(unique_distributions)
                 unique_distributions.append(dist)
-            sample_index.append(hash_to_idx[h])
+            sample_index.append(hash_to_idx[str(hash)])
 
-        device = flattened_models[0].ae.device
+        device: torch.device | str = flattened_models[0].ae.device
         return unique_distributions, torch.tensor(sample_index, dtype=torch.long, device=device)
+
+    def _sync_generators(self) -> None:
+        """Copy each lead distribution's generator state to its followers
+        so that all equivalent distributions stay synchronized."""
+        flattened_models: NDArray[np.object_] = self.flattened_models
+        lead_states: list[Tensor] = [dist.generator.get_state() for dist in self._unique_distributions]
+
+        for model_idx, unique_idx in enumerate(self._sample_index.tolist()):
+            follower_dist: Distribution = flattened_models[model_idx].distribution
+            if follower_dist is not self._unique_distributions[unique_idx]:
+                follower_dist.generator.set_state(lead_states[unique_idx])
 
     def _can_vectorize_loss(self) -> bool:
         flattened_models = self.flattened_models
@@ -140,10 +152,12 @@ class ModelGrid:
         weight_decay: float = 0.05,
         verbose: bool = False,
         track_losses: bool = False,
-    ):
-        flattened_models = self.flattened_models
+    ) -> list[float] | None:
+        flattened_models: NDArray[np.object_] = self.flattened_models
 
         # Stack Model Characteristics --------------------------------------------------
+        stacked_params: dict[str, Tensor]
+        stacked_buffers: dict[str, Tensor]
         stacked_params, stacked_buffers = stack_module_state( 
             [model.ae for model in flattened_models]
         )
@@ -152,7 +166,7 @@ class ModelGrid:
         stacked_params = {
             key: value.requires_grad_(True) for key, value in stacked_params.items()
         }
-        stacked_importances = torch.stack(
+        stacked_importances: Tensor = torch.stack(
             [model.importances for model in flattened_models]
         )
 
@@ -165,7 +179,7 @@ class ModelGrid:
         # The forward pass operation is based on the first Auto-Encoder, which stands as
         # a representative for all the Auto-Encoders. This relies on the models using
         # the same Auto-Encoder kind, which is enforced in the initialization.
-        representative_ae = flattened_models[0].ae
+        representative_ae: AutoEncoderBase = flattened_models[0].ae
         stacked_forward = torch.vmap(
             lambda params, buffers, x: functional_call(
                 representative_ae, (params, buffers), (x,)
@@ -173,7 +187,7 @@ class ModelGrid:
             in_dims=(0, 0, 0),
         )
 
-        use_vectorized_loss = self._can_vectorize_loss()
+        use_vectorized_loss: bool = self._can_vectorize_loss()
         if use_vectorized_loss:
             stacked_loss = torch.vmap(
                 lambda x_true, x_hat, importances: representative_ae.loss(
@@ -183,7 +197,7 @@ class ModelGrid:
             )
 
         # Training ---------------------------------------------------------------------
-        losses = [] if track_losses else None
+        losses: list[float] | None = [] if track_losses else None
 
         for ep in tqdm(range(n_epochs), desc="Training", unit="epoch"):
             # [17.02.26 | OliverSieweke] TODO: Could attempt to vectorize when possible
@@ -224,7 +238,7 @@ class ModelGrid:
                     ]
                 )
 
-            total_loss = stacked_losses.mean()
+            total_loss: Tensor = stacked_losses.mean()
             total_loss.backward()
             optimizer.step()
 
@@ -245,6 +259,14 @@ class ModelGrid:
                         for name in model.ae.state_dict()
                     }
                 )
+
+        if self.cache_samples:
+            self._sync_generators()
+            for model in flattened_models:
+                model.distribution.__dict__.pop('_sampling_equivalence_hash', None)
+            self._unique_distributions, self._sample_index = (
+                self._build_sample_index()
+            )
 
         return losses
 
