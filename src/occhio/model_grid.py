@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from functools import cached_property
 from inspect import signature
-from typing import Any, Dict, List, Protocol
+from typing import Any, Dict, List, Protocol, Callable
 
 import numpy as np
 import torch
@@ -20,14 +20,12 @@ class Axis:
     values: list | Tensor
 
 
-class ModelFactory(Protocol):
-    def __call__(self, *, params: Dict[str, Any]) -> ToyModel: ...
-
-
 class ModelGrid:
     models: NDArray[np.object_]
 
-    def __init__(self, create_model: ModelFactory, axes: List[Axis]):
+    def __init__(
+        self, create_model: Callable[[Dict[str, Any]], ToyModel], axes: List[Axis]
+    ):
         self._validate_args(
             create_model=create_model,
             axes=axes,
@@ -37,7 +35,7 @@ class ModelGrid:
         self.models = np.empty(self.shape, dtype=object)
         for indices in np.ndindex(*self.shape):
             self.models[indices] = create_model(
-                params={
+                {
                     axis.label: axis.values[axis_index]
                     for axis, axis_index in zip(self.axes, indices)
                 }
