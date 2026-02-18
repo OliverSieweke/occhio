@@ -47,9 +47,3 @@ class MultiRelational(Distribution):
             res += (mask * values) @ mat
 
         return res
-
-    def __str__(self):
-        return f"{super().__str__()}, {self.p_active.tolist()}, {self.k}"
-
-    def __repr__(self):
-        return f"{super().__repr__()}, {self.p_active.tolist()}, {self.k}"

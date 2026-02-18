@@ -61,11 +61,6 @@ class DAGDistribution(Distribution):
         self.adjacency = self.adjacency.to(device)
         return self
 
-    def __str__(self):
-        return f"{super().__str__()}, {self.p_active.tolist()}, {self.p_edge}"
-
-    def __repr__(self):
-        return f"{super().__repr__()}, {self.p_active.tolist()}, {self.p_edge}"
 
 class DAGBayesianPropagation(Distribution):
     """
@@ -164,9 +159,3 @@ class DAGBayesianPropagation(Distribution):
         self.adjacency = self.adjacency.to(device)
         self._parent_indices = [p.to(device) for p in self._parent_indices]
         return self
-
-    def __str__(self):
-        return f"{super().__str__()}, {self.p_active.tolist()}, {self.p_edge}"
-
-    def __repr__(self):
-        return f"{super().__repr__()}, {self.p_active.tolist()}, {self.p_edge}"

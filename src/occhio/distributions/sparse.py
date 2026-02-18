@@ -19,13 +19,6 @@ class SparseUniform(Distribution):
         values = self._rand(batch_size, self.n_features)
         return mask * values
 
-    def __str__(self):
-        return f"{super().__str__()}, {self.p_active.tolist()}"
-
-    def __repr__(self):
-        return f"{super().__repr__()}, {self.p_active.tolist()}"
-
-
 class SparseExponential(Distribution):
     def __init__(self, n_features: int, p_active: float, scale: float = 1.0, **kwargs):
         super().__init__(n_features, **kwargs)
@@ -38,9 +31,3 @@ class SparseExponential(Distribution):
             1.0 - self._rand(batch_size, self.n_features)
         )
         return mask * values
-
-    def __str__(self):
-        return f"{super().__str__()}, {self.p_active.tolist()}, {self.scale}"
-
-    def __repr__(self):
-        return f"{super().__repr__()}, {self.p_active.tolist()}, {self.scale}"

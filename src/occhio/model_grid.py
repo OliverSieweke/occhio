@@ -88,6 +88,11 @@ class ModelGrid:
                     f"received: {ae_signature}, "
                     f"expected: {reference_signature}"
                 )
+            if self.cache_samples and not (model.distribution.generator):
+                raise ValueError(
+                    f"All distributions should have a fixed generator. "
+                    f"Distribution at index {i} does not have a fixed generator."
+                )
 
     def _build_sample_index(self) -> tuple[list[Distribution], Tensor]:
         """Precompute which models share a distribution so the training loop
@@ -105,7 +110,7 @@ class ModelGrid:
             leave=True,
         ):
             dist = model.distribution
-            h = dist.hash
+            h = dist._init_equivalence_hash
             if h not in hash_to_idx:
                 hash_to_idx[h] = len(unique_distributions)
                 unique_distributions.append(dist)

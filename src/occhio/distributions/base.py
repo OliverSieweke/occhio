@@ -56,15 +56,24 @@ class Distribution(ABC):
         return self
 
     def __repr__(self):
-        generator_state = self.generator.get_state()
-        state_b64 = b64encode(generator_state.numpy().tobytes()).decode("ascii")
-        return f"{type(self).__name__}({self.n_features}, {self.device}, {state_b64})"
+        return f"{type(self).__name__}({self.n_features}, {self.device})"
 
     def __str__(self):
-        generator_state = self.generator.get_state()
-        state_b64 = b64encode(generator_state.numpy().tobytes()).decode("ascii")
-        return f"{type(self).__name__}({self.n_features}, {self.device}, {state_b64})"
+        return f"{type(self).__name__}({self.n_features}, {self.device})"
 
     @cached_property
-    def hash(self) -> str:
-        return sha256(str(self).encode("utf-8")).hexdigest()
+    def _init_equivalence_hash(self) -> str:
+        """
+        We use this hash to determine if two distributions are equivalent at initialization. This is useful for caching samples. It's not reccomended to modify this hash.
+        """
+        equivalence_dict = vars(self).copy()
+        generator = equivalence_dict.pop("generator")
+        equivalence_dict["distribution_type"] = type(self).__name__
+
+        if generator:
+            state = generator.get_state()
+            state_b64 = b64encode(state.tolist().tobytes()).decode("ascii")
+            equivalence_dict["generator"] = state_b64
+        equivalence_dict.sort(key=lambda x: x[0])
+        equivalence_string = str(equivalence_dict)
+        return sha256(equivalence_string.encode("utf-8")).hexdigest()
