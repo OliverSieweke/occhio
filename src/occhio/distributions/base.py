@@ -3,7 +3,9 @@
 from abc import ABC, abstractmethod
 from math import prod
 import torch
-from torch import Tensor
+from torch import Tensor, hash_tensor
+from hashlib import sha256
+from functools import cached_property
 from typing import Literal
 from ..utils.device import _same_device
 
@@ -114,6 +116,26 @@ class Distribution(ABC):
 
     def __str__(self):
         return f"{type(self).__name__}({self.n_features}, {self.device})"
+
+    @cached_property
+    def _sampling_equivalence_hash(self) -> str:
+        """
+        We use this hash to determine if two distributions are equivalent at initialization. This is useful for caching samples. It's not reccomended to modify this hash.
+        """
+        equivalence_dict = vars(self).copy()
+        generator = equivalence_dict.pop("generator")
+        equivalence_dict["distribution_type"] = type(self).__name__
+
+        if generator:
+            state = generator.get_state()
+            state_hash = hash_tensor(state, mode=0)
+            equivalence_dict["generator"] = state_hash
+        for k, v in equivalence_dict.items():
+            if isinstance(v, Tensor):
+                equivalence_dict[k] = v.tolist()
+        equivalence_dict = dict(sorted(equivalence_dict.items(), key=lambda x: x[0]))
+        equivalence_string = str(equivalence_dict)
+        return sha256(equivalence_string.encode("utf-8")).hexdigest()
 
 
 class DistributionStack(Distribution):

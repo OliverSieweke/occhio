@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 from functools import cached_property
 from inspect import signature
+from itertools import product
 from typing import Any, Callable, Dict, List
 
 import numpy as np
@@ -11,6 +14,8 @@ from torch.func import functional_call, stack_module_state
 from torch.optim import AdamW
 from tqdm import tqdm
 
+from occhio.autoencoder import AutoEncoderBase
+from occhio.distributions.base import Distribution
 from occhio.toy_model import ToyModel
 
 
@@ -54,53 +59,117 @@ class ModelGrid:
     models: NDArray[np.object_]
 
     def __init__(
-        self, create_model: Callable[[Dict[str, Any]], ToyModel], axes: List[Axis]
+        self,
+        create_model: Callable[[Dict[str, Any]], ToyModel],
+        axes: List[Axis],
+        cache_samples: bool = True,
     ):
-        self._validate_args(
-            create_model=create_model,
-            axes=axes,
-        )
-        self.axes = axes
-
-        self.models = np.empty(self.shape, dtype=object)
-        for indices in np.ndindex(*self.shape):
-            self.models[indices] = create_model(
-                {
-                    axis.label: axis.values[axis_index]
-                    for axis, axis_index in zip(self.axes, indices)
-                }
-            )
-
+        self.cache_samples: bool = cache_samples
+        self._validate_args(create_model, axes)
+        self.axes: list[Axis] = axes
+        self.create_model: Callable[..., ToyModel] = create_model
+        self.models: NDArray[np.object_] = self._initialize_models()
         self._validate_autoencoders()
 
-    def _validate_autoencoders(self):
-        if len(self.models) < 2:
+        if self.cache_samples:
+            self._unique_distributions, self._sample_index = self._build_sample_index()
+
+    def _initialize_models(self) -> NDArray[np.object_]:
+        shape: tuple[int, ...] = self.shape
+        models: NDArray[np.object_] = np.empty(shape, dtype=object)
+        total = int(np.prod(shape))
+        for indices in tqdm(
+            product(*[range(s) for s in shape]),
+            total=total,
+            desc="Initializing models",
+            unit="model",
+            leave=True,
+        ):
+            params: Dict[str, Any] = {
+                axis.label: axis.values[i] for axis, i in zip(self.axes, indices)
+            }
+            models[indices] = self.create_model(params=params)
+        return models
+
+    def _validate_autoencoders(self) -> None:
+        if self.models.size <= 1:
             return
 
-        flattened_models = self.models.ravel()
+        flattened_models: NDArray[np.object_] = self.models.ravel()
 
-        reference = flattened_models[0].ae
-        reference_signature = (
+        reference: AutoEncoderBase = flattened_models[0].ae
+        reference_signature: tuple = (
             type(reference),
             {k: v.shape for k, v in reference.state_dict().items()},
             reference.device,
         )
 
-        for i, model in enumerate(flattened_models[1:], start=1):
-            ae = model.ae
-            signature = (
+        for i, model in tqdm(
+            enumerate(flattened_models, start=1),
+            total=len(flattened_models),
+            desc="Validating Models",
+            unit="model",
+            leave=True,
+        ):
+            ae: AutoEncoderBase = model.ae
+            ae_signature = (
                 type(ae),
                 {k: v.shape for k, v in ae.state_dict().items()},
                 ae.device,
             )
-            if signature != reference_signature:
+            if ae_signature != reference_signature:
                 # [17.02.26 | OliverSieweke] TODO: unstack the index here
                 raise ValueError(
-                    f"All Autoencoders should share the same architecture"
-                    f"Autoencoder at index {i} has incompatible architecture with the first Autoencoder."
-                    f"received: {signature}, "
+                    f"All Autoencoders should share the same architecture. "
+                    f"Autoencoder at index {i} has incompatible architecture with the first Autoencoder. "
+                    f"received: {ae_signature}, "
                     f"expected: {reference_signature}"
                 )
+            if self.cache_samples and not (model.distribution.generator):
+                raise ValueError(
+                    f"All distributions should have a fixed generator. "
+                    f"Distribution at index {i} does not have a fixed generator."
+                )
+
+    def _build_sample_index(self) -> tuple[list[Distribution], Tensor]:
+        """Precompute which models share a distribution so the training loop
+        only needs to sample once per unique distribution and index into the
+        results — no hashing or dict lookups at training time."""
+        flattened_models: NDArray[np.object_] = self.models.ravel()
+        hash_to_idx: dict[str, int] = {}
+        unique_distributions: list[Distribution] = []
+        sample_index: list[int] = []
+
+        for model in tqdm(
+            flattened_models,
+            desc="Grouping distributions",
+            unit="model",
+            leave=True,
+        ):
+            dist: Distribution = model.distribution
+            hash: str = dist._sampling_equivalence_hash
+            if hash not in hash_to_idx:
+                hash_to_idx[str(hash)] = len(unique_distributions)
+                unique_distributions.append(dist)
+            sample_index.append(hash_to_idx[str(hash)])
+
+        device: torch.device | str = flattened_models[0].ae.device
+        return unique_distributions, torch.tensor(
+            sample_index, dtype=torch.long, device=device
+        )
+
+    def _sync_generators(self) -> None:
+        """Copy each lead distribution's generator state to its followers
+        so that all equivalent distributions stay synchronized."""
+        flattened_models: NDArray[np.object_] = self.models.ravel()
+        lead_states: list[Tensor] = [
+            dist.generator.get_state() for dist in self._unique_distributions
+        ]
+
+        for model_idx, unique_idx in enumerate(self._sample_index.tolist()):
+            follower_dist: Distribution = flattened_models[model_idx].distribution
+            if follower_dist is not self._unique_distributions[unique_idx]:
+                follower_dist.generator.set_state(lead_states[unique_idx])
 
     def _can_vectorize_loss(self) -> bool:
         flattened_models = self.models.ravel()
@@ -123,8 +192,8 @@ class ModelGrid:
         weight_decay: float = 0.05,
         verbose: bool = False,
         track_losses: bool = False,
-    ):
-        flattened_models = self.models.ravel()
+    ) -> list[float] | None:
+        flattened_models: NDArray[np.object_] = self.models.ravel()
 
         # Stack Model Characteristics --------------------------------------------------
         stacked_params, stacked_buffers = stack_module_state(
@@ -135,7 +204,7 @@ class ModelGrid:
         stacked_params = {
             key: value.requires_grad_(True) for key, value in stacked_params.items()
         }
-        stacked_importances = torch.stack(
+        stacked_importances: Tensor = torch.stack(
             [model.importances for model in flattened_models]
         )
 
@@ -148,7 +217,7 @@ class ModelGrid:
         # The forward pass operation is based on the first Auto-Encoder, which stands as
         # a representative for all the Auto-Encoders. This relies on the models using
         # the same Auto-Encoder kind, which is enforced in the initialization.
-        representative_ae = flattened_models[0].ae
+        representative_ae: AutoEncoderBase = flattened_models[0].ae
         stacked_forward = torch.vmap(
             lambda params, buffers, x: functional_call(
                 representative_ae, (params, buffers), (x,)
@@ -156,7 +225,7 @@ class ModelGrid:
             in_dims=(0, 0, 0),
         )
 
-        use_vectorized_loss = self._can_vectorize_loss()
+        use_vectorized_loss: bool = self._can_vectorize_loss()
         if use_vectorized_loss:
             stacked_loss = torch.vmap(
                 lambda x_true, x_hat, importances: representative_ae.loss(
@@ -166,7 +235,7 @@ class ModelGrid:
             )
 
         # Training ---------------------------------------------------------------------
-        losses = [] if track_losses else None
+        losses: list[float] | None = [] if track_losses else None
 
         for ep in tqdm(range(n_epochs), desc="Training", unit="epoch"):
             # [17.02.26 | OliverSieweke] TODO: Could attempt to vectorize when possible
@@ -175,9 +244,19 @@ class ModelGrid:
             #   - think through which distributions are actually stackable
             #       (make this a property on the distribution?)
             #   - find a good way to expose/use this stackability
-            stacked_samples = torch.stack(
-                [model.distribution.sample(batch_size) for model in flattened_models]
-            )
+
+            if self.cache_samples:
+                unique_samples = torch.stack(
+                    [dist.sample(batch_size) for dist in self._unique_distributions]
+                )
+                stacked_samples = unique_samples[self._sample_index]
+            else:
+                stacked_samples = torch.stack(
+                    [
+                        model.distribution.sample(batch_size)
+                        for model in flattened_models
+                    ]
+                )
 
             optimizer.zero_grad()
             stacked_x_hat = stacked_forward(
@@ -200,7 +279,7 @@ class ModelGrid:
                     ]
                 )
 
-            total_loss = stacked_losses.mean()
+            total_loss: Tensor = stacked_losses.mean()
             total_loss.backward()
             optimizer.step()
 
@@ -222,11 +301,22 @@ class ModelGrid:
                     }
                 )
 
+        if self.cache_samples:
+            self._sync_generators()
+            for model in flattened_models:
+                model.distribution.__dict__.pop("_sampling_equivalence_hash", None)
+            self._unique_distributions, self._sample_index = self._build_sample_index()
+
         return losses
 
-    def __getitem__(self, key: tuple[int, ...]) -> ToyModel | NDArray[np.object_]:
+    def __getitem__(self, key):
         """Returns the ToyModel at the given indices. Allows for arbitrary indexing."""
-        return self.models[key]
+        if not isinstance(key, tuple):
+            key = (key,)
+        item = self.models
+        for i in key:
+            item = item[i]
+        return item
 
     @cached_property
     def parameters_mesh(self):
@@ -235,7 +325,7 @@ class ModelGrid:
 
     @property
     def shape(self) -> tuple[int, ...]:
-        """Returns the shape of the self.models."""
+        """Returns the shape of the axes that define the nested structure of the models."""
         return tuple(len(axis.values) for axis in self.axes)
 
     @property
@@ -243,8 +333,9 @@ class ModelGrid:
         """Returns a dictionary of the axis labels and their lengths."""
         return {axis.label: len(axis.values) for axis in self.axes}
 
-    @staticmethod
-    def _validate_args(create_model, axes) -> None:
+    def _validate_args(
+        self, create_model: Callable[..., ToyModel], axes: List[Axis]
+    ) -> None:
         if not axes:
             raise ValueError("At least one axis must be provided.")
 
