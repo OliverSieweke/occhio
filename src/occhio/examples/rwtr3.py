@@ -76,8 +76,9 @@ torch.mean(1.0 * (dist.sample(1000) > 0.0), dim=0)
 # ae = MLPEncoder([3, 2], [2, 6, 3], generator=gen)
 ae = TiedLinearRelu(3, 2, generator=gen)
 tm = ToyModel(dist, ae, generator=gen)
-losses = tm.fit(20_000, verbose=True)
+losses = tm.fit(15_000, verbose=True)[0]
 
+# %%
 px.line(losses)
 
 

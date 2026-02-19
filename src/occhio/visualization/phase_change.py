@@ -92,6 +92,11 @@ def _add_model_phases_trace(model_grid: ModelGrid, tracked_feature, fig, *, col,
         axis=-1,
     )
 
+    # Transpose so axes[0] maps to x (columns) and axes[1] maps to y (rows)
+    # Flip vertically so row 0 (top) corresponds to the largest y-axis value
+    phase_colors = np.swapaxes(phase_colors, 0, 1)[::-1]
+    metadata = np.swapaxes(metadata, 0, 1)[::-1]
+
     fig.add_trace(
         go.Image(
             z=phase_colors,
@@ -116,7 +121,8 @@ def _add_model_phases_trace(model_grid: ModelGrid, tracked_feature, fig, *, col,
 
     y_axis_values = model_grid.axes[1].values
     y_tick_indices = [0, len(y_axis_values) // 2, len(y_axis_values) - 1]
-    y_tick_labels = [f"{y_axis_values[i]:.3f}" for i in y_tick_indices]
+    # Reverse labels since go.Image has row 0 at the top
+    y_tick_labels = [f"{y_axis_values[i]:.3f}" for i in reversed(y_tick_indices)]
     fig.update_yaxes(
         tickmode="array",
         tickvals=y_tick_indices,

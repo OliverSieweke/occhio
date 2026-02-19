@@ -18,10 +18,16 @@ from occhio.autoencoder import AutoEncoderBase
 from occhio.distributions.base import Distribution
 from occhio.toy_model import ToyModel
 
+
 @dataclass
 class Axis:
     label: str
-    values: Tensor | Sequence[float | int]
+    values: Tensor
+
+    def __init__(self, label: str, values: Tensor | Sequence[float | int]):
+        self.label = label
+        self.values = values if isinstance(values, Tensor) else torch.as_tensor(values)
+
 
 class ModelGrid:
     """A multi-dimensional grid of ``ToyModel`` instances, parameterized over one or
@@ -31,7 +37,7 @@ class ModelGrid:
     function that receives the axis values as a ``params`` dict.
 
     Args:
-        create_model: A factory function that accepts a ``Dict[str, Any]`` containing
+        create_model: A factory function that accepts a ``dict[str, Any]`` containing
          axes values at a given grid point, and returns an initialised ``ToyModel``.
         axes: An ordered list of ``Axis`` objects defining the grid dimensions.
             At least one axis must be provided.
@@ -67,7 +73,7 @@ class ModelGrid:
         self.cache_samples: bool = cache_samples
         self._validate_args(create_model, axes)
         self.axes: list[Axis] = axes
-        self.create_model:  Callable[[dict[str, Any]], ToyModel] = create_model
+        self.create_model: Callable[[dict[str, Any]], ToyModel] = create_model
 
         if _models is not None:
             self.models: NDArray[np.object_] = _models
@@ -81,18 +87,11 @@ class ModelGrid:
     def _initialize_models(self) -> NDArray[np.object_]:
         shape: tuple[int, ...] = self.shape
         models: NDArray[np.object_] = np.empty(shape, dtype=object)
-        total = int(np.prod(shape))
-        for indices in tqdm(
-            product(*[range(s) for s in shape]),
-            total=total,
-            desc="Initializing models",
-            unit="model",
-            leave=True,
-        ):
+        for indices in product(*[range(s) for s in shape]):
             params: dict[str, Any] = {
                 axis.label: axis.values[i] for axis, i in zip(self.axes, indices)
             }
-            models[indices] = self.create_model(params=params)
+            models[indices] = self.create_model(params)
         return models
 
     def _validate_autoencoders(self) -> None:
@@ -108,13 +107,7 @@ class ModelGrid:
             reference.device,
         )
 
-        for i, model in tqdm(
-            enumerate(flattened_models, start=1),
-            total=len(flattened_models),
-            desc="Validating Models",
-            unit="model",
-            leave=True,
-        ):
+        for i, model in enumerate(flattened_models, start=1):
             ae: AutoEncoderBase = model.ae
             ae_signature = (
                 type(ae),
@@ -144,12 +137,7 @@ class ModelGrid:
         unique_distributions: list[Distribution] = []
         sample_index: list[int] = []
 
-        for model in tqdm(
-            flattened_models,
-            desc="Grouping distributions",
-            unit="model",
-            leave=True,
-        ):
+        for model in flattened_models:
             dist: Distribution = model.distribution
             hash: str = dist._sampling_equivalence_hash
             if hash not in hash_to_idx:
@@ -375,8 +363,6 @@ class ModelGrid:
             else:
                 raise IndexError(f"Unsupported index type: {type(k)}")
 
-            if not isinstance(values, Tensor):
-                values = torch.as_tensor(values)
             new_axes.append(Axis(label=axis.label, values=values))
 
         for dim in range(len(key), len(self.axes)):
@@ -391,7 +377,6 @@ class ModelGrid:
             cache_samples=self.cache_samples,
             _models=sliced_models,
         )
-
 
     @cached_property
     def parameters_mesh(self):
