@@ -4,11 +4,11 @@ from dataclasses import dataclass
 from functools import cached_property
 from inspect import signature
 from itertools import product
-from typing import Any, Callable, Dict, List
-
+from typing import Any, Callable
+from collections.abc import Sequence
 import numpy as np
-import torch
 from numpy.typing import NDArray
+import torch
 from torch import Tensor, meshgrid
 from torch.func import functional_call, stack_module_state
 from torch.optim import AdamW
@@ -18,12 +18,10 @@ from occhio.autoencoder import AutoEncoderBase
 from occhio.distributions.base import Distribution
 from occhio.toy_model import ToyModel
 
-
 @dataclass
 class Axis:
     label: str
-    values: list | Tensor
-
+    values: Tensor | Sequence[float | int]
 
 class ModelGrid:
     """A multi-dimensional grid of ``ToyModel`` instances, parameterized over one or
@@ -60,16 +58,22 @@ class ModelGrid:
 
     def __init__(
         self,
-        create_model: Callable[[Dict[str, Any]], ToyModel],
-        axes: List[Axis],
+        create_model: Callable[[dict[str, Any]], ToyModel],
+        axes: list[Axis],
         cache_samples: bool = True,
+        *,
+        _models: NDArray[np.object_] | None = None,
     ):
         self.cache_samples: bool = cache_samples
         self._validate_args(create_model, axes)
         self.axes: list[Axis] = axes
-        self.create_model: Callable[..., ToyModel] = create_model
-        self.models: NDArray[np.object_] = self._initialize_models()
-        self._validate_autoencoders()
+        self.create_model:  Callable[[dict[str, Any]], ToyModel] = create_model
+
+        if _models is not None:
+            self.models: NDArray[np.object_] = _models
+        else:
+            self.models = self._initialize_models()
+            self._validate_autoencoders()
 
         if self.cache_samples:
             self._unique_distributions, self._sample_index = self._build_sample_index()
@@ -85,7 +89,7 @@ class ModelGrid:
             unit="model",
             leave=True,
         ):
-            params: Dict[str, Any] = {
+            params: dict[str, Any] = {
                 axis.label: axis.values[i] for axis, i in zip(self.axes, indices)
             }
             models[indices] = self.create_model(params=params)
@@ -309,14 +313,85 @@ class ModelGrid:
 
         return losses
 
-    def __getitem__(self, key):
-        """Returns the ToyModel at the given indices. Allows for arbitrary indexing."""
+    def __getitem__(self, key) -> ModelGrid | ToyModel:
         if not isinstance(key, tuple):
             key = (key,)
-        item = self.models
-        for i in key:
-            item = item[i]
-        return item
+
+        if len(key) > len(self.axes):
+            raise IndexError(
+                f"Too many indices: got {len(key)}, grid has {len(self.axes)} axes"
+            )
+
+        numpy_key: list[slice] = []
+        new_axes: list[Axis] = []
+
+        for dim, k in enumerate(key):
+            axis: Axis = self.axes[dim]
+            dim_size: int = len(axis.values)
+
+            if isinstance(k, int):
+                idx: int = k + dim_size if k < 0 else k
+                if idx < 0 or idx >= dim_size:
+                    raise IndexError(
+                        f"Index {k} out of bounds for axis '{axis.label}' "
+                        f"with size {dim_size}"
+                    )
+                numpy_key.append(slice(idx, idx + 1))
+                values = axis.values[idx : idx + 1]
+
+            elif isinstance(k, slice):
+                start, stop, step = k.start, k.stop, k.step
+                if start is not None and start < 0:
+                    start += dim_size
+                if stop is not None and stop < 0:
+                    stop += dim_size
+
+                if start is not None and (start < 0 or start >= dim_size):
+                    raise IndexError(
+                        f"Slice start {k.start} out of bounds for axis "
+                        f"'{axis.label}' with size {dim_size}"
+                    )
+                if stop is not None and (stop < 0 or stop > dim_size):
+                    raise IndexError(
+                        f"Slice stop {k.stop} out of bounds for axis "
+                        f"'{axis.label}' with size {dim_size}"
+                    )
+
+                if (
+                    step is None
+                    and start is not None
+                    and stop is not None
+                    and start > stop
+                ):
+                    step = -1
+
+                s = slice(start, stop, step)
+                numpy_key.append(s)
+                if step is not None and step < 0:
+                    indices = list(range(start, stop, step))
+                    values = axis.values[indices]
+                else:
+                    values = axis.values[s]
+            else:
+                raise IndexError(f"Unsupported index type: {type(k)}")
+
+            if not isinstance(values, Tensor):
+                values = torch.as_tensor(values)
+            new_axes.append(Axis(label=axis.label, values=values))
+
+        for dim in range(len(key), len(self.axes)):
+            new_axes.append(self.axes[dim])
+            numpy_key.append(slice(None))
+
+        sliced_models: NDArray[np.object_] = self.models[tuple(numpy_key)]
+
+        return ModelGrid(
+            create_model=self.create_model,
+            axes=new_axes,
+            cache_samples=self.cache_samples,
+            _models=sliced_models,
+        )
+
 
     @cached_property
     def parameters_mesh(self):
@@ -334,12 +409,12 @@ class ModelGrid:
         return {axis.label: len(axis.values) for axis in self.axes}
 
     def _validate_args(
-        self, create_model: Callable[..., ToyModel], axes: List[Axis]
+        self, create_model: Callable[..., ToyModel], axes: list[Axis]
     ) -> None:
         if not axes:
             raise ValueError("At least one axis must be provided.")
 
         if "params" not in signature(create_model).parameters:
             raise TypeError(
-                "create_model must accept a 'params' parameter (Dict[str, Any])."
+                "create_model must accept a 'params' parameter (dict[str, Any])."
             )
