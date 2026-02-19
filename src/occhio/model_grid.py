@@ -87,7 +87,11 @@ class ModelGrid:
     def _initialize_models(self) -> NDArray[np.object_]:
         shape: tuple[int, ...] = self._shape_from_axes
         models: NDArray[np.object_] = np.empty(shape, dtype=object)
-        for indices in product(*[range(s) for s in shape]):
+        for indices in tqdm(
+            product(*[range(s) for s in shape]),
+            total=np.prod(shape),
+            desc="Initializing models",
+        ):
             params: dict[str, Any] = {
                 axis.label: axis.values[i] for axis, i in zip(self.axes, indices)
             }
@@ -107,7 +111,14 @@ class ModelGrid:
             reference.device,
         )
 
-        for i, model in enumerate(flattened_models, start=1):
+        for i, model in enumerate(
+            tqdm(
+                flattened_models,
+                desc="Validating models",
+                total=len(flattened_models),
+            ),
+            start=1,
+        ):
             ae: AutoEncoderBase = model.ae
             ae_signature = (
                 type(ae),
@@ -137,7 +148,9 @@ class ModelGrid:
         unique_distributions: list[Distribution] = []
         sample_index: list[int] = []
 
-        for model in flattened_models:
+        for model in tqdm(
+            flattened_models, desc="Grouping distributions", total=len(flattened_models)
+        ):
             dist: Distribution = model.distribution
             hash: str = dist._sampling_equivalence_hash
             if hash not in hash_to_idx:
@@ -158,7 +171,11 @@ class ModelGrid:
             dist.generator.get_state() for dist in self._unique_distributions
         ]
 
-        for model_idx, unique_idx in enumerate(self._sample_index.tolist()):
+        for model_idx, unique_idx in tqdm(
+            enumerate(self._sample_index.tolist()),
+            desc="Syncing generators",
+            total=len(self._sample_index.tolist()),
+        ):
             follower_dist: Distribution = flattened_models[model_idx].distribution
             if follower_dist is not self._unique_distributions[unique_idx]:
                 follower_dist.generator.set_state(lead_states[unique_idx])
