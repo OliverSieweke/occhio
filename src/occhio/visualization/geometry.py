@@ -19,7 +19,7 @@ def plot_geometry(
     x_axis_index = np.where(np.array(model_grid.shape) != 1)[0]
 
     assert len(x_axis_index) == 1, (
-        f"plot_phase_change only supports ModelGrids with exactly one non-singleton dimension."
+        f"plot_geometry only supports ModelGrids with exactly one non-singleton dimension."
         f"Got shape {model_grid.shape} with {int(len(x_axis_index))} non-singleton dims at indices {x_axis_index})."
     )
     x_axis_index: int = int(x_axis_index[0])
