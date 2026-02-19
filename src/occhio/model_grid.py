@@ -91,6 +91,8 @@ class ModelGrid:
             product(*[range(s) for s in shape]),
             total=np.prod(shape),
             desc="Initializing models",
+            unit="model",
+            leave=True,
         ):
             params: dict[str, Any] = {
                 axis.label: axis.values[i] for axis, i in zip(self.axes, indices)
@@ -116,6 +118,8 @@ class ModelGrid:
                 flattened_models,
                 desc="Validating models",
                 total=len(flattened_models),
+                leave=True,
+                unit="model",
             ),
             start=1,
         ):
@@ -149,7 +153,11 @@ class ModelGrid:
         sample_index: list[int] = []
 
         for model in tqdm(
-            flattened_models, desc="Grouping distributions", total=len(flattened_models)
+            flattened_models,
+            desc="Grouping distributions",
+            total=len(flattened_models),
+            leave=True,
+            unit="model",
         ):
             dist: Distribution = model.distribution
             hash: str = dist._sampling_equivalence_hash
@@ -175,6 +183,8 @@ class ModelGrid:
             enumerate(self._sample_index.tolist()),
             desc="Syncing generators",
             total=len(self._sample_index.tolist()),
+            leave=True,
+            unit="model",
         ):
             follower_dist: Distribution = flattened_models[model_idx].distribution
             if follower_dist is not self._unique_distributions[unique_idx]:
