@@ -43,7 +43,20 @@ class AutoEncoderBase(nn.Module, ABC):
         Note that we write device to `_init_device`, which remembers where the user intends to store the device.
         """
         super().__init__()
-        self._init_device = torch.device(device) if device is not None else None
+        if device is not None and generator is not None:
+            gen_device = torch.device(generator.device)
+            dev = torch.device(device)
+            if gen_device.type != dev.type or (gen_device.index or 0) != (dev.index or 0):
+                raise ValueError(
+                    f"Generator lives on {gen_device}, but device is {dev}. "
+                    f"These must match."
+                )
+        if device is not None:
+            self._init_device = torch.device(device)
+        elif generator is not None:
+            self._init_device = torch.device(generator.device)
+        else:
+            self._init_device = None
         self.generator = generator
 
     @property

@@ -9,6 +9,11 @@ from .autoencoder import AutoEncoderBase
 from .distributions.base import Distribution
 
 
+def _same_device(a: torch.device, b: torch.device) -> bool:
+    """Compare two devices, treating a missing index as 0 (e.g. mps == mps:0)."""
+    return a.type == b.type and (a.index or 0) == (b.index or 0)
+
+
 class ToyModel:
     """This is the ToyModel class which is the base for most experiments.
 
@@ -42,15 +47,15 @@ class ToyModel:
             device = ae.device or torch.device("cpu")
         else:
             device = torch.device(device)
-            if ae._init_device is not None and ae._init_device != device:
+            if ae._init_device is not None and not _same_device(ae._init_device, device):
                 raise ValueError(
                     f"AutoEncoder was explicitly created on {ae._init_device}, "
                     f"but ToyModel device is {device}. "
                     f"Either omit the device from the AutoEncoder or make them match."
                 )
-            if distribution.device is not None and distribution.device != device:
+            if distribution._init_device is not None and not _same_device(distribution._init_device, device):
                 raise ValueError(
-                    f"Distribution was explicitly created on {distribution.device}, "
+                    f"Distribution was explicitly created on {distribution._init_device}, "
                     f"but ToyModel device is {device}. "
                     f"Either omit the device from the Distribution or make them match."
                 )

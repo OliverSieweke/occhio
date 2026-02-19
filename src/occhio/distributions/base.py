@@ -31,7 +31,21 @@ class Distribution(ABC):
         generator: torch.Generator | None = None,
     ):
         self.n_features = n_features
-        self.device = torch.device(device) if device is not None else None
+        if device is not None and generator is not None:
+            gen_device = torch.device(generator.device)
+            dev = torch.device(device)
+            if gen_device.type != dev.type or (gen_device.index or 0) != (dev.index or 0):
+                raise ValueError(
+                    f"Generator lives on {gen_device}, but device is {dev}. "
+                    f"These must match."
+                )
+        if device is not None:
+            self._init_device = torch.device(device)
+        elif generator is not None:
+            self._init_device = torch.device(generator.device)
+        else:
+            self._init_device = None
+        self.device = self._init_device
         self.generator = generator
 
     @abstractmethod
