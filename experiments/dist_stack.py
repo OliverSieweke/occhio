@@ -16,7 +16,7 @@ tm = ToyModel(
 )
 print(tm.device)
 tm.fit(100)
-    
+
 # %%
 DEVICE = "cpu"
 gen = torch.Generator("cpu")

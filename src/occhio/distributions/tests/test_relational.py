@@ -44,7 +44,9 @@ class TestRelationalSimpleValues:
         """Orthogonal rotation can produce negative outputs."""
         dist = RelationalSimple(n_features=20, p_active=0.5, generator=seeded_generator)
         samples = dist.sample(1000)
-        assert samples.min() < 0, "Orthogonal transform should produce some negative values"
+        assert samples.min() < 0, (
+            "Orthogonal transform should produce some negative values"
+        )
 
     def test_values_bounded_in_expectation(self, seeded_generator):
         """Values shouldn't explode since O(n) preserves norms."""
@@ -96,37 +98,51 @@ class TestRelationalSimpleReproducibility:
 
 class TestMultiRelationalBasic:
     def test_sample_shape(self, seeded_generator):
-        dist = MultiRelational(n_features=10, p_active=0.5, k=3, generator=seeded_generator)
+        dist = MultiRelational(
+            n_features=10, p_active=0.5, k=3, generator=seeded_generator
+        )
         samples = dist.sample(100)
         assert samples.shape == (100, 10)
 
     def test_correct_number_of_matrices(self, seeded_generator):
         k = 5
-        dist = MultiRelational(n_features=10, p_active=0.3, k=k, generator=seeded_generator)
+        dist = MultiRelational(
+            n_features=10, p_active=0.3, k=k, generator=seeded_generator
+        )
         assert len(dist.on_mats) == k
 
     def test_all_matrices_orthogonal(self, seeded_generator):
-        dist = MultiRelational(n_features=8, p_active=0.5, k=4, generator=seeded_generator)
+        dist = MultiRelational(
+            n_features=8, p_active=0.5, k=4, generator=seeded_generator
+        )
         identity = torch.eye(8)
         for i, Q in enumerate(dist.on_mats):
             product = Q @ Q.T
-            assert torch.allclose(product, identity, atol=1e-5), f"Matrix {i} not orthogonal"
+            assert torch.allclose(product, identity, atol=1e-5), (
+                f"Matrix {i} not orthogonal"
+            )
 
     def test_matrices_have_correct_shape(self, seeded_generator):
         n = 12
-        dist = MultiRelational(n_features=n, p_active=0.5, k=3, generator=seeded_generator)
+        dist = MultiRelational(
+            n_features=n, p_active=0.5, k=3, generator=seeded_generator
+        )
         for Q in dist.on_mats:
             assert Q.shape == (n, n)
 
 
 class TestMultiRelationalValues:
     def test_can_produce_negative_values(self, seeded_generator):
-        dist = MultiRelational(n_features=20, p_active=0.5, k=3, generator=seeded_generator)
+        dist = MultiRelational(
+            n_features=20, p_active=0.5, k=3, generator=seeded_generator
+        )
         samples = dist.sample(1000)
         assert samples.min() < 0
 
     def test_values_bounded_in_expectation(self, seeded_generator):
-        dist = MultiRelational(n_features=50, p_active=0.3, k=5, generator=seeded_generator)
+        dist = MultiRelational(
+            n_features=50, p_active=0.3, k=5, generator=seeded_generator
+        )
         samples = dist.sample(1000)
         max_abs = samples.abs().max().item()
         # More matrices might mean larger values, but still bounded
@@ -136,7 +152,9 @@ class TestMultiRelationalValues:
 class TestMultiRelationalKParameter:
     def test_k_one_similar_structure(self, seeded_generator):
         """k=1 should give a single rotated sparse vector."""
-        dist = MultiRelational(n_features=10, p_active=0.5, k=1, generator=seeded_generator)
+        dist = MultiRelational(
+            n_features=10, p_active=0.5, k=1, generator=seeded_generator
+        )
         assert len(dist.on_mats) == 1
         samples = dist.sample(100)
         assert samples.shape == (100, 10)
@@ -165,12 +183,16 @@ class TestMultiRelationalKParameter:
 
 class TestMultiRelationalEdgeCases:
     def test_zero_p_active_gives_zeros(self, seeded_generator):
-        dist = MultiRelational(n_features=10, p_active=0.0, k=3, generator=seeded_generator)
+        dist = MultiRelational(
+            n_features=10, p_active=0.0, k=3, generator=seeded_generator
+        )
         samples = dist.sample(100)
         assert (samples == 0).all()
 
     def test_no_nans_or_infs(self, seeded_generator):
-        dist = MultiRelational(n_features=20, p_active=0.8, k=5, generator=seeded_generator)
+        dist = MultiRelational(
+            n_features=20, p_active=0.8, k=5, generator=seeded_generator
+        )
         samples = dist.sample(1000)
         assert not torch.isnan(samples).any()
         assert not torch.isinf(samples).any()

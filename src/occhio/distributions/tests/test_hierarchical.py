@@ -50,9 +50,9 @@ class TestBasicSampling:
                 child_active = samples[:, node.index] > 0
                 parent_active = samples[:, node.parent] > 0
                 violations = (child_active & ~parent_active).sum().item()
-                assert (
-                    violations == 0
-                ), f"Node {node.index} active without parent {node.parent}"
+                assert violations == 0, (
+                    f"Node {node.index} active without parent {node.parent}"
+                )
 
 
 class TestTreeGeneration:
@@ -114,9 +114,9 @@ class TestDepthDependentActivation:
             indices = dist.depth_indices[depth]
             if indices:
                 rate = active[:, indices].mean().item()
-                assert (
-                    rate < prev_rate
-                ), f"Depth {depth} rate {rate} >= previous {prev_rate}"
+                assert rate < prev_rate, (
+                    f"Depth {depth} rate {rate} >= previous {prev_rate}"
+                )
                 prev_rate = rate
 
     def test_empirical_matches_theoretical(self, seeded_generator):

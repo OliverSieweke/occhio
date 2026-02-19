@@ -135,9 +135,7 @@ class TestHierarchicalPairsActivationRates:
             (0.9, 0.9),
         ],
     )
-    def test_activation_rates_parametrized(
-        self, p_active, p_follow, seeded_generator
-    ):
+    def test_activation_rates_parametrized(self, p_active, p_follow, seeded_generator):
         dist = HierarchicalPairs(
             n_features=100,
             p_active=p_active,

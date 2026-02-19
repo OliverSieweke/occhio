@@ -1,0 +1,22 @@
+repos:
+  - repo: local
+    hooks:
+      - id: format
+        name: format
+        stages: [ pre-commit ]
+        language: system
+        entry: uv run ruff format --check
+        types_or: [ python, jupyter ]
+      - id: uv-lock-check
+        name: uv-lock-check
+        stages: [ pre-commit ]
+        language: system
+        entry: uv lock --check
+        pass_filenames: false
+        files: ^(pyproject\.toml|uv\.lock)$
+      - id: clear-notebooks
+        name: clear-notebooks
+        stages: [ pre-commit ]
+        language: system
+        entry: uv run jupyter nbconvert --clear-output --inplace
+        files: \.ipynb$
