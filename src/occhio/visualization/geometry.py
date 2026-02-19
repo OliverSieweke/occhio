@@ -1,10 +1,8 @@
 from enum import Enum
-
 import numpy as np
 import plotly.graph_objects as go
-
 from occhio.model_grid import ModelGrid
-
+import numpy as np
 
 class GeometryPlotComponent(Enum):
     HIDDEN_DIMENSIONS_PER_EMBEDDED_FEATURES = "hidden-dimensions-per-embedded-features"
@@ -18,11 +16,13 @@ class GeometryPlotComponent(Enum):
 def plot_geometry(
     model_grid: ModelGrid, components: set[GeometryPlotComponent] | None = None
 ):
-    if len(model_grid.shape) != 1:
-        raise ValueError(
-            f"plot_phase_change requires a 1-dimensional ModelGrid, "
-            f"got {len(model_grid.shape)}-dimensional (shape: {model_grid.shape})."
-        )
+    x_axis_index = np.where(np.array(model_grid.shape) != 1)[0]
+
+    assert len(x_axis_index) == 1, (
+        f"plot_phase_change only supports ModelGrids with exactly one non-singleton dimension."
+        f"Got shape {model_grid.shape} with {int(len(x_axis_index))} non-singleton dims at indices {x_axis_index})."
+    )
+    x_axis_index: int = int(x_axis_index[0])
 
     if components is None:
         components = set(GeometryPlotComponent) - {
@@ -34,10 +34,10 @@ def plot_geometry(
     if GeometryPlotComponent.HIDDEN_DIMENSIONS_PER_EMBEDDED_FEATURES in components:
         fig.add_trace(
             go.Scatter(
-                x=model_grid.axes[0].values,
+                x=model_grid.axes[x_axis_index].values,
                 y=[
                     model.hidden_dimensions_per_embedded_features.cpu()
-                    for model in model_grid.models
+                    for model in np.squeeze(model_grid.models)
                 ],
                 mode="lines+markers",
                 line=dict(width=1, color="#333333", shape="spline"),
@@ -50,10 +50,10 @@ def plot_geometry(
     if GeometryPlotComponent.EMBEDDED_FEATURES_PER_HIDDEN_DIMENSIONS in components:
         fig.add_trace(
             go.Scatter(
-                x=model_grid.axes[0].values,
+                x=model_grid.axes[x_axis_index].values,
                 y=[
                     model.embedded_features_per_hidden_dimensions.cpu()
-                    for model in model_grid.models
+                    for model in np.squeeze(model_grid.models)
                 ],
                 mode="lines+markers",
                 line=dict(width=1, color="#333333", shape="spline"),
@@ -67,9 +67,10 @@ def plot_geometry(
         x_vals = []
         feature_dimensionalities = []
 
-        for i, model in enumerate(model_grid.models):
+        for i, model in enumerate(np.squeeze(model_grid.models)):
             x_vals.extend(
-                [model_grid.axes[0].values[i]] * len(model.feature_dimensionalities)
+                [model_grid.axes[x_axis_index].values[i]]
+                * len(model.feature_dimensionalities)
             )
             feature_dimensionalities.extend(model.feature_dimensionalities.cpu())
 
@@ -133,8 +134,8 @@ def plot_geometry(
         x_vals = []
         mean_feature_dimensionalities = []
 
-        for i, model in enumerate(model_grid.models):
-            x_vals.append(model_grid.axes[0].values[i])
+        for i, model in enumerate(np.squeeze(model_grid.models)):
+            x_vals.append(model_grid.axes[x_axis_index].values[i])
             mean_feature_dimensionalities.append(
                 model.mean_feature_dimensionalities.cpu()
             )
@@ -154,8 +155,8 @@ def plot_geometry(
         x_vals = []
         total_feature_dimensionalities = []
 
-        for i, model in enumerate(model_grid.models):
-            x_vals.append(model_grid.axes[0].values[i])
+        for i, model in enumerate(np.squeeze(model_grid.models)):
+            x_vals.append(model_grid.axes[x_axis_index].values[i])
             total_feature_dimensionalities.append(
                 model.total_feature_dimensionalities_per_hidden_dimension.cpu()
             )
@@ -172,7 +173,7 @@ def plot_geometry(
         )
 
     fig.update_layout(
-        xaxis_title=model_grid.axes[0].label,
+        xaxis_title=model_grid.axes[x_axis_index].label,
         xaxis_type="log",
         xaxis=dict(
             showgrid=False,
