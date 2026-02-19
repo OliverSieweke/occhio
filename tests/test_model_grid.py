@@ -27,9 +27,7 @@ def _make_create_model(*, seed: int = 42):
             distribution=SparseUniform(
                 N_FEATURES, p_active=density, device=DEVICE, generator=gen
             ),
-            ae=TiedLinearRelu(
-                N_FEATURES, N_HIDDEN, generator=gen, device=DEVICE
-            ),
+            ae=TiedLinearRelu(N_FEATURES, N_HIDDEN, generator=gen, device=DEVICE),
             importances=importance ** torch.arange(N_FEATURES, dtype=torch.float32),
             device=DEVICE,
         )
@@ -64,9 +62,7 @@ def _make_1d_grid(n: int = 8, cache: bool = True, seed: int = 42) -> ModelGrid:
             distribution=SparseUniform(
                 N_FEATURES, p_active=density, device=DEVICE, generator=gen
             ),
-            ae=TiedLinearRelu(
-                N_FEATURES, N_HIDDEN, generator=gen, device=DEVICE
-            ),
+            ae=TiedLinearRelu(N_FEATURES, N_HIDDEN, generator=gen, device=DEVICE),
             importances=torch.ones(N_FEATURES),
             device=DEVICE,
         )
@@ -394,15 +390,14 @@ class TestSampleCaching:
 
     def test_all_same_seed_collapses_to_one(self):
         """All models use seed=42 and same density→same distribution hash→one unique."""
+
         def create_model(params: dict, **kwargs) -> ToyModel:
             gen = Generator(device=DEVICE).manual_seed(42)
             return ToyModel(
                 distribution=SparseUniform(
                     N_FEATURES, p_active=0.5, device=DEVICE, generator=gen
                 ),
-                ae=TiedLinearRelu(
-                    N_FEATURES, N_HIDDEN, generator=gen, device=DEVICE
-                ),
+                ae=TiedLinearRelu(N_FEATURES, N_HIDDEN, generator=gen, device=DEVICE),
                 importances=torch.ones(N_FEATURES),
                 device=DEVICE,
             )
@@ -453,8 +448,7 @@ class TestFitting:
     def test_state_written_back_to_models(self):
         grid = _make_grid(n_density=3, n_importance=2, cache=True)
         before = {
-            i: m.ae.state_dict()["W"].clone()
-            for i, m in enumerate(grid.models.ravel())
+            i: m.ae.state_dict()["W"].clone() for i, m in enumerate(grid.models.ravel())
         }
         grid.fit(n_epochs=30, batch_size=64)
         for i, m in enumerate(grid.models.ravel()):
