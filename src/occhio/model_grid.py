@@ -85,7 +85,7 @@ class ModelGrid:
             self._unique_distributions, self._sample_index = self._build_sample_index()
 
     def _initialize_models(self) -> NDArray[np.object_]:
-        shape: tuple[int, ...] = self.shape
+        shape: tuple[int, ...] = self._shape_from_axes
         models: NDArray[np.object_] = np.empty(shape, dtype=object)
         for indices in product(*[range(s) for s in shape]):
             params: dict[str, Any] = {
@@ -384,9 +384,13 @@ class ModelGrid:
         return meshgrid(*(axis.values for axis in self.axes), indexing="ij")
 
     @property
-    def shape(self) -> tuple[int, ...]:
+    def _shape_from_axes(self) -> tuple[int, ...]:
         """Returns the shape of the axes that define the nested structure of the models."""
         return tuple(len(axis.values) for axis in self.axes)
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        return self.models.shape
 
     @property
     def describe(self) -> dict[str, int]:
