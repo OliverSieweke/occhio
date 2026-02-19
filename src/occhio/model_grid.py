@@ -356,7 +356,9 @@ class ModelGrid:
                 s = slice(start, stop, step)
                 numpy_key.append(s)
                 if step is not None and step < 0:
-                    indices = list(range(start, stop, step))
+                    range_start = start if start is not None else dim_size - 1
+                    range_stop = stop if stop is not None else -1
+                    indices = list(range(range_start, range_stop, step))
                     values = axis.values[indices]
                 else:
                     values = axis.values[s]
@@ -368,6 +370,13 @@ class ModelGrid:
         for dim in range(len(key), len(self.axes)):
             new_axes.append(self.axes[dim])
             numpy_key.append(slice(None))
+
+        all_int: bool = len(key) == len(self.axes) and all(
+            isinstance(k, int) for k in key
+        )
+        if all_int:
+            resolved_idx = tuple(s.start for s in numpy_key)
+            return self.models[resolved_idx]
 
         sliced_models: NDArray[np.object_] = self.models[tuple(numpy_key)]
 

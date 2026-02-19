@@ -127,19 +127,19 @@ class TestGetitemDimensionPreservation:
         assert len(sub.axes) == len(grid.axes)
         assert sub.shape == (1, 5)
 
-    def test_int_both_dims_preserves_ndim(self):
+    def test_int_partial_preserves_ndim(self):
         grid = _make_grid(n_density=6, n_importance=5)
-        sub = grid[2, 3]
+        sub = grid[2]
         assert isinstance(sub, ModelGrid)
-        assert len(sub.axes) == 2
-        assert sub.shape == (1, 1)
+        assert len(sub.axes) == len(grid.axes)
+        assert sub.shape == (1, 5)
 
-    def test_1d_int_index_preserves_ndim(self):
+    def test_1d_int_index_returns_toymodel(self):
+        """1D grid + single int = all axes specified → returns ToyModel."""
         grid = _make_1d_grid(n=8)
-        sub = grid[4]
-        assert isinstance(sub, ModelGrid)
-        assert len(sub.axes) == 1
-        assert sub.shape == (1,)
+        result = grid[4]
+        assert isinstance(result, ToyModel)
+        assert result is grid.models[4]
 
     def test_subgrid_always_has_same_axes_count(self):
         grid = _make_grid(n_density=6, n_importance=5)
@@ -147,12 +147,51 @@ class TestGetitemDimensionPreservation:
             (0,),
             (5,),
             (slice(0, 3),),
-            (2, 3),
             (slice(1, 4), 2),
             (0, slice(None)),
         ]:
             sub = grid[key]
+            assert isinstance(sub, ModelGrid), f"Failed for key={key}"
             assert len(sub.axes) == len(grid.axes), f"Failed for key={key}"
+
+
+# ── __getitem__: Single Model Indexing ────────────────────────────────────────
+
+
+class TestGetitemSingleModel:
+    def test_all_int_2d_returns_toymodel(self):
+        grid = _make_grid(n_density=6, n_importance=5)
+        result = grid[2, 3]
+        assert isinstance(result, ToyModel)
+
+    def test_all_int_returns_same_object(self):
+        grid = _make_grid(n_density=6, n_importance=5)
+        result = grid[2, 3]
+        assert result is grid.models[2, 3]
+
+    def test_all_int_1d_returns_toymodel(self):
+        grid = _make_1d_grid(n=8)
+        result = grid[4]
+        assert isinstance(result, ToyModel)
+        assert result is grid.models[4]
+
+    def test_negative_ints_return_toymodel(self):
+        grid = _make_grid(n_density=6, n_importance=5)
+        result = grid[-1, -1]
+        assert isinstance(result, ToyModel)
+        assert result is grid.models[-1, -1]
+
+    def test_origin_returns_toymodel(self):
+        grid = _make_grid(n_density=6, n_importance=5)
+        result = grid[0, 0]
+        assert isinstance(result, ToyModel)
+        assert result is grid.models[0, 0]
+
+    def test_partial_int_still_returns_modelgrid(self):
+        """Only 1 of 2 axes specified as int → still a sub-grid."""
+        grid = _make_grid(n_density=6, n_importance=5)
+        result = grid[2]
+        assert isinstance(result, ModelGrid)
 
 
 # ── __getitem__: Slice Behavior ──────────────────────────────────────────────
@@ -258,6 +297,20 @@ class TestGetitemReverseIndexing:
         grid = _make_grid(n_density=6, n_importance=5)
         sub = grid[:, 4:1]
         assert sub.shape == (6, 3)
+
+    def test_explicit_neg_step_open_stop(self):
+        grid = _make_grid(n_density=6, n_importance=5)
+        sub = grid[4::-1]
+        assert sub.shape == (5, 5)
+        expected = grid.axes[0].values[[4, 3, 2, 1, 0]]
+        assert torch.allclose(sub.axes[0].values, expected)
+
+    def test_explicit_neg_step_open_start(self):
+        grid = _make_grid(n_density=6, n_importance=5)
+        sub = grid[:2:-1]
+        assert sub.shape == (3, 5)
+        expected = grid.axes[0].values[[5, 4, 3]]
+        assert torch.allclose(sub.axes[0].values, expected)
 
 
 # ── __getitem__: Out-of-Bounds Errors ────────────────────────────────────────
