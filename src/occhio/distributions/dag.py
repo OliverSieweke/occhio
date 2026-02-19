@@ -3,6 +3,7 @@
 from .base import Distribution
 from torch import Tensor
 import torch
+import numpy as np
 
 
 class DAGDistribution(Distribution):
@@ -212,10 +213,13 @@ class DAGRandomWalkToRoot(Distribution):
         generator: Optional ``torch.Generator`` for deterministic sampling.
     """
 
+    adjacency: Tensor
+
     def __init__(
         self,
         n_features: int,
         p_edge: float = 0.1,
+        adjacency: Tensor | np.ndarray | None = None,
         beta: float = 1.0,
         p_active: list[float] | Tensor | None = None,
         **kwargs,
@@ -226,9 +230,17 @@ class DAGRandomWalkToRoot(Distribution):
         if p_active is None:
             self.p_active = torch.ones(n_features, device=self.device) / n_features
         else:
-            self.p_active = torch.Tensor(p_active)
+            self.p_active = torch.as_tensor(p_active)
 
-        self.regenerate_dag()
+        if adjacency is None:
+            self.regenerate_dag()
+        else:
+            assert adjacency.shape == (n_features, n_features), (
+                f"adjacency shape = {adjacency.shape} needs to equal (n_features, n_features)"
+            )
+            self.adjacency = torch.as_tensor(adjacency)
+
+        self._build_parent_cache()
 
     def _generate_dag(self) -> Tensor:
         """Generate random DAG as upper triangular adjacency matrix."""
