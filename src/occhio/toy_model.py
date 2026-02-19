@@ -10,6 +10,16 @@ from .distributions.base import Distribution
 
 
 class ToyModel:
+    """This is the ToyModel class which is the base for most experiments.
+
+    Args:
+        distribution: A Distribution object.
+        ae: An AutoEncoderBase object.
+        device: Where the torch objects live.
+        generator: For seeded experiments.
+        importances: Weighing of the distribution.
+    """
+
     distribution: Distribution
     ae: AutoEncoderBase
 
@@ -29,7 +39,6 @@ class ToyModel:
         self.n_features: int = ae.n_features
 
         if device is None:
-            # Infer from ae (reliable once it has parameters)
             device = ae.device or torch.device("cpu")
         else:
             device = torch.device(device)
