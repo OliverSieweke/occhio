@@ -6,6 +6,8 @@ from torch import Tensor
 import torch.nn as nn
 import torch
 from abc import ABC, abstractmethod
+import math
+from .utils.device import _same_device
 
 
 class AutoEncoderBase(nn.Module, ABC):
@@ -29,17 +31,44 @@ class AutoEncoderBase(nn.Module, ABC):
     def loss(self, x_true: Tensor, x_hat: Tensor, importances: Tensor | None):
         """The associated loss function."""
         if importances is None:
-            importances = torch.ones(self.n_features)  # ty:ignore
+            importances = torch.ones(self.n_features, device=self.device)  # ty:ignore
         return torch.mean(torch.sum(importances * torch.square(x_true - x_hat), dim=-1))
 
     def __init__(
         self,
-        device: torch.device | str = "cpu",
+        device: torch.device | str | None = None,
         generator: torch.Generator | None = None,
     ):
+        """Initialize the AutoEncoder class.
+
+        Note that we write device to `_init_device`, which remembers where the user intends to store the device.
+        """
         super().__init__()
-        self.device = device
+        if device is not None and generator is not None:
+            gen_device = torch.device(generator.device)
+            dev = torch.device(device)
+            if not _same_device(gen_device, dev):
+                raise ValueError(
+                    f"Generator lives on {gen_device}, but device is {dev}. "
+                    f"These must match."
+                )
+        if device is not None:
+            self._init_device = torch.device(device)
+        elif generator is not None:
+            self._init_device = torch.device(generator.device)
+        else:
+            self._init_device = None
         self.generator = generator
+
+    @property
+    def device(self) -> torch.device | None:
+        """Return the device of the first parameter, falling back to the
+        device passed at construction time (needed during ``__init__`` before
+        any parameters have been created)."""
+        try:
+            return next(self.parameters()).device
+        except StopIteration:
+            return self._init_device
 
     def __init_subclass__(cls, **kwargs):
         """This ensures that `n_features` and `n_hidden` are defined at creation"""
@@ -138,39 +167,60 @@ class MLPEncoder(AutoEncoderBase):
         self._build_layers()
 
     def _build_layers(self):
-        encoder_layers = []
+        self.encoder_weights = nn.ParameterList()
+        self.encoder_biases = nn.ParameterList()
         for i in range(len(self.embedding_dims) - 1):
-            encoder_layers.append(
-                nn.Linear(
-                    self.embedding_dims[i],
+            w = nn.Parameter(
+                torch.empty(
                     self.embedding_dims[i + 1],
+                    self.embedding_dims[i],
                     device=self.device,
                 )
             )
-            # No ReLU on output
-            if i < len(self.embedding_dims) - 2:
-                encoder_layers.append(nn.ReLU())
-        self.encoder = nn.Sequential(*encoder_layers)
+            b = nn.Parameter(
+                torch.empty(self.embedding_dims[i + 1], device=self.device)
+            )
+            self._init_param(w, b)
+            self.encoder_weights.append(w)
+            self.encoder_biases.append(b)
 
-        decoder_layers = []
+        self.decoder_weights = nn.ParameterList()
+        self.decoder_biases = nn.ParameterList()
         for i in range(len(self.unembedding_dims) - 1):
-            decoder_layers.append(
-                nn.Linear(
-                    self.unembedding_dims[i],
+            w = nn.Parameter(
+                torch.empty(
                     self.unembedding_dims[i + 1],
+                    self.unembedding_dims[i],
                     device=self.device,
                 )
             )
-            if i < len(self.unembedding_dims) - 2:
-                decoder_layers.append(nn.ReLU())
-        decoder_layers.append(nn.ReLU())  # ReLU on final output, matching TiedLinear
-        self.decoder = nn.Sequential(*decoder_layers)
+            b = nn.Parameter(
+                torch.empty(self.unembedding_dims[i + 1], device=self.device)
+            )
+            self._init_param(w, b)
+            self.decoder_weights.append(w)
+            self.decoder_biases.append(b)
+
+    def _init_param(self, w: nn.Parameter, b: nn.Parameter):
+        nn.init.kaiming_uniform_(w, a=math.sqrt(5), generator=self.generator)
+        fan_in, _ = nn.init._calculate_fan_in_and_fan_out(w)
+        bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
+        nn.init.uniform_(b, -bound, bound, generator=self.generator)
+
+    def encode(self, x: Tensor) -> Tensor:
+        for i, (w, b) in enumerate(zip(self.encoder_weights, self.encoder_biases)):
+            x = x @ w.t()
+            if i < len(self.encoder_weights) - 1:
+                x = torch.relu(x)
+        return x
+
+    def decode(self, z: Tensor) -> Tensor:
+        for i, (w, b) in enumerate(zip(self.decoder_weights, self.decoder_biases)):
+            z = z @ w.t() + b
+            if i < len(self.decoder_weights) - 1:
+                z = torch.relu(z)
+        z = torch.relu(z)  # ReLU on final output, matching your original
+        return z
 
     def resample_weights(self, force_norm=False):
         self._build_layers()
-
-    def encode(self, x: Tensor) -> Tensor:
-        return self.encoder(x)
-
-    def decode(self, z: Tensor) -> Tensor:
-        return self.decoder(z)

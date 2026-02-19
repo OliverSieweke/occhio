@@ -1,24 +1,34 @@
-from functools import cached_property
-from typing import Any, Optional
+from typing import Any, Callable
 
 import torch
 import torch.nn.functional as F
 from torch import Tensor
-from torch.optim import AdamW
+from torch.optim import AdamW, Optimizer
 
 from .autoencoder import AutoEncoderBase
-from .distributions.base import Distribution
+from .distributions import Distribution
+from .utils.device import _same_device
 
 
 class ToyModel:
+    """This is the ToyModel class which is the base for most experiments.
+
+    Args:
+        distribution: A Distribution object.
+        ae: An AutoEncoderBase object.
+        device: Where the torch objects live.
+        generator: For seeded experiments.
+        importances: Weighing of the distribution.
+    """
+
     distribution: Distribution
     ae: AutoEncoderBase
 
     def __init__(
         self,
-        distribution: Optional[Distribution],
-        ae: Optional[AutoEncoderBase],
-        device: torch.device | str = "cpu",
+        distribution: Distribution,
+        ae: AutoEncoderBase,
+        device: torch.device | str | None = None,
         generator: torch.Generator | None = None,
         importances=None,
     ):
@@ -26,8 +36,33 @@ class ToyModel:
         self.distribution = distribution
         self.ae = ae
 
-        assert distribution.n_features == ae.n_features  # ty:ignore
-        self.n_features: int = ae.n_features  # ty:ignore
+        assert distribution.n_features == ae.n_features
+        self.n_features: int = ae.n_features
+
+        if device is None:
+            device = ae._init_device or distribution._init_device or torch.device("cpu")
+        else:
+            device = torch.device(device)
+            if ae._init_device is not None and not _same_device(
+                ae._init_device, device
+            ):
+                raise ValueError(
+                    f"AutoEncoder was explicitly created on {ae._init_device}, "
+                    f"but ToyModel device is {device}. "
+                    f"Either omit the device from the AutoEncoder or make them match."
+                )
+            if distribution._init_device is not None and not _same_device(
+                distribution._init_device, device
+            ):
+                raise ValueError(
+                    f"Distribution was explicitly created on {distribution._init_device}, "
+                    f"but ToyModel device is {device}. "
+                    f"Either omit the device from the Distribution or make them match."
+                )
+
+        ae.to(device)
+        distribution.to(device)
+        self.device = device
 
         if importances is None:
             self.importances = torch.ones(self.n_features, device=ae.device)
@@ -38,18 +73,23 @@ class ToyModel:
     # consistent with ModelGrid.fit()
     def fit(
         self,
-        n_epochs: int = 10000,
-        batch_size=1024,
-        learning_rate=3e-4,
-        weight_decay=0.05,
-        track_losses=True,
-        verbose=False,
-    ) -> list[float]:
-        optimizer = AdamW(
-            self.ae.parameters(), lr=learning_rate, weight_decay=weight_decay
-        )
+        n_epochs: int,
+        batch_size: int = 1024,
+        learning_rate: float = 3e-4,
+        weight_decay: float = 0.05,
+        track_losses: bool = True,
+        optimizer: Optimizer | None = None,
+        hooks: list[Callable] = [],
+        hook_freq: int = 1,
+        verbose: bool = False,
+    ) -> tuple[list[float], list]:
+        if optimizer is None:
+            optimizer = AdamW(
+                self.ae.parameters(), lr=learning_rate, weight_decay=weight_decay
+            )
 
         losses = []
+        hook_returns = [[] for _ in hooks]
 
         for ep in range(n_epochs):
             x = self.distribution.sample(batch_size)
@@ -60,11 +100,18 @@ class ToyModel:
             optimizer.step()
 
             if track_losses:
-                losses.append(loss)
+                losses.append(loss.item())
             if verbose and (ep + 1) % 1000 == 0:
                 print(f"AE Epoch {ep + 1}/{n_epochs}, Loss: {loss.item():.6f}")
+            if hooks and (ep % hook_freq == 0 or ep == n_epochs - 1):
+                with torch.no_grad():
+                    hook_data = dict(
+                        tm=self, epoch=ep, loss=loss.item(), x=x, x_hat=x_hat
+                    )
+                    for i, h in enumerate(hooks):
+                        hook_returns[i].append(h(hook_data))
 
-        return losses
+        return losses, hook_returns
 
     def sample_latent(self, batch_size) -> Tensor:
         inputs = self.distribution.sample(batch_size)
