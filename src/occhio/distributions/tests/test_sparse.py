@@ -55,9 +55,9 @@ class TestSparseUniformActivationRate:
         )
         samples = dist.sample(10000)
         empirical = (samples > 0).float().mean().item()
-        assert (
-            abs(empirical - p_active) < 0.02
-        ), f"Expected ~{p_active}, got {empirical}"
+        assert abs(empirical - p_active) < 0.02, (
+            f"Expected ~{p_active}, got {empirical}"
+        )
 
 
 class TestSparseUniformBroadcasting:
@@ -87,9 +87,9 @@ class TestSparseUniformBroadcasting:
 
         for i, p in enumerate(p_list):
             empirical = (samples[:, i] > 0).float().mean().item()
-            assert (
-                abs(empirical - p) < 0.03
-            ), f"Feature {i}: expected ~{p}, got {empirical}"
+            assert abs(empirical - p) < 0.03, (
+                f"Feature {i}: expected ~{p}, got {empirical}"
+            )
 
 
 class TestSparseUniformReproducibility:
@@ -143,9 +143,9 @@ class TestSparseExponentialActivationRate:
         )
         samples = dist.sample(10000)
         empirical = (samples > 0).float().mean().item()
-        assert (
-            abs(empirical - p_active) < 0.02
-        ), f"Expected ~{p_active}, got {empirical}"
+        assert abs(empirical - p_active) < 0.02, (
+            f"Expected ~{p_active}, got {empirical}"
+        )
 
 
 class TestSparseExponentialScale:
@@ -160,9 +160,9 @@ class TestSparseExponentialScale:
         # All values active since p_active=1
         empirical_mean = samples.mean().item()
         expected_mean = 1.0 / scale
-        assert (
-            abs(empirical_mean - expected_mean) < 0.05
-        ), f"Expected mean ~{expected_mean}, got {empirical_mean}"
+        assert abs(empirical_mean - expected_mean) < 0.05, (
+            f"Expected mean ~{expected_mean}, got {empirical_mean}"
+        )
 
     @pytest.mark.parametrize("scale", [0.5, 1.0, 2.0, 5.0])
     def test_scale_parameter_values(self, scale, seeded_generator):
@@ -180,7 +180,7 @@ class TestSparseExponentialScale:
         dist = SparseExponential(
             n_features=10, p_active=0.5, generator=seeded_generator
         )
-        assert dist.scale == 1.0
+        assert all(dist.scale == 1.0)
 
 
 class TestSparseExponentialDistribution:
@@ -203,9 +203,9 @@ class TestSparseExponentialDistribution:
             n_features=100, p_active=1.0, scale=0.5, generator=seeded_generator
         )
         samples = dist.sample(1000)
-        assert (
-            samples.max() > 1.0
-        ), "Exponential with scale=0.5 should have mean=2, expect values > 1"
+        assert samples.max() > 1.0, (
+            "Exponential with scale=0.5 should have mean=2, expect values > 1"
+        )
 
 
 class TestSparseExponentialReproducibility:

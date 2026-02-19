@@ -5,6 +5,7 @@ from math import prod
 import torch
 from torch import Tensor
 from typing import Literal
+from ..utils.device import _same_device
 
 
 class Distribution(ABC):
@@ -27,11 +28,25 @@ class Distribution(ABC):
     def __init__(
         self,
         n_features: int,
-        device: torch.device | str = "cpu",
+        device: torch.device | str | None = None,
         generator: torch.Generator | None = None,
     ):
         self.n_features = n_features
-        self.device = device
+        if device is not None and generator is not None:
+            gen_device = torch.device(generator.device)
+            dev = torch.device(device)
+            if not _same_device(gen_device, dev):
+                raise ValueError(
+                    f"Generator lives on {gen_device}, but device is {dev}. "
+                    f"These must match."
+                )
+        if device is not None:
+            self._init_device = torch.device(device)
+        elif generator is not None:
+            self._init_device = torch.device(generator.device)
+        else:
+            self._init_device = None
+        self.device = self._init_device
         self.generator = generator
 
     @abstractmethod
@@ -84,6 +99,14 @@ class Distribution(ABC):
 
     def to(self, device: torch.device | str):
         self.device = torch.device(device)
+        for attr_name in vars(self):
+            val = getattr(self, attr_name)
+            if isinstance(val, Tensor):
+                setattr(self, attr_name, val.to(self.device))
+            elif isinstance(val, list):
+                for i, item in enumerate(val):
+                    if isinstance(item, Tensor):
+                        val[i] = item.to(self.device)
         return self
 
     def __repr__(self):
@@ -188,7 +211,7 @@ class DistributionStack(Distribution):
         return result
 
     def to(self, device: torch.device | str):
-        self.device = device
+        self.device = torch.device(device)
         for dist in self.distributions:
             dist.to(device)
         return self

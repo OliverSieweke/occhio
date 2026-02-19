@@ -1,4 +1,4 @@
-from typing import Any, Optional, Callable
+from typing import Any, Callable
 
 import torch
 import torch.nn.functional as F
@@ -6,18 +6,29 @@ from torch import Tensor
 from torch.optim import AdamW, Optimizer
 
 from .autoencoder import AutoEncoderBase
-from .distributions.base import Distribution
+from .distributions import Distribution
+from .utils.device import _same_device
 
 
 class ToyModel:
+    """This is the ToyModel class which is the base for most experiments.
+
+    Args:
+        distribution: A Distribution object.
+        ae: An AutoEncoderBase object.
+        device: Where the torch objects live.
+        generator: For seeded experiments.
+        importances: Weighing of the distribution.
+    """
+
     distribution: Distribution
     ae: AutoEncoderBase
 
     def __init__(
         self,
-        distribution: Optional[Distribution],
-        ae: Optional[AutoEncoderBase],
-        device: torch.device | str = "cpu",
+        distribution: Distribution,
+        ae: AutoEncoderBase,
+        device: torch.device | str | None = None,
         generator: torch.Generator | None = None,
         importances=None,
     ):
@@ -25,8 +36,34 @@ class ToyModel:
         self.distribution = distribution
         self.ae = ae
 
-        assert distribution.n_features == ae.n_features  # ty:ignore
-        self.n_features: int = ae.n_features  # ty:ignore
+        assert distribution.n_features == ae.n_features
+        self.n_features: int = ae.n_features
+
+        if device is None:
+            print(distribution.device)
+            device = ae._init_device or distribution._init_device or torch.device("cpu")
+        else:
+            device = torch.device(device)
+            if ae._init_device is not None and not _same_device(
+                ae._init_device, device
+            ):
+                raise ValueError(
+                    f"AutoEncoder was explicitly created on {ae._init_device}, "
+                    f"but ToyModel device is {device}. "
+                    f"Either omit the device from the AutoEncoder or make them match."
+                )
+            if distribution._init_device is not None and not _same_device(
+                distribution._init_device, device
+            ):
+                raise ValueError(
+                    f"Distribution was explicitly created on {distribution._init_device}, "
+                    f"but ToyModel device is {device}. "
+                    f"Either omit the device from the Distribution or make them match."
+                )
+
+        ae.to(device)
+        distribution.to(device)
+        self.device = device
 
         if importances is None:
             self.importances = torch.ones(self.n_features, device=ae.device)
