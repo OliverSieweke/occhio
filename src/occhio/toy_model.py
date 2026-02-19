@@ -40,7 +40,6 @@ class ToyModel:
         self.n_features: int = ae.n_features
 
         if device is None:
-            print(distribution.device)
             device = ae._init_device or distribution._init_device or torch.device("cpu")
         else:
             device = torch.device(device)
