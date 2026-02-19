@@ -42,6 +42,18 @@ class ToyModel:
             device = ae.device or torch.device("cpu")
         else:
             device = torch.device(device)
+            if ae._init_device is not None and ae._init_device != device:
+                raise ValueError(
+                    f"AutoEncoder was explicitly created on {ae._init_device}, "
+                    f"but ToyModel device is {device}. "
+                    f"Either omit the device from the AutoEncoder or make them match."
+                )
+            if distribution.device is not None and distribution.device != device:
+                raise ValueError(
+                    f"Distribution was explicitly created on {distribution.device}, "
+                    f"but ToyModel device is {device}. "
+                    f"Either omit the device from the Distribution or make them match."
+                )
 
         ae.to(device)
         distribution.to(device)

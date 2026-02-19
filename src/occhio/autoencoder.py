@@ -38,6 +38,10 @@ class AutoEncoderBase(nn.Module, ABC):
         device: torch.device | str | None = None,
         generator: torch.Generator | None = None,
     ):
+        """Initialize the AutoEncoder class.
+
+        Note that we write device to `_init_device`, which remembers where the user intends to store the device.
+        """
         super().__init__()
         self._init_device = torch.device(device) if device is not None else None
         self.generator = generator

@@ -7,6 +7,16 @@ from occhio.toy_model import ToyModel
 import torch
 from occhio.visualization import plot_dynamic_scatter
 
+
+# %%
+tm = ToyModel(
+    SparseUniform(5, 0.3),
+    TiedLinearRelu(5, 2),
+    device="mps",
+)
+
+tm.fit(100)
+
 # %%
 DEVICE = "cpu"
 gen = torch.Generator("cpu")
