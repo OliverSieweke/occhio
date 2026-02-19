@@ -5,6 +5,7 @@ from math import prod
 import torch
 from torch import Tensor
 from typing import Literal
+from ..utils.device import _same_device
 
 
 class Distribution(ABC):
@@ -34,7 +35,7 @@ class Distribution(ABC):
         if device is not None and generator is not None:
             gen_device = torch.device(generator.device)
             dev = torch.device(device)
-            if gen_device.type != dev.type or (gen_device.index or 0) != (dev.index or 0):
+            if not _same_device(gen_device, dev):
                 raise ValueError(
                     f"Generator lives on {gen_device}, but device is {dev}. "
                     f"These must match."

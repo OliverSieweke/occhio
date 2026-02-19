@@ -1,4 +1,4 @@
-from typing import Any, Optional, Callable
+from typing import Any, Callable
 
 import torch
 import torch.nn.functional as F
@@ -6,12 +6,8 @@ from torch import Tensor
 from torch.optim import AdamW, Optimizer
 
 from .autoencoder import AutoEncoderBase
-from .distributions.base import Distribution
-
-
-def _same_device(a: torch.device, b: torch.device) -> bool:
-    """Compare two devices, treating a missing index as 0 (e.g. mps == mps:0)."""
-    return a.type == b.type and (a.index or 0) == (b.index or 0)
+from .distributions import Distribution
+from .utils.device import _same_device
 
 
 class ToyModel:
@@ -44,16 +40,21 @@ class ToyModel:
         self.n_features: int = ae.n_features
 
         if device is None:
-            device = ae.device or torch.device("cpu")
+            print(distribution.device)
+            device = ae._init_device or distribution._init_device or torch.device("cpu")
         else:
             device = torch.device(device)
-            if ae._init_device is not None and not _same_device(ae._init_device, device):
+            if ae._init_device is not None and not _same_device(
+                ae._init_device, device
+            ):
                 raise ValueError(
                     f"AutoEncoder was explicitly created on {ae._init_device}, "
                     f"but ToyModel device is {device}. "
                     f"Either omit the device from the AutoEncoder or make them match."
                 )
-            if distribution._init_device is not None and not _same_device(distribution._init_device, device):
+            if distribution._init_device is not None and not _same_device(
+                distribution._init_device, device
+            ):
                 raise ValueError(
                     f"Distribution was explicitly created on {distribution._init_device}, "
                     f"but ToyModel device is {device}. "

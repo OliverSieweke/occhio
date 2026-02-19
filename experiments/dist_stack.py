@@ -9,14 +9,14 @@ from occhio.visualization import plot_dynamic_scatter
 
 
 # %%
-TiedLinearRelu(5, 2, generator=torch.Generator("mps"), device="cpu")
-# tm = ToyModel(
-#     SparseUniform(5, 0.3),
-#     TiedLinearRelu(5, 2, generator=torch.Generator("mps")),
-#     device="mps",
-# )
-
-
+# TiedLinearRelu(5, 2, generator=torch.Generator("mps"), device="cpu")
+tm = ToyModel(
+    SparseUniform(5, 0.3, device="mps"),
+    TiedLinearRelu(5, 2),
+)
+print(tm.device)
+tm.fit(100)
+    
 # %%
 DEVICE = "cpu"
 gen = torch.Generator("cpu")
