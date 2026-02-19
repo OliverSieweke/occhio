@@ -66,7 +66,6 @@ class HierarchicalSparse(Distribution):
 
         self.generate_new_tree()
 
-
     def generate_new_tree(self) -> None:
         """Generate a new random tree structure.
 
@@ -91,7 +90,7 @@ class HierarchicalSparse(Distribution):
             max_possible = min(self.max_children, remaining)
 
             if max_possible > 0:
-                n_children = int(self._randint(1, max_possible + 1, (1, )).item())
+                n_children = int(self._randint(1, max_possible + 1, (1,)).item())
 
                 for _ in range(n_children):
                     if next_index >= self.n_features:

@@ -24,8 +24,46 @@ class Axis:
     label: str
     values: list | Tensor
 
+
 class ModelGrid:
-    def __init__(self, create_model: Callable[..., ToyModel], axes: List[Axis], cache_samples: bool = True):
+    """A multi-dimensional grid of ``ToyModel`` instances, parameterized over one or
+    more named axes.
+
+    Each point in the grid corresponds to a ``ToyModel`` created by a factory
+    function that receives the axis values as a ``params`` dict.
+
+    Args:
+        create_model: A factory function that accepts a ``Dict[str, Any]`` containing
+         axes values at a given grid point, and returns an initialised ``ToyModel``.
+        axes: An ordered list of ``Axis`` objects defining the grid dimensions.
+            At least one axis must be provided.
+
+    Example::
+        def create_model(params):
+            return ToyModel(
+                distribution=SparseUniform(5, p_active=params["Density"]),
+                ae=TiedLinearRelu(5, 2),
+                importances=params["Relative Importance" ** torch.arange(5),
+            )
+
+
+        model_grid = ModelGrid(
+            create_model,
+            axes=[
+                Axis(label="Density", values=logspace(0, -2, 32)),
+                Axis(label="Relative Importance", values=logspace(-1, 1, 32)),
+            ],
+        )
+    """
+
+    models: NDArray[np.object_]
+
+    def __init__(
+        self,
+        create_model: Callable[[Dict[str, Any]], ToyModel],
+        axes: List[Axis],
+        cache_samples: bool = True,
+    ):
         self.cache_samples: bool = cache_samples
         self._validate_args(create_model, axes)
         self.axes: list[Axis] = axes
@@ -34,9 +72,7 @@ class ModelGrid:
         self._validate_autoencoders()
 
         if self.cache_samples:
-            self._unique_distributions, self._sample_index = (
-                self._build_sample_index()
-            )
+            self._unique_distributions, self._sample_index = self._build_sample_index()
 
     def _initialize_models(self) -> NDArray[np.object_]:
         shape: tuple[int, ...] = self.shape
@@ -59,7 +95,7 @@ class ModelGrid:
         if self.models.size <= 1:
             return
 
-        flattened_models: NDArray[np.object_] = self.flattened_models
+        flattened_models: NDArray[np.object_] = self.models.ravel()
 
         reference: AutoEncoderBase = flattened_models[0].ae
         reference_signature: tuple = (
@@ -76,7 +112,7 @@ class ModelGrid:
             leave=True,
         ):
             ae: AutoEncoderBase = model.ae
-            ae_signature: tuple = (
+            ae_signature = (
                 type(ae),
                 {k: v.shape for k, v in ae.state_dict().items()},
                 ae.device,
@@ -99,7 +135,7 @@ class ModelGrid:
         """Precompute which models share a distribution so the training loop
         only needs to sample once per unique distribution and index into the
         results — no hashing or dict lookups at training time."""
-        flattened_models: NDArray[np.object_] = self.flattened_models
+        flattened_models: NDArray[np.object_] = self.models.ravel()
         hash_to_idx: dict[str, int] = {}
         unique_distributions: list[Distribution] = []
         sample_index: list[int] = []
@@ -118,13 +154,17 @@ class ModelGrid:
             sample_index.append(hash_to_idx[str(hash)])
 
         device: torch.device | str = flattened_models[0].ae.device
-        return unique_distributions, torch.tensor(sample_index, dtype=torch.long, device=device)
+        return unique_distributions, torch.tensor(
+            sample_index, dtype=torch.long, device=device
+        )
 
     def _sync_generators(self) -> None:
         """Copy each lead distribution's generator state to its followers
         so that all equivalent distributions stay synchronized."""
-        flattened_models: NDArray[np.object_] = self.flattened_models
-        lead_states: list[Tensor] = [dist.generator.get_state() for dist in self._unique_distributions]
+        flattened_models: NDArray[np.object_] = self.models.ravel()
+        lead_states: list[Tensor] = [
+            dist.generator.get_state() for dist in self._unique_distributions
+        ]
 
         for model_idx, unique_idx in enumerate(self._sample_index.tolist()):
             follower_dist: Distribution = flattened_models[model_idx].distribution
@@ -132,7 +172,7 @@ class ModelGrid:
                 follower_dist.generator.set_state(lead_states[unique_idx])
 
     def _can_vectorize_loss(self) -> bool:
-        flattened_models = self.flattened_models
+        flattened_models = self.models.ravel()
 
         if len(flattened_models) < 2:
             return True
@@ -153,12 +193,10 @@ class ModelGrid:
         verbose: bool = False,
         track_losses: bool = False,
     ) -> list[float] | None:
-        flattened_models: NDArray[np.object_] = self.flattened_models
+        flattened_models: NDArray[np.object_] = self.models.ravel()
 
         # Stack Model Characteristics --------------------------------------------------
-        stacked_params: dict[str, Tensor]
-        stacked_buffers: dict[str, Tensor]
-        stacked_params, stacked_buffers = stack_module_state( 
+        stacked_params, stacked_buffers = stack_module_state(
             [model.ae for model in flattened_models]
         )
         # NB: We enable gradients on params as stack_module_state returns detached
@@ -214,7 +252,10 @@ class ModelGrid:
                 stacked_samples = unique_samples[self._sample_index]
             else:
                 stacked_samples = torch.stack(
-                    [model.distribution.sample(batch_size) for model in flattened_models]
+                    [
+                        model.distribution.sample(batch_size)
+                        for model in flattened_models
+                    ]
                 )
 
             optimizer.zero_grad()
@@ -263,14 +304,12 @@ class ModelGrid:
         if self.cache_samples:
             self._sync_generators()
             for model in flattened_models:
-                model.distribution.__dict__.pop('_sampling_equivalence_hash', None)
-            self._unique_distributions, self._sample_index = (
-                self._build_sample_index()
-            )
+                model.distribution.__dict__.pop("_sampling_equivalence_hash", None)
+            self._unique_distributions, self._sample_index = self._build_sample_index()
 
         return losses
 
-    def __getitem__(self, key) -> ToyModel:
+    def __getitem__(self, key):
         """Returns the ToyModel at the given indices. Allows for arbitrary indexing."""
         if not isinstance(key, tuple):
             key = (key,)
@@ -294,17 +333,12 @@ class ModelGrid:
         """Returns a dictionary of the axis labels and their lengths."""
         return {axis.label: len(axis.values) for axis in self.axes}
 
-    @property
-    def flattened_models(self) -> NDArray[np.object_]:
-        """Returns a flattened list of all models in the grid."""
-        return self.models.ravel()
-
     def _validate_args(
         self, create_model: Callable[..., ToyModel], axes: List[Axis]
     ) -> None:
         if not axes:
             raise ValueError("At least one axis must be provided.")
-        
+
         if "params" not in signature(create_model).parameters:
             raise TypeError(
                 "create_model must accept a 'params' parameter (Dict[str, Any])."

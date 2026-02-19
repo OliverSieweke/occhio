@@ -65,6 +65,7 @@ class HierarchicalPairs(Distribution):
         values = self._rand(batch_size, self.n_features)
         return mask * values
 
+
 class ScaledHierarchicalPairs(Distribution):
     """Hierarchical pair-based distribution with value scaling from parent to child.
 
@@ -177,6 +178,7 @@ class CorrelatedPairs(Distribution):
 
         values = self._rand(batch_size, self.n_features)
         return mask * values
+
 
 class AnticorrelatedPairs(Distribution):
     """Pair-based distribution with mutually exclusive (anticorrelated) features.

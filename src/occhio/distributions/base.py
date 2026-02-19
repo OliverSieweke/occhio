@@ -6,6 +6,9 @@ import torch
 from torch import Tensor, hash_tensor
 from hashlib import sha256
 from functools import cached_property
+from typing import Literal
+from ..utils.device import _same_device
+
 
 class Distribution(ABC):
     """Abstract base class for sampling distributions.
@@ -133,3 +136,108 @@ class Distribution(ABC):
         equivalence_dict = dict(sorted(equivalence_dict.items(), key=lambda x: x[0]))
         equivalence_string = str(equivalence_dict)
         return sha256(equivalence_string.encode("utf-8")).hexdigest()
+
+
+class DistributionStack(Distribution):
+    """A composite distribution formed by stacking multiple independent distributions along the feature dimension.
+
+    Concatenates samples from a list of `Distribution` instances, producing outputs
+    of shape `(batch_size, sum(d.n_features for d in distributions))`.
+
+    Args:
+        distributions: List of `Distribution` instances to compose.
+        sampling_mode: Controls how sub-distributions are activated:
+
+            - ``"independent"``: Every sub-distribution is sampled for every
+              row in the batch (default).
+            - ``"single"``: Exactly one sub-distribution is sampled per row;
+              the remaining feature positions are zero.
+            - ``"sparse"``: Each sub-distribution fires independently with
+              probability ``p_meta``; non-firing positions are zero.
+        p_meta: Probability that each sub-distribution fires per sample.
+            Required when ``sampling_mode="sparse"``.
+
+    Example::
+
+        d = DistributionStack([Uniform(3), Normal(2)])
+        d.sample(64)  # shape: (64, 5)
+
+    Note:
+        Device and generator settings are inherited from each sub-distribution
+        individually rather than from a single top-level config. Use the ``to()``
+        method to move all sub-distributions to a common device. To ensure
+        reproducible sampling, set the generator on each sub-distribution before
+        passing them to DistributionStack.
+    """
+
+    def __init__(
+        self,
+        distributions: list[Distribution],
+        sampling_mode: Literal["independent", "sparse", "single"] = "independent",
+        p_meta: float | None = None,
+        **kwargs,
+    ):
+        if not distributions:
+            raise ValueError("distributions list cannot be empty")
+
+        if sampling_mode == "sparse" and p_meta is None:
+            raise ValueError("p_meta must be provided when sampling_mode='sparse'")
+
+        if "generator" in kwargs and sampling_mode == "independent":
+            import warnings
+
+            warnings.warn(
+                "DistributionStack does not use the generator parameter in 'independent' mode. "
+                "Set the generator on each sub-distribution individually for reproducible sampling.",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        total_features = sum(dist.n_features for dist in distributions)
+        self.distributions = distributions
+        self.sampling_mode = sampling_mode
+        self.p_meta = p_meta
+        super().__init__(total_features, **kwargs)
+
+    def sample(self, batch_size):
+        if self.sampling_mode == "independent":
+            return torch.cat(
+                [dist.sample(batch_size) for dist in self.distributions], dim=-1
+            )
+
+        result = torch.zeros(batch_size, self.n_features, device=self.device)
+        offset = 0
+
+        if self.sampling_mode == "single":
+            indices = self._randint(0, len(self.distributions), (batch_size,))
+            for i, dist in enumerate(self.distributions):
+                mask = indices == i
+                n_active = int(mask.sum().item())
+                if n_active > 0:
+                    result[mask, offset : offset + dist.n_features] = dist.sample(
+                        n_active
+                    )
+                offset += dist.n_features
+
+        elif self.sampling_mode == "sparse":
+            assert self.p_meta is not None
+            for dist in self.distributions:
+                fire = self._rand(batch_size) < self.p_meta
+                n_active = int(fire.sum().item())
+                if n_active > 0:
+                    result[fire, offset : offset + dist.n_features] = dist.sample(
+                        n_active
+                    )
+                offset += dist.n_features
+
+        return result
+
+    def to(self, device: torch.device | str):
+        self.device = torch.device(device)
+        for dist in self.distributions:
+            dist.to(device)
+        return self
+
+    def __repr__(self):
+        dist_reprs = ", ".join(repr(d) for d in self.distributions)
+        return f"DistributionStack([{dist_reprs}])"

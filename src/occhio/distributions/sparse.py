@@ -7,6 +7,7 @@ from .base import Distribution
 from torch import Tensor
 import torch
 
+
 class SparseUniform(Distribution):
     """Sparse uniform distribution with per-feature sparsity.
 
@@ -26,6 +27,7 @@ class SparseUniform(Distribution):
         mask = self._rand(batch_size, self.n_features) < self.p_active
         values = self._rand(batch_size, self.n_features)
         return mask * values
+
 
 class SparseExponential(Distribution):
     """Sparse exponential distribution with per-feature sparsity and rate.
