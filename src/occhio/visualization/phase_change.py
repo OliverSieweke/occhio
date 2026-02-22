@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 from numpy.typing import NDArray
 from plotly.subplots import make_subplots
 
-from occhio.model_grid import ModelGrid
+from occhio.model_grid import ModelGrid, TrainingAxis
 
 
 def plot_phase_change_multi(model_grid: ModelGrid, *, up_to: int, max_cols: int = 4):
@@ -43,12 +43,39 @@ def plot_phase_change_multi(model_grid: ModelGrid, *, up_to: int, max_cols: int 
 
 
 def plot_phase_change(model_grid: ModelGrid, *, tracked_feature=1):
-    if len(model_grid.shape) != 2:
-        raise ValueError(
-            f"plot_phase_change requires a 2-dimensional ModelGrid, "
-            f"got {len(model_grid.shape)}-dimensional (shape: {model_grid.shape})."
+    # Find TrainingAxis if present
+    training_axis_idx = None
+    for idx, axis in enumerate(model_grid.axes):
+        if isinstance(axis, TrainingAxis):
+            if training_axis_idx is not None:
+                raise ValueError(
+                    "ModelGrid cannot have multiple TrainingAxis instances"
+                )
+            training_axis_idx = idx
+
+    # Validate dimensions
+    if training_axis_idx is None:
+        # Static case: require 2D grid
+        if len(model_grid.shape) != 2:
+            raise ValueError(
+                f"plot_phase_change requires a 2-dimensional ModelGrid, "
+                f"got {len(model_grid.shape)}-dimensional (shape: {model_grid.shape})."
+            )
+        return _plot_phase_change_static(model_grid, tracked_feature)
+    else:
+        # Animated case: require 3D grid with one TrainingAxis
+        if len(model_grid.shape) != 3:
+            raise ValueError(
+                f"plot_phase_change with TrainingAxis requires a 3-dimensional ModelGrid, "
+                f"got {len(model_grid.shape)}-dimensional (shape: {model_grid.shape})."
+            )
+        return _plot_phase_change_animated(
+            model_grid, training_axis_idx, tracked_feature
         )
 
+
+def _plot_phase_change_static(model_grid: ModelGrid, tracked_feature: int):
+    """Create static phase change plot for 2D grid."""
     fig = make_subplots(
         rows=1,
         cols=2,
@@ -58,6 +85,144 @@ def plot_phase_change(model_grid: ModelGrid, *, tracked_feature=1):
 
     _add_model_phases_trace(model_grid, tracked_feature, fig, col=1, row=1)
     _add_colormap_trace(fig, col=2, row=1)
+
+    return fig
+
+
+def _plot_phase_change_animated(
+    model_grid: ModelGrid, training_axis_idx: int, tracked_feature: int
+):
+    """Create animated phase change plot with slider for 3D grid with TrainingAxis."""
+    # Get the training axis
+    training_axis = model_grid.axes[training_axis_idx]
+    n_epochs = len(training_axis.values)
+
+    # Create base figure
+    fig = make_subplots(
+        rows=1,
+        cols=2,
+        column_widths=[0.8, 0.2],
+        subplot_titles=(f"Phase Change [Feature {tracked_feature}]", "Colormap"),
+    )
+
+    # Helper to slice grid at a specific epoch
+    def slice_at_epoch(epoch_idx: int) -> ModelGrid:
+        """Extract 2D grid at specific epoch, squeezing out singleton dimension."""
+        if training_axis_idx == 0:
+            sliced = model_grid[epoch_idx, :, :]
+        elif training_axis_idx == 1:
+            sliced = model_grid[:, epoch_idx, :]
+        else:  # training_axis_idx == 2
+            sliced = model_grid[:, :, epoch_idx]
+
+        # Squeeze out singleton dimensions and their axes
+        # (integer indexing creates size-1 dimensions by design)
+        squeezed_models = sliced.models.squeeze()
+        squeezed_axes = [axis for axis in sliced.axes if len(axis.values) > 1]
+
+        return ModelGrid(
+            create_model=sliced.create_model,
+            axes=squeezed_axes,
+            cache_samples=sliced.cache_samples,
+            _models=squeezed_models,
+        )
+
+    # Create initial frame (epoch 0)
+    initial_grid = slice_at_epoch(0)
+    _add_model_phases_trace(initial_grid, tracked_feature, fig, col=1, row=1)
+    _add_colormap_trace(fig, col=2, row=1)
+
+    # Create frames for animation
+    frames = []
+    for epoch_idx in range(n_epochs):
+        grid_slice = slice_at_epoch(epoch_idx)
+        trace, x_axis_config, y_axis_config = _create_phase_change_trace_data(
+            grid_slice, tracked_feature
+        )
+
+        # Create frame with updated trace data
+        # We need to update the first trace (phase change image)
+        frame = go.Frame(
+            data=[trace],
+            name=str(epoch_idx),
+            traces=[0],  # Update first trace only
+        )
+        frames.append(frame)
+
+    fig.frames = frames
+
+    # Add slider for epoch selection
+    sliders = [
+        {
+            "active": 0,
+            "steps": [
+                {
+                    "args": [
+                        [str(i)],
+                        {
+                            "frame": {"duration": 0, "redraw": True},
+                            "mode": "immediate",
+                            "transition": {"duration": 0},
+                        },
+                    ],
+                    "label": f"{int(training_axis.values[i])}",
+                    "method": "animate",
+                }
+                for i in range(n_epochs)
+            ],
+            "currentvalue": {
+                "prefix": f"{training_axis.label}: ",
+                "visible": True,
+                "xanchor": "center",
+            },
+            "pad": {"b": 10, "t": 50},
+            "len": 0.9,
+            "x": 0.05,
+            "xanchor": "left",
+            "y": 0,
+            "yanchor": "top",
+        }
+    ]
+
+    fig.update_layout(
+        sliders=sliders,
+        updatemenus=[
+            {
+                "type": "buttons",
+                "showactive": False,
+                "buttons": [
+                    {
+                        "label": "Play",
+                        "method": "animate",
+                        "args": [
+                            None,
+                            {
+                                "frame": {"duration": 100, "redraw": True},
+                                "fromcurrent": True,
+                                "transition": {"duration": 50},
+                            },
+                        ],
+                    },
+                    {
+                        "label": "Pause",
+                        "method": "animate",
+                        "args": [
+                            [None],
+                            {
+                                "frame": {"duration": 0, "redraw": False},
+                                "mode": "immediate",
+                                "transition": {"duration": 0},
+                            },
+                        ],
+                    },
+                ],
+                "x": 0.05,
+                "xanchor": "left",
+                "y": 1.15,
+                "yanchor": "top",
+            }
+        ],
+    )
 
     return fig
 
@@ -72,7 +237,16 @@ def _get_phase_color(norm: float, interference: float) -> NDArray[np.uint8]:
     return np.stack([r, g, b], axis=-1)
 
 
-def _add_model_phases_trace(model_grid: ModelGrid, tracked_feature, fig, *, col, row):
+def _create_phase_change_trace_data(model_grid: ModelGrid, tracked_feature: int):
+    """Create trace data for phase change visualization without adding to figure.
+
+    Args:
+        model_grid: 2D ModelGrid (without TrainingAxis)
+        tracked_feature: Index of feature to track
+
+    Returns:
+        Tuple of (trace, x_axis_config, y_axis_config)
+    """
     norm = np.vectorize(lambda m: m.feature_norms[tracked_feature].cpu().item())(
         model_grid.models
     )
@@ -97,40 +271,45 @@ def _add_model_phases_trace(model_grid: ModelGrid, tracked_feature, fig, *, col,
     phase_colors = np.swapaxes(phase_colors, 0, 1)[::-1]
     metadata = np.swapaxes(metadata, 0, 1)[::-1]
 
-    fig.add_trace(
-        go.Image(
-            z=phase_colors,
-            customdata=metadata,
-            hovertemplate=f"Norm: %{{customdata[0]:.2f}}<br>Interference: %{{customdata[1]:.2f}}<br>{model_grid.axes[0].label}: %{{customdata[2]:.2f}}<br>{model_grid.axes[1].label}: %{{customdata[3]:.2f}}<br><extra></extra>",
-        ),
-        row=row,
-        col=col,
+    trace = go.Image(
+        z=phase_colors,
+        customdata=metadata,
+        hovertemplate=f"Norm: %{{customdata[0]:.2f}}<br>Interference: %{{customdata[1]:.2f}}<br>{model_grid.axes[0].label}: %{{customdata[2]:.2f}}<br>{model_grid.axes[1].label}: %{{customdata[3]:.2f}}<br><extra></extra>",
     )
 
     x_axis_values = model_grid.axes[0].values
     x_tick_indices = [0, len(x_axis_values) // 2, len(x_axis_values) - 1]
     x_tick_labels = [f"{x_axis_values[i]:.3f}" for i in x_tick_indices]
-    fig.update_xaxes(
+    x_axis_config = dict(
         tickmode="array",
         tickvals=x_tick_indices,
         ticktext=x_tick_labels,
         title=dict(text=f"<b>{model_grid.axes[0].label}</b>", font=dict(size=10)),
-        row=row,
-        col=col,
     )
 
     y_axis_values = model_grid.axes[1].values
     y_tick_indices = [0, len(y_axis_values) // 2, len(y_axis_values) - 1]
     # Reverse labels since go.Image has row 0 at the top
     y_tick_labels = [f"{y_axis_values[i]:.3f}" for i in reversed(y_tick_indices)]
-    fig.update_yaxes(
+    y_axis_config = dict(
         tickmode="array",
         tickvals=y_tick_indices,
         ticktext=y_tick_labels,
         title=dict(text=f"<b>{model_grid.axes[1].label}</b>", font=dict(size=10)),
-        row=row,
-        col=col,
     )
+
+    return trace, x_axis_config, y_axis_config
+
+
+def _add_model_phases_trace(model_grid: ModelGrid, tracked_feature, fig, *, col, row):
+    """Add phase change trace to figure (legacy wrapper for backward compatibility)."""
+    trace, x_axis_config, y_axis_config = _create_phase_change_trace_data(
+        model_grid, tracked_feature
+    )
+
+    fig.add_trace(trace, row=row, col=col)
+    fig.update_xaxes(**x_axis_config, row=row, col=col)
+    fig.update_yaxes(**y_axis_config, row=row, col=col)
 
 
 def _add_colormap_trace(fig, *, col, row):

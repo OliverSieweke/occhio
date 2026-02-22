@@ -26,7 +26,24 @@ class Axis:
 
     def __init__(self, label: str, values: Tensor | Sequence[float | int]):
         self.label = label
-        self.values = values if isinstance(values, Tensor) else torch.as_tensor(values)
+        # Convert to tensor and ensure float dtype for meshgrid compatibility
+        if not isinstance(values, Tensor):
+            self.values = torch.as_tensor(values, dtype=torch.float32)
+        elif values.dtype not in (torch.float32, torch.float64):
+            self.values = values.to(dtype=torch.float32)
+        else:
+            self.values = values
+
+
+class TrainingAxis(Axis):
+    """Special axis representing snapshots taken during training.
+
+    This axis is used to store model states at different epochs, enabling
+    visualization of training dynamics over time.
+    """
+
+    def __init__(self, values: Tensor | Sequence[int], label: str = "Epoch"):
+        super().__init__(label=label, values=values)
 
 
 class ModelGrid:
@@ -81,8 +98,10 @@ class ModelGrid:
             self.models = self._initialize_models()
             self._validate_autoencoders()
 
-        if self.cache_samples:
-            self._unique_distributions, self._sample_index = self._build_sample_index()
+            if self.cache_samples:
+                self._unique_distributions, self._sample_index = (
+                    self._build_sample_index()
+                )
 
     def _initialize_models(self) -> NDArray[np.object_]:
         shape: tuple[int, ...] = self._shape_from_axes
@@ -211,7 +230,32 @@ class ModelGrid:
         weight_decay: float = 0.05,
         verbose: bool = False,
         track_losses: bool = False,
-    ) -> list[float] | None:
+        snapshot_interval: int | None = None,
+    ) -> ModelGrid | None:
+        # Validate snapshot_interval
+        if snapshot_interval is not None:
+            if snapshot_interval <= 0:
+                raise ValueError(
+                    f"snapshot_interval must be positive, got {snapshot_interval}"
+                )
+            if snapshot_interval > n_epochs:
+                raise ValueError(
+                    f"snapshot_interval ({snapshot_interval}) cannot exceed n_epochs ({n_epochs})"
+                )
+
+            # Memory warning
+            n_snapshots = (n_epochs // snapshot_interval) + 1  # +1 for initial state
+            total_snapshots = self.models.size * n_snapshots
+            if total_snapshots > 10000:
+                import warnings
+
+                warnings.warn(
+                    f"Large memory allocation: {self.models.size} models × {n_snapshots} snapshots "
+                    f"= {total_snapshots} total model copies. This may consume significant memory.",
+                    ResourceWarning,
+                    stacklevel=2,
+                )
+
         flattened_models: NDArray[np.object_] = self.models.ravel()
 
         # Stack Model Characteristics --------------------------------------------------
@@ -255,6 +299,21 @@ class ModelGrid:
 
         # Training ---------------------------------------------------------------------
         losses: list[float] | None = [] if track_losses else None
+
+        # Snapshot storage
+        snapshots: list[tuple[int, dict, dict]] | None = (
+            None  # [(epoch, params_copy, buffers_copy), ...]
+        )
+        if snapshot_interval is not None:
+            snapshots = []
+            # Capture initial state (epoch 0)
+            snapshots.append(
+                (
+                    0,
+                    {k: v.detach().clone() for k, v in stacked_params.items()},
+                    {k: v.detach().clone() for k, v in stacked_buffers.items()},
+                )
+            )
 
         for ep in tqdm(range(n_epochs), desc="Training", unit="epoch"):
             # [17.02.26 | OliverSieweke] TODO: Could attempt to vectorize when possible
@@ -307,6 +366,16 @@ class ModelGrid:
             if verbose and (ep + 1) % 1000 == 0:
                 print(f"Epoch {ep + 1}/{n_epochs}, Mean Loss: {total_loss.item():.6f}")
 
+            # Capture snapshot if needed
+            if snapshot_interval is not None and (ep + 1) % snapshot_interval == 0:
+                snapshots.append(
+                    (
+                        ep + 1,
+                        {k: v.detach().clone() for k, v in stacked_params.items()},
+                        {k: v.detach().clone() for k, v in stacked_buffers.items()},
+                    )
+                )
+
         with torch.no_grad():
             for i, model in enumerate(flattened_models):
                 model.ae.load_state_dict(
@@ -326,7 +395,81 @@ class ModelGrid:
                 model.distribution.__dict__.pop("_sampling_equivalence_hash", None)
             self._unique_distributions, self._sample_index = self._build_sample_index()
 
-        return losses
+        # Build history grid if snapshots were captured
+        if snapshots is not None:
+            return self._build_history_grid(snapshots, flattened_models)
+
+        return None
+
+    def _build_history_grid(
+        self,
+        snapshots: list[tuple[int, dict, dict]],
+        flattened_models: NDArray[np.object_],
+    ) -> ModelGrid:
+        """Build a new ModelGrid with TrainingAxis from captured snapshots.
+
+        Args:
+            snapshots: List of (epoch, stacked_params, stacked_buffers) tuples
+            flattened_models: Flattened array of original models (for reference)
+
+        Returns:
+            New ModelGrid with TrainingAxis prepended to axes
+        """
+        n_snapshots = len(snapshots)
+        n_models = len(flattened_models)
+
+        # Create new shape: (n_snapshots, *original_shape)
+        history_shape = (n_snapshots,) + self.models.shape
+        history_models = np.empty(history_shape, dtype=object)
+
+        # Populate the history grid
+        for snapshot_idx, (
+            epoch,
+            stacked_params_snapshot,
+            stacked_buffers_snapshot,
+        ) in enumerate(
+            tqdm(snapshots, desc="Building history grid", unit="snapshot", leave=True)
+        ):
+            for model_idx, original_model in enumerate(flattened_models):
+                # Create a new ToyModel with the same distribution and architecture
+                # but with snapshotted autoencoder weights
+                from copy import deepcopy
+
+                snapshot_model = ToyModel(
+                    distribution=original_model.distribution,
+                    ae=deepcopy(original_model.ae),
+                    importances=original_model.importances,
+                )
+
+                # Load the snapshotted state
+                snapshot_model.ae.load_state_dict(
+                    {
+                        name: (
+                            stacked_params_snapshot[name]
+                            if name in stacked_params_snapshot
+                            else stacked_buffers_snapshot[name]
+                        )[model_idx]
+                        for name in snapshot_model.ae.state_dict()
+                    }
+                )
+
+                # Place in history grid (unravel model_idx to multi-dimensional index)
+                multi_idx = np.unravel_index(model_idx, self.models.shape)
+                history_models[(snapshot_idx,) + multi_idx] = snapshot_model
+
+        # Create new axes with TrainingAxis prepended
+        epoch_values = [snapshot[0] for snapshot in snapshots]
+        new_axes = [TrainingAxis(values=epoch_values)] + self.axes
+
+        # Create and return the history grid
+        # Note: cache_samples=False because history grids are read-only snapshots
+        # and won't be trained, so we don't need sample caching infrastructure
+        return ModelGrid(
+            create_model=self.create_model,
+            axes=new_axes,
+            cache_samples=False,
+            _models=history_models,
+        )
 
     def __getitem__(self, key) -> ModelGrid | ToyModel:
         if not isinstance(key, tuple):
@@ -392,7 +535,11 @@ class ModelGrid:
             else:
                 raise IndexError(f"Unsupported index type: {type(k)}")
 
-            new_axes.append(Axis(label=axis.label, values=values))
+            # Preserve axis type (e.g., TrainingAxis)
+            if isinstance(axis, TrainingAxis):
+                new_axes.append(TrainingAxis(label=axis.label, values=values))
+            else:
+                new_axes.append(Axis(label=axis.label, values=values))
 
         for dim in range(len(key), len(self.axes)):
             new_axes.append(self.axes[dim])

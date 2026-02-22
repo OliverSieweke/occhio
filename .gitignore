@@ -12,3 +12,4 @@ phase_change.ipynb
 test.ipynb
 .pytest_cache/
 .vscode/
+.ipynb_checkpoints
