@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pickle
 from dataclasses import dataclass
 from functools import cached_property
 from inspect import signature
@@ -83,6 +84,17 @@ class ModelGrid:
 
         if self.cache_samples:
             self._unique_distributions, self._sample_index = self._build_sample_index()
+
+    def _validate_args(
+        self, create_model: Callable[..., ToyModel], axes: list[Axis]
+    ) -> None:
+        if not axes:
+            raise ValueError("At least one axis must be provided.")
+
+        if "params" not in signature(create_model).parameters:
+            raise TypeError(
+                "create_model must accept a 'params' parameter (dict[str, Any])."
+            )
 
     def _initialize_models(self) -> NDArray[np.object_]:
         shape: tuple[int, ...] = self._shape_from_axes
@@ -200,6 +212,131 @@ class ModelGrid:
             type(model.ae).loss is type(flattened_models[0].ae).loss
             for model in flattened_models[1:]
         )
+
+    def __getitem__(self, key) -> ModelGrid | ToyModel:
+        if not isinstance(key, tuple):
+            key = (key,)
+
+        if len(key) > len(self.axes):
+            raise IndexError(
+                f"Too many indices: got {len(key)}, grid has {len(self.axes)} axes"
+            )
+
+        numpy_key: list[slice] = []
+        new_axes: list[Axis] = []
+
+        for dim, k in enumerate(key):
+            axis: Axis = self.axes[dim]
+            dim_size: int = len(axis.values)
+
+            if isinstance(k, int):
+                idx: int = k + dim_size if k < 0 else k
+                if idx < 0 or idx >= dim_size:
+                    raise IndexError(
+                        f"Index {k} out of bounds for axis '{axis.label}' "
+                        f"with size {dim_size}"
+                    )
+                numpy_key.append(slice(idx, idx + 1))
+                values = axis.values[idx : idx + 1]
+
+            elif isinstance(k, slice):
+                start, stop, step = k.start, k.stop, k.step
+                if start is not None and start < 0:
+                    start += dim_size
+                if stop is not None and stop < 0:
+                    stop += dim_size
+
+                if start is not None and (start < 0 or start >= dim_size):
+                    raise IndexError(
+                        f"Slice start {k.start} out of bounds for axis "
+                        f"'{axis.label}' with size {dim_size}"
+                    )
+                if stop is not None and (stop < 0 or stop > dim_size):
+                    raise IndexError(
+                        f"Slice stop {k.stop} out of bounds for axis "
+                        f"'{axis.label}' with size {dim_size}"
+                    )
+
+                if (
+                    step is None
+                    and start is not None
+                    and stop is not None
+                    and start > stop
+                ):
+                    step = -1
+
+                s = slice(start, stop, step)
+                numpy_key.append(s)
+                if step is not None and step < 0:
+                    range_start = start if start is not None else dim_size - 1
+                    range_stop = stop if stop is not None else -1
+                    indices = list(range(range_start, range_stop, step))
+                    values = axis.values[indices]
+                else:
+                    values = axis.values[s]
+            else:
+                raise IndexError(f"Unsupported index type: {type(k)}")
+
+            new_axes.append(Axis(label=axis.label, values=values))
+
+        for dim in range(len(key), len(self.axes)):
+            new_axes.append(self.axes[dim])
+            numpy_key.append(slice(None))
+
+        all_int: bool = len(key) == len(self.axes) and all(
+            isinstance(k, int) for k in key
+        )
+        if all_int:
+            resolved_idx = tuple(s.start for s in numpy_key)
+            return self.models[resolved_idx]
+
+        sliced_models: NDArray[np.object_] = self.models[tuple(numpy_key)]
+
+        return ModelGrid(
+            create_model=self.create_model,
+            axes=new_axes,
+            cache_samples=self.cache_samples,
+            _models=sliced_models,
+        )
+
+    @cached_property
+    def parameters_mesh(self):
+        """Returns a tuple of the meshgrid of the axes."""
+        return meshgrid(*(axis.values for axis in self.axes), indexing="ij")
+
+    @property
+    def _shape_from_axes(self) -> tuple[int, ...]:
+        """Returns the shape of the axes that define the nested structure of the models."""
+        return tuple(len(axis.values) for axis in self.axes)
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        return self.models.shape
+
+    @property
+    def describe(self) -> dict[str, int]:
+        """Returns a dictionary of the axis labels and their lengths."""
+        return {axis.label: len(axis.values) for axis in self.axes}
+
+    def save(self, path: str) -> None:
+        if not isinstance(path, str) or not path:
+            raise TypeError("Path must be a non-empty string.")
+        if not path.endswith(".pkl"):
+            path += ".pkl"
+        with open(path, "wb") as f:
+            pickle.dump(self, f)
+
+    @classmethod
+    def load(cls, path: str) -> ModelGrid:
+        if not isinstance(path, str) or not path:
+            raise TypeError("Path must be a non-empty string.")
+        if not path.endswith(".pkl"):
+            path += ".pkl"
+        with open(path, "rb") as f:
+            obj = pickle.load(f)
+        if not isinstance(obj, cls):
+            raise TypeError(f"File at {path} does not contain a ModelGrid object.")
+        return obj
 
     # If you change the signature or implementation here, make sure you keep it
     # consistent with ToyModel.fit()
@@ -327,119 +464,3 @@ class ModelGrid:
             self._unique_distributions, self._sample_index = self._build_sample_index()
 
         return losses
-
-    def __getitem__(self, key) -> ModelGrid | ToyModel:
-        if not isinstance(key, tuple):
-            key = (key,)
-
-        if len(key) > len(self.axes):
-            raise IndexError(
-                f"Too many indices: got {len(key)}, grid has {len(self.axes)} axes"
-            )
-
-        numpy_key: list[slice] = []
-        new_axes: list[Axis] = []
-
-        for dim, k in enumerate(key):
-            axis: Axis = self.axes[dim]
-            dim_size: int = len(axis.values)
-
-            if isinstance(k, int):
-                idx: int = k + dim_size if k < 0 else k
-                if idx < 0 or idx >= dim_size:
-                    raise IndexError(
-                        f"Index {k} out of bounds for axis '{axis.label}' "
-                        f"with size {dim_size}"
-                    )
-                numpy_key.append(slice(idx, idx + 1))
-                values = axis.values[idx : idx + 1]
-
-            elif isinstance(k, slice):
-                start, stop, step = k.start, k.stop, k.step
-                if start is not None and start < 0:
-                    start += dim_size
-                if stop is not None and stop < 0:
-                    stop += dim_size
-
-                if start is not None and (start < 0 or start >= dim_size):
-                    raise IndexError(
-                        f"Slice start {k.start} out of bounds for axis "
-                        f"'{axis.label}' with size {dim_size}"
-                    )
-                if stop is not None and (stop < 0 or stop > dim_size):
-                    raise IndexError(
-                        f"Slice stop {k.stop} out of bounds for axis "
-                        f"'{axis.label}' with size {dim_size}"
-                    )
-
-                if (
-                    step is None
-                    and start is not None
-                    and stop is not None
-                    and start > stop
-                ):
-                    step = -1
-
-                s = slice(start, stop, step)
-                numpy_key.append(s)
-                if step is not None and step < 0:
-                    range_start = start if start is not None else dim_size - 1
-                    range_stop = stop if stop is not None else -1
-                    indices = list(range(range_start, range_stop, step))
-                    values = axis.values[indices]
-                else:
-                    values = axis.values[s]
-            else:
-                raise IndexError(f"Unsupported index type: {type(k)}")
-
-            new_axes.append(Axis(label=axis.label, values=values))
-
-        for dim in range(len(key), len(self.axes)):
-            new_axes.append(self.axes[dim])
-            numpy_key.append(slice(None))
-
-        all_int: bool = len(key) == len(self.axes) and all(
-            isinstance(k, int) for k in key
-        )
-        if all_int:
-            resolved_idx = tuple(s.start for s in numpy_key)
-            return self.models[resolved_idx]
-
-        sliced_models: NDArray[np.object_] = self.models[tuple(numpy_key)]
-
-        return ModelGrid(
-            create_model=self.create_model,
-            axes=new_axes,
-            cache_samples=self.cache_samples,
-            _models=sliced_models,
-        )
-
-    @cached_property
-    def parameters_mesh(self):
-        """Returns a tuple of the meshgrid of the axes."""
-        return meshgrid(*(axis.values for axis in self.axes), indexing="ij")
-
-    @property
-    def _shape_from_axes(self) -> tuple[int, ...]:
-        """Returns the shape of the axes that define the nested structure of the models."""
-        return tuple(len(axis.values) for axis in self.axes)
-
-    @property
-    def shape(self) -> tuple[int, ...]:
-        return self.models.shape
-
-    @property
-    def describe(self) -> dict[str, int]:
-        """Returns a dictionary of the axis labels and their lengths."""
-        return {axis.label: len(axis.values) for axis in self.axes}
-
-    def _validate_args(
-        self, create_model: Callable[..., ToyModel], axes: list[Axis]
-    ) -> None:
-        if not axes:
-            raise ValueError("At least one axis must be provided.")
-
-        if "params" not in signature(create_model).parameters:
-            raise TypeError(
-                "create_model must accept a 'params' parameter (dict[str, Any])."
-            )
