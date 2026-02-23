@@ -30,7 +30,7 @@ from plotly.subplots import make_subplots
 from typing import Literal
 
 # occhio core abstractions
-from occhio import ToyModel as OcchioToyModel
+from occhio import ToyModel
 from occhio.distributions import Distribution
 from occhio.autoencoder import AutoEncoderBase
 from occhio.distributions.sparse import SparseUniform
@@ -225,8 +225,8 @@ def plot_transition_matrices(P_true, P_ce, P_mse):
 
 # %%
 def plot_loss_and_embeddings(
-    tm_ce: OcchioToyModel,
-    tm_mse: OcchioToyModel,
+    tm_ce: ToyModel,
+    tm_mse: ToyModel,
     losses_ce: list[float],
     losses_mse: list[float],
 ):
@@ -418,7 +418,7 @@ def plot_decode_plane(ae: ComputeAutoEncoder, N: int, title: str):
 
 
 # %%
-def plot_geometry(tm_ce: OcchioToyModel, tm_mse: OcchioToyModel):
+def plot_geometry(tm_ce: ToyModel, tm_mse: ToyModel):
     """
     Occhio-inspired geometric analysis: feature norms and cross-feature
     interferences for both models, displayed as bar charts.
@@ -495,7 +495,7 @@ dist = MarkovChainDistribution(P, seq_len=T, seed=seed)
 # %%
 print("=== Cross-Entropy Loss ===")
 ae_ce = ComputeAutoEncoder(N, k, seed=seed)
-tm_ce = OcchioToyModel(dist, ae_ce, importances=0.9 ** torch.arange(N))
+tm_ce = ToyModel(dist, ae_ce, importances=0.9 ** torch.arange(N))
 losses_ce, _ = tm_ce.fit(
     n_epochs=25_000,
     loss_fn=lambda raw, x_hat, imp: ae_ce.ce_loss(x_hat, raw[1], imp),
@@ -512,7 +512,7 @@ with torch.no_grad():
 # %%
 print("\n=== MSE Loss ===")
 ae_mse = ComputeAutoEncoder(N, k, seed=seed)
-tm_mse = OcchioToyModel(dist, ae_mse, importances=0.9 ** torch.arange(N))
+tm_mse = ToyModel(dist, ae_mse, importances=0.9 ** torch.arange(N))
 losses_mse, _ = tm_mse.fit(
     n_epochs=25_000,
     loss_fn=lambda raw, x_hat, imp: ae_mse.mse_loss(x_hat, raw[2], imp),
@@ -645,10 +645,9 @@ def plot_embedding_arrows(tm, title: str = "Feature Embeddings W"):
 # %%
 p_active = 1.0
 
-print("\n=== Sparse Markov (SparseUniform × ComputeAutoEncoder[relu] × MSE) ===")
 sparse_dist = SparseUniform(N, p_active=p_active)
 ae_sparse = ComputeAutoEncoder(N, k, decode_activation="relu")
-tm_sparse = OcchioToyModel(sparse_dist, ae_sparse, importances=0.9 ** torch.arange(N))
+tm_sparse = ToyModel(sparse_dist, ae_sparse, importances=0.9 ** torch.arange(N))
 losses_sparse, _ = tm_sparse.fit(
     n_epochs=25_000,
     loss_fn=lambda raw, x_hat, imp: ae_sparse.loss(raw @ P, x_hat, imp),
