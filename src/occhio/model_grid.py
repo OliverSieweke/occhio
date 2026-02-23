@@ -14,6 +14,7 @@ from torch import Tensor, meshgrid
 from torch.func import functional_call, stack_module_state
 from torch.optim import AdamW
 from tqdm import tqdm
+from warnings import warn
 
 from occhio.autoencoder import AutoEncoderBase
 from occhio.distributions.base import Distribution
@@ -326,7 +327,7 @@ class ModelGrid:
         with open(path, "wb") as f:
             pickle.dump(self.models, f)
 
-    def load_models(cls, path: str) -> None:
+    def load_models(self, path: str) -> None:
         if not isinstance(path, str) or not path:
             raise TypeError("Path must be a non-empty string.")
         if not path.endswith(".pkl"):
@@ -334,8 +335,66 @@ class ModelGrid:
         with open(path, "rb") as f:
             models = pickle.load(f)
         if not isinstance(models, np.ndarray):
-            raise TypeError(f"File at {path} does not contain a numpy ndarray object.")
+            raise TypeError(f"File at {path} does not contain a numpy ndarray.")
+        if models.dtype != object:
+            raise TypeError(
+                f"Expected an object array of ToyModels, got dtype={models.dtype}."
+            )
+
+        expected_shape: tuple[int, ...] = self._shape_from_axes
+        if models.shape != expected_shape:
+            raise ValueError(
+                f"Shape mismatch: file has {models.shape}, "
+                f"but axes define {expected_shape}."
+            )
+        if models.shape != self.models.shape:
+            raise ValueError(
+                f"Shape mismatch: file has {models.shape}, "
+                f"but current grid has {self.models.shape}."
+            )
+
+        for m in models.ravel():
+            if not isinstance(m, ToyModel):
+                raise TypeError(
+                    f"Expected all entries to be ToyModel, got {type(m).__name__}."
+                )
+
+        loaded_device = models.ravel()[0].ae.device
+        grid_device = self.models.ravel()[0].ae.device
+        if str(loaded_device) != str(grid_device):
+            warn(
+                f"Device mismatch: loaded models are on '{loaded_device}', "
+                f"but the current grid is on '{grid_device}'. "
+                f"Moving loaded models to '{grid_device}'.",
+                stacklevel=2,
+            )
+            for m in models.ravel():
+                m.ae.to(grid_device)
+                m.distribution.to(grid_device)
+                m.importances = m.importances.to(grid_device)
+
+        axes_summary = ", ".join(
+            f"'{a.label}' ({len(a.values)} values)" for a in self.axes
+        )
+        warn(
+            f"Loading models from '{path}'. The current axes [{axes_summary}] "
+            f"may not match the axes used to generate the saved models. "
+            f"Verify that axes labels, values, and ordering are consistent "
+            f"with the file's original grid.",
+            stacklevel=2,
+        )
+
         self.models = models
+        self._validate_autoencoders()
+
+        if self.cache_samples:
+            self._unique_distributions, self._sample_index = self._build_sample_index()
+
+        print(
+            f"Models loaded from '{path}': "
+            f"shape={self.models.shape}, device='{grid_device}', "
+            f"models={self.models.size}"
+        )
 
     # If you change the signature or implementation here, make sure you keep it
     # consistent with ToyModel.fit()
