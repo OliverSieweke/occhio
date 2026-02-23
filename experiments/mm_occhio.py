@@ -79,14 +79,9 @@ class MarkovChainDistribution(Distribution):
         self._x_idx = seq[:-1]  # current state indices
         self._y_idx = seq[1:]  # next    state indices
 
-    def sample(self, batch_size: int) -> torch.Tensor:
-        """Returns (B, N) one-hot current states — satisfies Distribution interface."""
-        idx = torch.randint(len(self._x_idx), (batch_size,), generator=self.generator)
-        return F.one_hot(self._x_idx[idx], self.n_features).float()
-
-    def sample_pairs(self, batch_size: int, generator=None):
+    def sample(self, batch_size: int):
         """Returns (x_oh, y_idx, y_oh): current one-hot, next index, next one-hot."""
-        idx = torch.randint(len(self._x_idx), (batch_size,), generator=generator)
+        idx = torch.randint(len(self._x_idx), (batch_size,), generator=self.generator)
         x_oh = F.one_hot(self._x_idx[idx], self.n_features).float()
         y_i = self._y_idx[idx]
         y_oh = F.one_hot(y_i, self.n_features).float()
@@ -195,121 +190,6 @@ class ComputeAutoEncoder(AutoEncoderBase):
         self.b = nn.Parameter(torch.zeros(N))
 
 
-# ─── MarkovToyModel  (thin wrapper matching occhio's ToyModel API) ─────────────
-
-
-# %%
-class MarkovToyModel:
-    """
-    Wraps MarkovChainDistribution + ComputeAutoEncoder in an occhio-compatible
-    interface so we can call the same geometric analysis properties
-    (W, feature_norms, interferences, …) that ToyModel exposes.
-
-    Also exposes fit() which runs the prediction-task training loop.
-    """
-
-    def __init__(
-        self,
-        distribution: MarkovChainDistribution,
-        ae: ComputeAutoEncoder,
-    ):
-        self.distribution = distribution
-        self.ae = ae
-        self.n_features = ae.n_features
-        self.importances = 0.9 ** torch.arange(ae.n_features)
-
-    def fit(
-        self,
-        loss_type: Literal["ce", "mse"] = "ce",
-        epochs: int = 20_000,
-        lr: float = 3e-4,
-        weight_decay: float = 0.05,
-        batch_size: int = 1024,
-        seed: int = 42,
-        verbose: bool = True,
-    ) -> tuple[torch.Tensor, list[float]]:
-        """
-        Train the model and return (P_learned, losses).
-
-        P_learned : (N, N) learned transition matrix (one forward pass per state)
-        losses    : per-epoch scalar losses
-        """
-        N = self.ae.n_features
-        importances = self.importances.to(self.ae.device or "cpu")
-        optimizer = torch.optim.AdamW(
-            self.ae.parameters(), lr=lr, weight_decay=weight_decay
-        )
-        rng = torch.Generator().manual_seed(seed)
-
-        losses = []
-        for epoch in range(epochs):
-            x_oh, y_idx, y_oh = self.distribution.sample_pairs(
-                batch_size, generator=rng
-            )
-            y_hat, _ = self.ae(x_oh)
-
-            if loss_type == "ce":
-                loss = self.ae.ce_loss(y_hat, y_idx, importances)
-            else:
-                loss = self.ae.mse_loss(y_hat, y_oh, importances)
-
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            losses.append(loss.item())
-
-            if verbose and (epoch + 1) % 5_000 == 0:
-                tag = "CE" if loss_type == "ce" else "MSE"
-                print(f"  Epoch {epoch + 1:5d} | {tag} loss: {loss.item():.4f}")
-
-        with torch.no_grad():
-            P_learned = torch.zeros(N, N)
-            for s in range(N):
-                e = F.one_hot(torch.tensor([s]), N).float()
-                P_learned[s] = self.ae(e)[0][0]
-
-        return P_learned, losses
-
-    # ── geometric analysis (mirrors ToyModel) ──────────────────────────────
-
-    @property
-    @torch.no_grad()
-    def W(self) -> torch.Tensor:
-        """(k, N) encoder weight matrix — identical to occhio ToyModel.W."""
-        return self.ae.W
-
-    @property
-    @torch.no_grad()
-    def W_normalized(self) -> torch.Tensor:
-        return F.normalize(self.W, dim=0)
-
-    @property
-    @torch.no_grad()
-    def feature_norms(self) -> torch.Tensor:
-        return torch.linalg.vector_norm(self.W, dim=0)
-
-    @property
-    @torch.no_grad()
-    def feature_representations(self) -> torch.Tensor:
-        return (self.W**2).sum(dim=0)
-
-    @property
-    @torch.no_grad()
-    def interferences(self) -> torch.Tensor:
-        return (self.W_normalized.T @ self.W) ** 2
-
-    @property
-    @torch.no_grad()
-    def total_feature_interferences(self) -> torch.Tensor:
-        I = self.interferences.clone()
-        return I.fill_diagonal_(0).sum(dim=1)
-
-    @property
-    @torch.no_grad()
-    def feature_dimensionalities(self) -> torch.Tensor:
-        return self.feature_representations / self.interferences.sum(dim=1)
-
-
 # ─── Plotting ─────────────────────────────────────────────────────────────────
 
 
@@ -345,8 +225,8 @@ def plot_transition_matrices(P_true, P_ce, P_mse):
 
 # %%
 def plot_loss_and_embeddings(
-    tm_ce: MarkovToyModel,
-    tm_mse: MarkovToyModel,
+    tm_ce: OcchioToyModel,
+    tm_mse: OcchioToyModel,
     losses_ce: list[float],
     losses_mse: list[float],
 ):
@@ -538,7 +418,7 @@ def plot_decode_plane(ae: ComputeAutoEncoder, N: int, title: str):
 
 
 # %%
-def plot_geometry(tm_ce: MarkovToyModel, tm_mse: MarkovToyModel):
+def plot_geometry(tm_ce: OcchioToyModel, tm_mse: OcchioToyModel):
     """
     Occhio-inspired geometric analysis: feature norms and cross-feature
     interferences for both models, displayed as bar charts.
@@ -615,16 +495,34 @@ dist = MarkovChainDistribution(P, seq_len=T, seed=seed)
 # %%
 print("=== Cross-Entropy Loss ===")
 ae_ce = ComputeAutoEncoder(N, k, seed=seed)
-tm_ce = MarkovToyModel(dist, ae_ce)
-P_ce, losses_ce = tm_ce.fit(loss_type="ce", epochs=25_000, seed=seed)
+tm_ce = OcchioToyModel(dist, ae_ce, importances=0.9 ** torch.arange(N))
+losses_ce, _ = tm_ce.fit(
+    n_epochs=25_000,
+    loss_fn=lambda raw, x_hat, imp: ae_ce.ce_loss(x_hat, raw[1], imp),
+    verbose=True,
+)
+with torch.no_grad():
+    P_ce = torch.zeros(N, N)
+    for s in range(N):
+        e = F.one_hot(torch.tensor([s]), N).float()
+        P_ce[s] = ae_ce(e)[0][0]
 
 # ─── Train MSE model ──────────────────────────────────────────────────────────
 
 # %%
 print("\n=== MSE Loss ===")
 ae_mse = ComputeAutoEncoder(N, k, seed=seed)
-tm_mse = MarkovToyModel(dist, ae_mse)
-P_mse, losses_mse = tm_mse.fit(loss_type="mse", epochs=25_000, seed=seed)
+tm_mse = OcchioToyModel(dist, ae_mse, importances=0.9 ** torch.arange(N))
+losses_mse, _ = tm_mse.fit(
+    n_epochs=25_000,
+    loss_fn=lambda raw, x_hat, imp: ae_mse.mse_loss(x_hat, raw[2], imp),
+    verbose=True,
+)
+with torch.no_grad():
+    P_mse = torch.zeros(N, N)
+    for s in range(N):
+        e = F.one_hot(torch.tensor([s]), N).float()
+        P_mse[s] = ae_mse(e)[0][0]
 
 # ─── Evaluation ───────────────────────────────────────────────────────────────
 
@@ -685,106 +583,6 @@ fig.show()
 
 
 # %%
-# ─── Sparse Markov Variant (SparseUniform × occhio ToyModel) ──────────────────
-#
-# Instead of sampling one-hot states from a Markov chain walk, we:
-#   1. Sample a sparse input  x ~ SparseUniform(N, p_active)   (multiple features on)
-#   2. Compute the prediction target  y = x @ P                (linear mix of P rows)
-#   3. Train the model to predict y from x with MSE loss
-#
-# This is a natural generalisation of the one-hot Markov task: a sparse x is a
-# "soft" mixture of states, and y is the correspondingly mixed next-state dist.
-# Using SparseUniform means the model sees richer superposition structure
-# during training — closer to the standard occhio setup.
-#
-# Since targets are continuous (not one-hot), we use ComputeAutoEncoder with
-# decode_activation="relu" (outputs ≥ 0) and MSE via the base-class loss.
-
-
-# %%
-class SparseMarkovToyModel(OcchioToyModel):
-    """
-    Extends occhio's ToyModel to learn the Markov prediction task on sparse inputs.
-
-    Training target: y = x @ P  instead of  x  (reconstruction).
-
-    A sparse input x represents a soft mixture of states; multiplying by P
-    gives the expected next-state distribution under that mixture.  The model
-    therefore must learn to "store" all rows of P in its 2-D embedding weight W.
-
-    Uses ComputeAutoEncoder with decode_activation="relu" so outputs are ≥ 0,
-    matching the non-simplex targets.  The geometric analysis properties
-    inherited from ToyModel (W, feature_norms, interferences, …) work unchanged.
-    """
-
-    def __init__(self, P: torch.Tensor, distribution, ae, **kwargs):
-        super().__init__(distribution=distribution, ae=ae, **kwargs)
-        self.P = P
-
-    def fit(
-        self,
-        n_epochs: int,
-        batch_size: int = 1024,
-        learning_rate: float = 3e-4,
-        weight_decay: float = 0.05,
-        track_losses: bool = True,
-        optimizer=None,
-        hooks: list = [],
-        hook_freq: int = 1,
-        verbose: bool = True,
-    ) -> tuple[list[float], list]:
-        """
-        Train the model to predict y = x @ P from sparse inputs x.
-
-        Drop-in replacement for ToyModel.fit — same signature and return type.
-        Use the .P_learned property after training to read off the learned matrix.
-        """
-        from torch.optim import AdamW
-
-        if optimizer is None:
-            optimizer = AdamW(
-                self.ae.parameters(), lr=learning_rate, weight_decay=weight_decay
-            )
-        losses = []
-        hook_returns = [[] for _ in hooks]
-
-        for ep in range(n_epochs):
-            x = self.distribution.sample(batch_size)
-            y = x @ self.P  # (B, N) — expected next-state mixture
-            y_hat = self.ae.forward(x)[0]  # (B, N) — ReLU prediction
-            loss = self.ae.loss(y, y_hat, self.importances)
-
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-
-            if track_losses:
-                losses.append(loss.item())
-            if verbose and (ep + 1) % 5_000 == 0:
-                print(f"  Epoch {ep + 1:5d} | MSE loss: {loss.item():.5f}")
-            if hooks and (ep % hook_freq == 0 or ep == n_epochs - 1):
-                with torch.no_grad():
-                    hook_data = dict(
-                        tm=self, epoch=ep, loss=loss.item(), x=x, x_hat=y_hat
-                    )
-                    for i, h in enumerate(hooks):
-                        hook_returns[i].append(h(hook_data))
-
-        return losses, hook_returns
-
-    @property
-    @torch.no_grad()
-    def P_learned(self) -> torch.Tensor:
-        """Learned transition matrix: model output for each one-hot basis vector."""
-        N = self.n_features
-        P = torch.zeros(N, N)
-        for s in range(N):
-            e = F.one_hot(torch.tensor([s]), N).float()
-            P[s] = self.ae(e)[0][0]
-        return P
-
-
-# ── helper: occhio-style arrow plot (single model) ─────────────────────────────
 
 
 def plot_embedding_arrows(tm, title: str = "Feature Embeddings W"):
@@ -850,14 +648,17 @@ p_active = 1.0
 print("\n=== Sparse Markov (SparseUniform × ComputeAutoEncoder[relu] × MSE) ===")
 sparse_dist = SparseUniform(N, p_active=p_active)
 ae_sparse = ComputeAutoEncoder(N, k, decode_activation="relu")
-tm_sparse = SparseMarkovToyModel(
-    P=P,
-    distribution=sparse_dist,
-    ae=ae_sparse,
-    importances=0.9 ** torch.arange(N),
+tm_sparse = OcchioToyModel(sparse_dist, ae_sparse, importances=0.9 ** torch.arange(N))
+losses_sparse, _ = tm_sparse.fit(
+    n_epochs=25_000,
+    loss_fn=lambda raw, x_hat, imp: ae_sparse.loss(raw @ P, x_hat, imp),
+    verbose=True,
 )
-losses_sparse, _ = tm_sparse.fit(n_epochs=25_000)
-P_sparse = tm_sparse.P_learned
+with torch.no_grad():
+    P_sparse = torch.zeros(N, N)
+    for s in range(N):
+        e = F.one_hot(torch.tensor([s]), N).float()
+        P_sparse[s] = ae_sparse(e)[0][0]
 
 # ─── Evaluation ──────────────────────────────────────────────────────────────
 
