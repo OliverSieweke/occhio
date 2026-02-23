@@ -208,3 +208,4 @@ def plot_geometry(
     )
 
     return fig
+
