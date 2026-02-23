@@ -318,25 +318,24 @@ class ModelGrid:
         """Returns a dictionary of the axis labels and their lengths."""
         return {axis.label: len(axis.values) for axis in self.axes}
 
-    def save(self, path: str) -> None:
+    def save_models(self, path: str) -> None:
         if not isinstance(path, str) or not path:
             raise TypeError("Path must be a non-empty string.")
         if not path.endswith(".pkl"):
             path += ".pkl"
         with open(path, "wb") as f:
-            pickle.dump(self, f)
+            pickle.dump(self.models, f)
 
     @classmethod
-    def load(cls, path: str) -> ModelGrid:
+    def load_models(cls, path: str) -> None:
         if not isinstance(path, str) or not path:
             raise TypeError("Path must be a non-empty string.")
         if not path.endswith(".pkl"):
             path += ".pkl"
         with open(path, "rb") as f:
-            obj = pickle.load(f)
-        if not isinstance(obj, cls):
-            raise TypeError(f"File at {path} does not contain a ModelGrid object.")
-        return obj
+            models = pickle.load(f)
+        if not isinstance(models, np.ndarray):
+            raise TypeError(f"File at {path} does not contain a numpy ndarray object.")
 
     # If you change the signature or implementation here, make sure you keep it
     # consistent with ToyModel.fit()
