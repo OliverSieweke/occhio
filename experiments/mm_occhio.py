@@ -153,7 +153,7 @@ class ComputeAutoEncoder(AutoEncoderBase):
 
     def compute_step(self, h: torch.Tensor) -> torch.Tensor:
         """(B, k) → (B, k)  : linear compute / routing step."""
-        return h @ self.Z.T
+        return h + h @ self.Z.T
 
     def decode(self, z: torch.Tensor) -> torch.Tensor:
         """(B, k) → (B, N)  : project back, then activate."""
@@ -845,7 +845,7 @@ def plot_embedding_arrows(tm, title: str = "Feature Embeddings W"):
 # ─── Train sparse model ───────────────────────────────────────────────────────
 
 # %%
-p_active = 0.1
+p_active = 1.0
 
 print("\n=== Sparse Markov (SparseUniform × ComputeAutoEncoder[relu] × MSE) ===")
 sparse_dist = SparseUniform(N, p_active=p_active)

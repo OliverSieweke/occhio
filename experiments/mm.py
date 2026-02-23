@@ -69,7 +69,7 @@ class TMoSModel(nn.Module):
         return x @ self.W.T
 
     def compute(self, h: torch.Tensor) -> torch.Tensor:
-        return h @ self.Z.T
+        return h + h @ self.Z.T
 
     def unembedd(self, z: torch.Tensor) -> torch.Tensor:
         return F.softmax(z @ self.W + self.b, dim=-1)
@@ -443,11 +443,15 @@ def plot_decode_plane(model, N, title="Decode plane: ReLU(h·W + b)"):
 # %%
 N, k = 7, 2
 T = 20_000
-N_EPOCHS = 15_000
+N_EPOCHS = 25_000
 seed = 4
 
-P = make_transition_matrix(N, sparsity=0.5 / N, seed=1)
-# P = 0.5 * torch.eye(N) + 0.5 * torch.roll(torch.eye(N), shifts=1, dims=1)
+# P = make_transition_matrix(N, sparsity=0.5 / N, seed=1)
+P = (
+    0.1 * torch.eye(N)
+    + 0.2 * torch.roll(torch.eye(N), shifts=1, dims=1)
+    + 0.7 * torch.roll(torch.eye(N), shifts=2, dims=1)
+)
 
 px.imshow(P.numpy())
 
@@ -507,7 +511,10 @@ plot_decode_plane(model_mse, N, title="MSE model — decode plane: ReLU(h·W + b
 
 
 # %%
-px.imshow((model_ce.W.T @ model_ce.Z @ model_ce.W).detach().numpy())
+# px.imshow((model_ce.W.T @ model_ce.Z @ model_ce.W).detach().numpy())
+
+# # %%
+# px.imshow((model_mse.W.T @ model_mse.Z @ model_mse.W).detach().numpy())
 
 # %%
 print(model_ce.W)
