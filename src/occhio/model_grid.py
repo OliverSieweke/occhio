@@ -326,7 +326,6 @@ class ModelGrid:
         with open(path, "wb") as f:
             pickle.dump(self.models, f)
 
-    @classmethod
     def load_models(cls, path: str) -> None:
         if not isinstance(path, str) or not path:
             raise TypeError("Path must be a non-empty string.")
@@ -336,6 +335,7 @@ class ModelGrid:
             models = pickle.load(f)
         if not isinstance(models, np.ndarray):
             raise TypeError(f"File at {path} does not contain a numpy ndarray object.")
+        self.models = models
 
     # If you change the signature or implementation here, make sure you keep it
     # consistent with ToyModel.fit()
