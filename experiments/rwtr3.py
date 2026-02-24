@@ -1,3 +1,4 @@
+# %%
 """
 I investigate the Random Walk to Root distribution,
 to see if it exhibits ocllapse.
@@ -5,10 +6,11 @@ I also look at the AE representation of these distributions.
 """
 
 # %%
-from occhio.distributions.dag import DAGRandomWalkToRoot
+from occhio.distributions import DAGRandomWalkToRoot, DistributionStack
 from occhio.sae import SAESimple, TopKIgnoreSAE
 from occhio.autoencoder import MLPEncoder, TiedLinearRelu
 from occhio.toy_model import ToyModel
+from occhio.visualization import plot_embedding
 import torch
 import numpy as np
 import plotly.express as px
@@ -58,25 +60,30 @@ things: list[np.ndarray] = [
 # %%
 torch.set_printoptions(3, sci_mode=False)
 gen = torch.Generator()
-gen.manual_seed(1)
+gen.manual_seed(2)
+
+N_STACKS = 2
 
 p_active = [1.0, 1.0, 1.0]
 
-dist = DAGRandomWalkToRoot(
-    n_features=3, p_active=p_active, adjacency=things[1], generator=gen
+dist = DistributionStack(
+    [
+        DAGRandomWalkToRoot(
+            n_features=3, p_active=p_active, adjacency=things[2], generator=gen
+        )
+        for i in range(N_STACKS)
+    ],
+    sampling_mode="sparse",
+    p_meta=0.3,
 )
-
-# We force DAG layout
-dist.adjacency = torch.Tensor(things[2])
-dist._build_parent_cache()
+print(dist.n_features)
 
 # Validate p_active
 torch.mean(1.0 * (dist.sample(1000) > 0.0), dim=0)
 
 
 # %%
-# ae = MLPEncoder([3, 2], [2, 6, 3], generator=gen)
-ae = TiedLinearRelu(3, 2, generator=gen)
+ae = TiedLinearRelu(3 * N_STACKS, 2, generator=gen)
 tm = ToyModel(dist, ae, generator=gen)
 losses = tm.fit(15_000, verbose=True)[0]
 
@@ -135,30 +142,10 @@ fig.add_trace(
 #     go.Scatter(x=em_hat_samples[0], y=em_hat_samples[1], mode="markers", name="SAE")
 # )
 
-# %%
-patterns = torch.tensor([[1, 0, 0], [1, 1, 0], [1, 0, 1]], dtype=torch.float32)
-px.imshow(
-    patterns.detach().numpy(), color_continuous_scale="Reds", labels=dict(y="Pattern")
-)
 
 # %%
-encoded_patterns = sae.encode(tm.encode(patterns)).detach().numpy()
-px.imshow(
-    encoded_patterns,
-    title="Encoded Patterns",
-    labels=dict(x="Latent Dim", y="Pattern"),
-    zmax=0.2,
-    color_continuous_scale="Reds",
-)
+emb = tm.W.detach().numpy()
 
-# %%
-patterns = torch.tensor(
-    [[1, 0, 0], [0, 1, 0], [1, 0, 1], [0, 1, 1]], dtype=torch.float32
-)
-
-encoded_patterns = sae.encode(tm.encode(patterns)).detach().numpy()
-px.imshow(
-    encoded_patterns, title="Encoded Patterns", labels=dict(x="Latent Dim", y="Pattern")
-)
+px.scatter(x=emb[0], y=emb[1], hover_name=list(range(emb.shape[1])))
 
 # %%
