@@ -446,7 +446,7 @@ T = 20_000
 N_EPOCHS = 25_000
 seed = 4
 
-# P = make_transition_matrix(N, sparsity=0.5 / N, seed=1)
+P = make_transition_matrix(N, sparsity=0.5 / N, seed=1)
 P = (
     0.1 * torch.eye(N)
     + 0.2 * torch.roll(torch.eye(N), shifts=1, dims=1)
