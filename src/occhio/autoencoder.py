@@ -4,7 +4,7 @@ import functools
 from math import sqrt
 from torch import Tensor
 import torch.nn.functional as F
-from typing import Literal
+from typing import Literal, Callable
 import torch.nn as nn
 import torch
 from abc import ABC, abstractmethod
@@ -38,6 +38,7 @@ class AutoEncoderBase(nn.Module, ABC):
 
     def __init__(
         self,
+        loss_fn: Callable | None = None,
         device: torch.device | str | None = None,
         generator: torch.Generator | None = None,
     ):
@@ -46,6 +47,8 @@ class AutoEncoderBase(nn.Module, ABC):
         Note that we write device to `_init_device`, which remembers where the user intends to store the device.
         """
         super().__init__()
+        if loss_fn is not None:
+            self.loss = loss_fn  # type: ignore[method-assign]
         if device is not None and generator is not None:
             gen_device = torch.device(generator.device)
             dev = torch.device(device)
@@ -302,11 +305,23 @@ class ComputeAutoEncoder(AutoEncoderBase):
         return (per_sample * weights).mean()
 
     def mse_loss(
-        self, y_hat: torch.Tensor, y_oh: torch.Tensor, importances: torch.Tensor
+        self, y_hat: torch.Tensor, y_true: torch.Tensor, importances: Tensor | None
+    ) -> torch.Tensor:
+        """Importance-weighted MSE. Prediction first, target second (mirrors ce_loss)."""
+        if importances is None:
+            importances = torch.ones(self.n_features, device=self.device)  # ty:ignore
+        per_sample = (y_true - y_hat).pow(2).sum(dim=-1)
+        weights = importances[y_hat.argmax(dim=-1)]
+        return (per_sample * weights).mean()
+
+    def loss(
+        self, x_true: Tensor, x_hat: Tensor, importances: Tensor | None
     ) -> torch.Tensor:
         """Importance-weighted MSE between predicted probs and one-hot target."""
-        per_sample = (y_hat - y_oh).pow(2).sum(dim=-1)
-        weights = importances[y_oh.argmax(dim=-1)]
+        if importances is None:
+            importances = torch.ones(self.n_features, device=self.device)  # ty:ignore
+        per_sample = (x_true - x_hat).pow(2).sum(dim=-1)
+        weights = importances[x_hat.argmax(dim=-1)]
         return (per_sample * weights).mean()
 
     def resample_weights(self):

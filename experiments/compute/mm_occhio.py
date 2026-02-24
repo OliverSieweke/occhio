@@ -274,11 +274,12 @@ dist = MarkovChainDistribution(P, seq_len=T, seed=seed)
 
 # %%
 print("=== Cross-Entropy Loss ===")
-ae_ce = ComputeAutoEncoder(N, k, seed=seed)
+ae_ce = ComputeAutoEncoder(
+    N, k, seed=seed, loss_fn=lambda raw, x_hat, imp: ae_ce.ce_loss(x_hat, raw[1], imp)
+)
 tm_ce = ToyModel(dist, ae_ce, importances=0.9 ** torch.arange(N))
 losses_ce, hooks_ce = tm_ce.fit(
     n_epochs=15000,
-    loss_fn=lambda raw, x_hat, imp: ae_ce.ce_loss(x_hat, raw[1], imp),
     hooks=[lambda d: (d["epoch"], d["tm"].W)],
     hook_freq=250,
     verbose=True,
@@ -293,11 +294,12 @@ with torch.no_grad():
 
 # %%
 print("\n=== MSE Loss ===")
-ae_mse = ComputeAutoEncoder(N, k, seed=seed)
+ae_mse = ComputeAutoEncoder(
+    N, k, seed=seed, loss_fn=lambda raw, x_hat, imp: ae_mse.mse_loss(x_hat, raw[2], imp)
+)
 tm_mse = ToyModel(dist, ae_mse, importances=0.9 ** torch.arange(N))
 losses_mse, hooks_mse = tm_mse.fit(
     n_epochs=15000,
-    loss_fn=lambda raw, x_hat, imp: ae_mse.mse_loss(x_hat, raw[2], imp),
     hooks=[lambda d: (d["epoch"], d["tm"].W)],
     hook_freq=250,
     verbose=True,

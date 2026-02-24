@@ -82,14 +82,12 @@ class ToyModel:
         hooks: list[Callable] = [],
         hook_freq: int = 1,
         verbose: bool = False,
-        loss_fn: Callable | None = None,
     ) -> tuple[list[float], list]:
         if optimizer is None:
             optimizer = AdamW(
                 self.ae.parameters(), lr=learning_rate, weight_decay=weight_decay
             )
 
-        _loss = loss_fn if loss_fn is not None else self.loss
         losses = []
         hook_returns = [[] for _ in hooks]
 
@@ -98,7 +96,7 @@ class ToyModel:
             x = raw[0] if isinstance(raw, tuple) else raw
             optimizer.zero_grad()
             x_hat = self.ae.forward(x)[0]  # Only take x_hat
-            loss = _loss(raw, x_hat, self.importances)
+            loss = self.ae.loss(raw, x_hat, self.importances)  # type: ignore[call-arg]
             loss.backward()
             optimizer.step()
 

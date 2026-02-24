@@ -28,11 +28,15 @@ p_active = 0.2
 P = 0.1 * torch.eye(N) + 0.9 * torch.roll(torch.eye(N), shifts=1, dims=1)
 
 sparse_dist = SparseUniform(N, p_active=p_active)
-ae_sparse = ComputeAutoEncoder(N, k, decode_activation="relu")
+ae_sparse = ComputeAutoEncoder(
+    N,
+    k,
+    decode_activation="relu",
+    loss_fn=lambda raw, x_hat, imp: ae_sparse.mse_loss(x_hat, raw @ P, imp),
+)
 tm_sparse = ToyModel(sparse_dist, ae_sparse, importances=0.9 ** torch.arange(N))
 losses_sparse, _ = tm_sparse.fit(
     n_epochs=25_000,
-    loss_fn=lambda raw, x_hat, imp: ae_sparse.loss(raw @ P, x_hat, imp),
     verbose=True,
 )
 with torch.no_grad():
