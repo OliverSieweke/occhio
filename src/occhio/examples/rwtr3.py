@@ -58,17 +58,19 @@ things: list[np.ndarray] = [
 # %%
 torch.set_printoptions(3, sci_mode=False)
 gen = torch.Generator()
-gen.manual_seed(1)
+gen.manual_seed(3)
+N_FEAT = 6
 
-p_active = [1.0, 1.0, 1.0]
+# p_active = [1.0, 1.0, 1.0, 1.0]
 
+# dist = DAGRandomWalkToRoot(
+#     n_features=3, beta=0.9, p_active=p_active, adjacency=things[1], generator=gen
+# )
 dist = DAGRandomWalkToRoot(
-    n_features=3, p_active=p_active, adjacency=things[1], generator=gen
+    n_features=N_FEAT, p_edge=2.5 / N_FEAT, beta=0.9, generator=gen
 )
 
-# We force DAG layout
-dist.adjacency = torch.Tensor(things[2])
-dist._build_parent_cache()
+print(dist.print_graph())
 
 # Validate p_active
 torch.mean(1.0 * (dist.sample(1000) > 0.0), dim=0)
@@ -76,7 +78,7 @@ torch.mean(1.0 * (dist.sample(1000) > 0.0), dim=0)
 
 # %%
 # ae = MLPEncoder([3, 2], [2, 6, 3], generator=gen)
-ae = TiedLinearRelu(3, 2, generator=gen)
+ae = TiedLinearRelu(N_FEAT, 2, generator=gen)
 tm = ToyModel(dist, ae, generator=gen)
 losses = tm.fit(15_000, verbose=True)[0]
 
@@ -99,7 +101,7 @@ gen.manual_seed(2)
 
 # This can only learn if k=2!
 # sae = TopKIgnoreSAE(2, 5, 0.01, k=1, generator=gen)
-sae = SAESimple(2, 5, 0.02, generator=gen)
+sae = SAESimple(2, 2 * N_FEAT, 0.02, generator=gen)
 
 losses = sae.train_sae(tm.sample_latent, 20_000)
 
@@ -136,7 +138,17 @@ fig.add_trace(
 # )
 
 # %%
-patterns = torch.tensor([[1, 0, 0], [1, 1, 0], [1, 0, 1]], dtype=torch.float32)
+emb = tm.W.detach().numpy()
+px.scatter(
+    x=emb[0],
+    y=emb[1],
+    hover_name=list(range(N_FEAT)),
+    color=list(range(N_FEAT)),
+    color_continuous_scale="Phase",
+)
+
+# %%
+patterns = 1.0 * (dist.sample(6) > 0)
 px.imshow(
     patterns.detach().numpy(), color_continuous_scale="Reds", labels=dict(y="Pattern")
 )
@@ -152,9 +164,7 @@ px.imshow(
 )
 
 # %%
-patterns = torch.tensor(
-    [[1, 0, 0], [0, 1, 0], [1, 0, 1], [0, 1, 1]], dtype=torch.float32
-)
+patterns = torch.eye(N_FEAT)
 
 encoded_patterns = sae.encode(tm.encode(patterns)).detach().numpy()
 px.imshow(

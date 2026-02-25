@@ -20,7 +20,7 @@ from occhio.visualization import plot_dynamic_scatter
 # %%
 DEVICE = "cpu"
 gen = torch.Generator("cpu")
-gen.manual_seed(5)
+gen.manual_seed(8)
 
 
 def my_hook(hook_data):
@@ -39,9 +39,9 @@ def feat_dim_and_interference(hook_data):
 
 dist = DistributionStack(
     [
-        SparseUniform(2, p_active=0.5, generator=gen, device=DEVICE),
-        SparseUniform(3, 0.5, generator=gen, device=DEVICE),
-        SparseUniform(3, 0.5, generator=gen, device=DEVICE),
+        SparseUniform(3, p_active=0.36, generator=gen, device=DEVICE),
+        SparseUniform(3, 0.36, generator=gen, device=DEVICE),
+        SparseUniform(3, 0.36, generator=gen, device=DEVICE),
     ],
     "sparse",
     p_meta=0.333,
@@ -53,14 +53,14 @@ dist = DistributionStack(
 
 
 n_hidden = 2
-importances = torch.tensor([0.95**i for i in range(dist.n_features)])
+importances = torch.tensor([0.9**i for i in range(dist.n_features)])
 
 # %%
 ae = TiedLinearRelu(dist.n_features, n_hidden, generator=gen)
 tm = ToyModel(dist, ae, importances=importances, generator=gen, device=DEVICE)
 losses, hook_returns = tm.fit(
-    40_000,
-    batch_size=1024,
+    n_epochs=60_000,
+    batch_size=128,
     verbose=False,
     hooks=[my_hook, feat_dim_and_interference],
     hook_freq=250,

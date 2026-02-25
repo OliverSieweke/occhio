@@ -218,7 +218,7 @@ class DAGRandomWalkToRoot(Distribution):
     def __init__(
         self,
         n_features: int,
-        p_edge: float = 0.1,
+        p_edge: float = 0.5,
         adjacency: Tensor | np.ndarray | None = None,
         beta: float = 1.0,
         p_active: list[float] | Tensor | None = None,
@@ -338,3 +338,14 @@ class DAGRandomWalkToRoot(Distribution):
         self._parent_counts = self._parent_counts.to(device)
         self._has_parents_mask = self._has_parents_mask.to(device)
         return self
+
+    def print_graph(self, labels=None):
+        n = self.adjacency.shape[0]
+        if labels is None:
+            labels = [str(i) for i in range(n)]
+        for i in range(n):
+            targets = [labels[j] for j in range(n) if self.adjacency[i, j]]
+            if targets:
+                print(f"  {labels[i]} → {', '.join(targets)}")
+            else:
+                print(f"  {labels[i]}  (no outgoing)")
