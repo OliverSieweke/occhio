@@ -28,6 +28,7 @@ extensions = [
     "sphinx.ext.autodoc",
     "sphinx.ext.autosummary",
     "sphinx.ext.mathjax",
+    "notfound.extension",
 ]
 
 myst_enable_extensions = [
@@ -49,12 +50,16 @@ html_baseurl = os.environ.get("READTHEDOCS_CANONICAL_URL", "/")
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 html_static_path = ["_static"]
 
+# https://docs.readthedocs.com/platform/stable/reference/robots.html
 html_extra_path = ["robots.txt"]
+
+# https://docs.readthedocs.com/platform/stable/guides/adding-custom-css.html
+html_css_files = ["custom.css"]
 
 # -- Options for UX ----------------------------------------------------------
 html_theme = "sphinx_rtd_theme"
-html_logo = "_static/logo.png"
-html_favicon = "_static/logo.png"
+html_logo = "_static/logo.svg"
+html_favicon = "_static/logo.svg"
 html_show_sphinx = False
 html_show_copyright = False
 html_last_updated_fmt = "%b %d, %Y"

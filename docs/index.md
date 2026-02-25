@@ -1,8 +1,6 @@
 # `occhio`
 
-$$
-a+b = 10
-$$
+It's official!
 
 ```{eval-rst}
 .. autosummary::
