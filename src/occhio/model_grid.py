@@ -381,6 +381,7 @@ class ModelGrid:
         learning_rate: float = 3e-4,
         weight_decay: float = 0.05,
         verbose: bool = False,
+        compile: bool = True,
         track_losses: bool = False,
     ) -> list[float] | None:
         flattened_models: NDArray[np.object_] = self.models.ravel()
@@ -414,7 +415,8 @@ class ModelGrid:
                     representative_ae, (params, buffers), (x,)
                 )[0],
                 in_dims=(0, 0, 0),
-            )
+            ),
+            disable=not compile,
         )
 
         use_vectorized_loss: bool = self._can_vectorize_loss()
@@ -425,7 +427,8 @@ class ModelGrid:
                         x_true, x_hat, importances
                     ),
                     in_dims=(0, 0, 0),
-                )
+                ),
+                disable=not compile,
             )
 
         # Training ---------------------------------------------------------------------
