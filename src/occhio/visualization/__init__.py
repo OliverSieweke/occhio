@@ -3,6 +3,7 @@ from .phase_change import plot_phase_change, plot_phase_change_multi
 from .geometry import plot_geometry, GeometryPlotComponent
 from .export import export_figure
 from .embedding import plot_embedding
+from .representation import plot_representation
 from .compute import plot_decode_plane
 
 __all__ = [
@@ -13,5 +14,6 @@ __all__ = [
     "plot_geometry",
     "GeometryPlotComponent",
     "export_figure",
+    "plot_representation",
     "plot_decode_plane",
 ]

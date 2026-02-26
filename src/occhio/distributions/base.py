@@ -1,12 +1,14 @@
 """The base class for distributions"""
 
 from abc import ABC, abstractmethod
+from functools import cached_property
+from hashlib import sha256
 from math import prod
+from typing import Literal
+
 import torch
 from torch import Tensor, hash_tensor
-from hashlib import sha256
-from functools import cached_property
-from typing import Literal
+
 from ..utils.device import _same_device
 
 
@@ -94,6 +96,8 @@ class Distribution(ABC):
 
     def _broadcast(self, x: float | list[float] | Tensor) -> Tensor:
         if isinstance(x, Tensor):
+            if x.dim() == 0:
+                return x.expand(self.n_features).clone().to(self.device)
             return x.to(self.device)
         if isinstance(x, (int, float)):
             return torch.full((self.n_features,), x, device=self.device)
