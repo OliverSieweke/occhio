@@ -1,20 +1,21 @@
 from __future__ import annotations
 
 import pickle
+from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cached_property
 from inspect import signature
 from itertools import product
 from typing import Any, Callable
-from collections.abc import Sequence
+from warnings import warn
+
 import numpy as np
-from numpy.typing import NDArray
 import torch
+from numpy.typing import NDArray
 from torch import Tensor, meshgrid
 from torch.func import functional_call, stack_module_state
 from torch.optim import AdamW
 from tqdm import tqdm
-from warnings import warn
 
 from occhio.autoencoder import AutoEncoderBase
 from occhio.distributions.base import Distribution
@@ -28,7 +29,24 @@ class Axis:
 
     def __init__(self, label: str, values: Tensor | Sequence[float | int]):
         self.label = label
-        self.values = values if isinstance(values, Tensor) else torch.as_tensor(values)
+        # Convert to tensor and ensure float dtype for meshgrid compatibility
+        if not isinstance(values, Tensor):
+            self.values = torch.as_tensor(values, dtype=torch.float32)
+        elif values.dtype not in (torch.float32, torch.float64):
+            self.values = values.to(dtype=torch.float32)
+        else:
+            self.values = values
+
+
+class TrainingAxis(Axis):
+    """Special axis representing snapshots taken during training.
+
+    This axis is used to store model states at different epochs, enabling
+    visualization of training dynamics over time.
+    """
+
+    def __init__(self, values: Tensor | Sequence[int], label: str = "Epoch"):
+        super().__init__(label=label, values=values)
 
 
 class ModelGrid:
@@ -83,8 +101,10 @@ class ModelGrid:
             self.models = self._initialize_models()
             self._validate_autoencoders()
 
-        if self.cache_samples:
-            self._unique_distributions, self._sample_index = self._build_sample_index()
+            if self.cache_samples:
+                self._unique_distributions, self._sample_index = (
+                    self._build_sample_index()
+                )
 
     def _validate_args(
         self, create_model: Callable[..., ToyModel], axes: list[Axis]
@@ -98,7 +118,7 @@ class ModelGrid:
             )
 
     def _initialize_models(self) -> NDArray[np.object_]:
-        shape: tuple[int, ...] = self._shape_from_axes
+        shape: tuple[int, ...] = self.shape
         models: NDArray[np.object_] = np.empty(shape, dtype=object)
         for indices in product(*[range(s) for s in shape]):
             params: dict[str, Any] = {
@@ -381,9 +401,34 @@ class ModelGrid:
         learning_rate: float = 3e-4,
         weight_decay: float = 0.05,
         verbose: bool = False,
-        compile: bool = True,
+        compile: bool = False,
         track_losses: bool = False,
-    ) -> list[float] | None:
+        snapshot_interval: int | None = None,
+    ) -> ModelGrid | None:
+        # Validate snapshot_interval
+        if snapshot_interval is not None:
+            if snapshot_interval <= 0:
+                raise ValueError(
+                    f"snapshot_interval must be positive, got {snapshot_interval}"
+                )
+            if snapshot_interval > n_epochs:
+                raise ValueError(
+                    f"snapshot_interval ({snapshot_interval}) cannot exceed n_epochs ({n_epochs})"
+                )
+
+            # Memory warning
+            n_snapshots = (n_epochs // snapshot_interval) + 1  # +1 for initial state
+            total_snapshots = self.models.size * n_snapshots
+            if total_snapshots > 10000:
+                import warnings
+
+                warnings.warn(
+                    f"Large memory allocation: {self.models.size} models × {n_snapshots} snapshots "
+                    f"= {total_snapshots} total model copies. This may consume significant memory.",
+                    ResourceWarning,
+                    stacklevel=2,
+                )
+
         flattened_models: NDArray[np.object_] = self.models.ravel()
 
         # Stack Model Characteristics --------------------------------------------------
@@ -433,6 +478,21 @@ class ModelGrid:
 
         # Training ---------------------------------------------------------------------
         losses: list[float] | None = [] if track_losses else None
+
+        # Snapshot storage
+        snapshots: list[tuple[int, dict, dict]] | None = (
+            None  # [(epoch, params_copy, buffers_copy), ...]
+        )
+        if snapshot_interval is not None:
+            snapshots = []
+            # Capture initial state (epoch 0)
+            snapshots.append(
+                (
+                    0,
+                    {k: v.detach().clone() for k, v in stacked_params.items()},
+                    {k: v.detach().clone() for k, v in stacked_buffers.items()},
+                )
+            )
 
         for ep in tqdm(range(n_epochs)):
             # [17.02.26 | OliverSieweke] TODO: Could attempt to vectorize when possible
@@ -485,6 +545,16 @@ class ModelGrid:
             if verbose and (ep + 1) % 1000 == 0:
                 print(f"Epoch {ep + 1}/{n_epochs}, Mean Loss: {total_loss.item():.6f}")
 
+            # Capture snapshot if needed
+            if snapshot_interval is not None and (ep + 1) % snapshot_interval == 0:
+                snapshots.append(
+                    (
+                        ep + 1,
+                        {k: v.detach().clone() for k, v in stacked_params.items()},
+                        {k: v.detach().clone() for k, v in stacked_buffers.items()},
+                    )
+                )
+
         with torch.no_grad():
             for i, model in enumerate(flattened_models):
                 model.ae.load_state_dict(
@@ -504,4 +574,179 @@ class ModelGrid:
                 model.distribution.__dict__.pop("_sampling_equivalence_hash", None)
             self._unique_distributions, self._sample_index = self._build_sample_index()
 
-        return losses
+        # Build history grid if snapshots were captured
+        if snapshots is not None:
+            return self._build_history_grid(snapshots, flattened_models)
+
+        return None
+
+    def _build_history_grid(
+        self,
+        snapshots: list[tuple[int, dict, dict]],
+        flattened_models: NDArray[np.object_],
+    ) -> ModelGrid:
+        """Build a new ModelGrid with TrainingAxis from captured snapshots.
+
+        Args:
+            snapshots: List of (epoch, stacked_params, stacked_buffers) tuples
+            flattened_models: Flattened array of original models (for reference)
+
+        Returns:
+            New ModelGrid with TrainingAxis prepended to axes
+        """
+        n_snapshots = len(snapshots)
+        n_models = len(flattened_models)
+
+        # Create new shape: (n_snapshots, *original_shape)
+        history_shape = (n_snapshots,) + self.models.shape
+        history_models = np.empty(history_shape, dtype=object)
+
+        # Populate the history grid
+        for snapshot_idx, (
+            epoch,
+            stacked_params_snapshot,
+            stacked_buffers_snapshot,
+        ) in enumerate(
+            tqdm(snapshots, desc="Building history grid", unit="snapshot", leave=True)
+        ):
+            for model_idx, original_model in enumerate(flattened_models):
+                # Create a new ToyModel with the same distribution and architecture
+                # but with snapshotted autoencoder weights
+                from copy import deepcopy
+
+                snapshot_model = ToyModel(
+                    distribution=original_model.distribution,
+                    ae=deepcopy(original_model.ae),
+                    importances=original_model.importances,
+                )
+
+                # Load the snapshotted state
+                snapshot_model.ae.load_state_dict(
+                    {
+                        name: (
+                            stacked_params_snapshot[name]
+                            if name in stacked_params_snapshot
+                            else stacked_buffers_snapshot[name]
+                        )[model_idx]
+                        for name in snapshot_model.ae.state_dict()
+                    }
+                )
+
+                # Place in history grid (unravel model_idx to multi-dimensional index)
+                multi_idx = np.unravel_index(model_idx, self.models.shape)
+                history_models[(snapshot_idx,) + multi_idx] = snapshot_model
+
+        # Create new axes with TrainingAxis prepended
+        epoch_values = [snapshot[0] for snapshot in snapshots]
+        new_axes = [TrainingAxis(values=epoch_values)] + self.axes
+
+        # Create and return the history grid
+        # Note: cache_samples=False because history grids are read-only snapshots
+        # and won't be trained, so we don't need sample caching infrastructure
+        return ModelGrid(
+            create_model=self.create_model,
+            axes=new_axes,
+            cache_samples=False,
+            _models=history_models,
+        )
+
+    def __getitem__(self, key) -> ModelGrid | ToyModel:
+        if not isinstance(key, tuple):
+            key = (key,)
+
+        if len(key) > len(self.axes):
+            raise IndexError(
+                f"Too many indices: got {len(key)}, grid has {len(self.axes)} axes"
+            )
+
+        numpy_key: list[slice] = []
+        new_axes: list[Axis] = []
+
+        for dim, k in enumerate(key):
+            axis: Axis = self.axes[dim]
+            dim_size: int = len(axis.values)
+
+            if isinstance(k, int):
+                idx: int = k + dim_size if k < 0 else k
+                if idx < 0 or idx >= dim_size:
+                    raise IndexError(
+                        f"Index {k} out of bounds for axis '{axis.label}' "
+                        f"with size {dim_size}"
+                    )
+                numpy_key.append(slice(idx, idx + 1))
+                values = axis.values[idx : idx + 1]
+
+            elif isinstance(k, slice):
+                start, stop, step = k.start, k.stop, k.step
+                if start is not None and start < 0:
+                    start += dim_size
+                if stop is not None and stop < 0:
+                    stop += dim_size
+
+                if start is not None and (start < 0 or start >= dim_size):
+                    raise IndexError(
+                        f"Slice start {k.start} out of bounds for axis "
+                        f"'{axis.label}' with size {dim_size}"
+                    )
+                if stop is not None and (stop < 0 or stop > dim_size):
+                    raise IndexError(
+                        f"Slice stop {k.stop} out of bounds for axis "
+                        f"'{axis.label}' with size {dim_size}"
+                    )
+
+                if (
+                    step is None
+                    and start is not None
+                    and stop is not None
+                    and start > stop
+                ):
+                    step = -1
+
+                s = slice(start, stop, step)
+                numpy_key.append(s)
+                if step is not None and step < 0:
+                    range_start = start if start is not None else dim_size - 1
+                    range_stop = stop if stop is not None else -1
+                    indices = list(range(range_start, range_stop, step))
+                    values = axis.values[indices]
+                else:
+                    values = axis.values[s]
+            else:
+                raise IndexError(f"Unsupported index type: {type(k)}")
+
+            # Preserve axis type (e.g., TrainingAxis)
+            if isinstance(axis, TrainingAxis):
+                new_axes.append(TrainingAxis(label=axis.label, values=values))
+            else:
+                new_axes.append(Axis(label=axis.label, values=values))
+
+        for dim in range(len(key), len(self.axes)):
+            new_axes.append(self.axes[dim])
+            numpy_key.append(slice(None))
+
+        all_int: bool = len(key) == len(self.axes) and all(
+            isinstance(k, int) for k in key
+        )
+        if all_int:
+            resolved_idx = tuple(s.start for s in numpy_key)
+            return self.models[resolved_idx]
+
+        sliced_models: NDArray[np.object_] = self.models[tuple(numpy_key)]
+
+        return ModelGrid(
+            create_model=self.create_model,
+            axes=new_axes,
+            cache_samples=self.cache_samples,
+            _models=sliced_models,
+        )
+
+    def _validate_args(
+        self, create_model: Callable[..., ToyModel], axes: list[Axis]
+    ) -> None:
+        if not axes:
+            raise ValueError("At least one axis must be provided.")
+
+        if "params" not in signature(create_model).parameters:
+            raise TypeError(
+                "create_model must accept a 'params' parameter (dict[str, Any])."
+            )

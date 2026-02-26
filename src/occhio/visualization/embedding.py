@@ -96,15 +96,19 @@ def plot_embedding(
 
         for feature_idx in range(model.W.shape[1]):
             # [18.02.26 | OliverSieweke] TODO: account for relative importance > 1 as well
-            # [18.02.26 | OliverSieweke] TODO: Add show importance on arrow hover
             color_idx = int(
                 model.importances[feature_idx].item() * 0.9 * (len(colorscale) - 1)
             )
             color = colorscale[color_idx]
 
+            x_val = model.W[0, feature_idx].cpu().item()
+            y_val = model.W[1, feature_idx].cpu().item()
+            importance = model.importances[feature_idx].item()
+
+            # Add arrow annotation (no hover support)
             fig.add_annotation(
-                x=model.W[0, feature_idx].cpu(),
-                y=model.W[1, feature_idx].cpu(),
+                x=x_val,
+                y=y_val,
                 xref=xref,
                 yref=yref,
                 axref=xref,
@@ -117,6 +121,24 @@ def plot_embedding(
                 arrowwidth=2,
                 arrowcolor=color,
                 opacity=0.7,
+                row=row,
+                col=col,
+            )
+
+            # Add invisible scatter point at arrow tip for hover
+            fig.add_trace(
+                go.Scatter(
+                    x=[x_val],
+                    y=[y_val],
+                    mode="markers",
+                    marker=dict(size=10, color=color, opacity=0),
+                    hovertemplate=(
+                        f"<b>Feature {feature_idx}</b><br>"
+                        f"Importance: {importance:.4f}<br>"
+                        "<extra></extra>"
+                    ),
+                    showlegend=False,
+                ),
                 row=row,
                 col=col,
             )
