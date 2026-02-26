@@ -1,6 +1,6 @@
 [project]
 name = "occhio"
-version = "0.1.3"
+version = "0.2.1"
 description = "Experiment with Toy Models of Superposition"
 requires-python = ">=3.10"
 dependencies = [
