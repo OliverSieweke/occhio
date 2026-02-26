@@ -22,14 +22,14 @@ from plotly.subplots import make_subplots
 # %%  ── config ───────────────────────────────────────────────────────────────
 DEVICE = "cpu"
 gen = torch.Generator(DEVICE)
-gen.manual_seed(42)
+gen.manual_seed(1)
 
-N_FEATURES = 100
-N_HIDDEN = 10
+N_FEATURES = 200
+N_HIDDEN = 15
 
 dist = PowerLawDigraph(
     n_features=N_FEATURES,
-    alpha=1.5,
+    alpha=1.2,
     p_edge=0.10,
     p_active=2 / N_FEATURES,
     p_child=0.2,
@@ -121,7 +121,7 @@ def norm_hook(hook_data):
 
 
 losses, hook_returns = tm.fit(
-    25_000,
+    35_000,
     batch_size=512,
     learning_rate=3e-4,
     verbose=True,
@@ -188,12 +188,15 @@ with torch.no_grad():
 # Sort nodes by in-degree for legible ordering
 order = np.argsort(-in_deg)  # descending
 imat_sorted = imat[np.ix_(order, order)]
+vmax = np.max(np.abs(imat_sorted))
 
 fig = px.imshow(
     imat_sorted,
-    color_continuous_scale="Reds",
+    color_continuous_scale="RdBu",
     labels=dict(color="interference"),
     title="Interference matrix  (rows/cols sorted by in-degree, high→low)",
+    zmax=vmax,
+    zmin=-vmax,
 )
 fig.show()
 
@@ -276,25 +279,24 @@ print(f"  out-degree ↔ interference : r = {corr_int_outdeg:+.3f}")
 
 # %%
 
-dist.print_graph(center=48)
+dist.print_graph(center=1)
 
 # %%  ── neighborhood interference heatmap ──────────────────────────────────
 CENTER = 2
 
 adj = dist.adjacency  # adj[j, i] = True  ⟹  j → i
-parents = adj[:, CENTER].nonzero(as_tuple=True)[0].tolist()
 children = adj[CENTER, :].nonzero(as_tuple=True)[0].tolist()
 
 # Build ordered index list: parents | center | children (sorted within groups)
-neighborhood = sorted(parents) + [CENTER] + sorted(children)
+neighborhood = [CENTER] + sorted(children)
 
 # Slice the interference matrix to the neighborhood
 nbr = np.array(neighborhood)
 imat_nbr = imat[np.ix_(nbr, nbr)]
+vmax = np.max(np.abs(imat_nbr))
 
 # Build axis labels that show role
-role = {i: "parent" for i in parents}
-role[CENTER] = "center"
+role = {CENTER: "center"}
 role.update({i: "child" for i in children})
 tick_labels = [f"{i} ({role[i]})" for i in neighborhood]
 
@@ -302,12 +304,243 @@ fig = px.imshow(
     imat_nbr,
     x=tick_labels,
     y=tick_labels,
-    color_continuous_scale="Reds",
+    color_continuous_scale="RdBu_r",
     labels=dict(color="interference"),
     title=f"Interference sub-matrix — node {CENTER} and its direct neighbours",
     aspect="equal",
+    zmax=vmax,
+    zmin=-vmax,
 )
 fig.update_xaxes(tickangle=45)
+fig.show()
+
+# %%  ── interference: children / parents vs unrelated nodes ─────────────────
+# adj[j, i] = True ⟹  j → i  (j is a parent of i, i is a child of j)
+adj_bool = dist.adjacency.numpy().astype(bool)
+
+child_interf = np.full(N_FEATURES, np.nan)
+parent_interf = np.full(N_FEATURES, np.nan)
+other_interf_c = np.full(
+    N_FEATURES, np.nan
+)  # "others" baseline for nodes with children
+other_interf_p = np.full(N_FEATURES, np.nan)  # "others" baseline for nodes with parents
+child_interf_sq = np.full(N_FEATURES, np.nan)
+parent_interf_sq = np.full(N_FEATURES, np.nan)
+other_interf_c_sq = np.full(N_FEATURES, np.nan)
+other_interf_p_sq = np.full(N_FEATURES, np.nan)
+
+for i in range(N_FEATURES):
+    children_i = np.where(adj_bool[i, :])[0]  # i → j  (i is parent)
+    parents_i = np.where(adj_bool[:, i])[0]  # j → i  (i is child)
+    relatives = set(children_i) | set(parents_i) | {i}
+    others_i = np.array([j for j in range(N_FEATURES) if j not in relatives])
+
+    row = imat[i]
+
+    if len(children_i) > 0:
+        child_interf[i] = row[children_i].mean()
+        child_interf_sq[i] = (row[children_i] ** 2).mean()
+        other_interf_c[i] = row[others_i].mean() if len(others_i) else np.nan
+        other_interf_c_sq[i] = (row[others_i] ** 2).mean() if len(others_i) else np.nan
+
+    if len(parents_i) > 0:
+        parent_interf[i] = row[parents_i].mean()
+        parent_interf_sq[i] = (row[parents_i] ** 2).mean()
+        other_interf_p[i] = row[others_i].mean() if len(others_i) else np.nan
+        other_interf_p_sq[i] = (row[others_i] ** 2).mean() if len(others_i) else np.nan
+
+has_children = ~np.isnan(child_interf)
+has_parents = ~np.isnan(parent_interf)
+
+# ── summary stats ────────────────────────────────────────────────────────────
+print("\n=== Interference: children vs unrelated nodes (per-node means) ===")
+print(f"  children   mean interf     : {np.nanmean(child_interf):.5f}")
+print(f"  unrelated  mean interf     : {np.nanmean(other_interf_c):.5f}")
+print(f"  children   mean interf²    : {np.nanmean(child_interf_sq):.5f}")
+print(f"  unrelated  mean interf²    : {np.nanmean(other_interf_c_sq):.5f}")
+
+print("\n=== Interference: parents vs unrelated nodes (per-node means) ===")
+print(f"  parents    mean interf     : {np.nanmean(parent_interf):.5f}")
+print(f"  unrelated  mean interf     : {np.nanmean(other_interf_p):.5f}")
+print(f"  parents    mean interf²    : {np.nanmean(parent_interf_sq):.5f}")
+print(f"  unrelated  mean interf²    : {np.nanmean(other_interf_p_sq):.5f}")
+
+
+# ── scatter plots ─────────────────────────────────────────────────────────────
+# Each point is one node.  Points ABOVE the diagonal ⟹ relatives interfere more.
+def _diag_range(a, b):
+    return [min(np.nanmin(a), np.nanmin(b)), max(np.nanmax(a), np.nanmax(b))]
+
+
+fig = make_subplots(
+    rows=2,
+    cols=2,
+    subplot_titles=[
+        "Children: interference vs unrelated",
+        "Parents: interference vs unrelated",
+        "Children: interference² vs unrelated",
+        "Parents: interference² vs unrelated",
+    ],
+    horizontal_spacing=0.12,
+    vertical_spacing=0.15,
+)
+
+_panels = [
+    (
+        child_interf[has_children],
+        other_interf_c[has_children],
+        in_deg[has_children],
+        node_ids[has_children],
+        1,
+        1,
+    ),
+    (
+        parent_interf[has_parents],
+        other_interf_p[has_parents],
+        in_deg[has_parents],
+        node_ids[has_parents],
+        1,
+        2,
+    ),
+    (
+        child_interf_sq[has_children],
+        other_interf_c_sq[has_children],
+        in_deg[has_children],
+        node_ids[has_children],
+        2,
+        1,
+    ),
+    (
+        parent_interf_sq[has_parents],
+        other_interf_p_sq[has_parents],
+        in_deg[has_parents],
+        node_ids[has_parents],
+        2,
+        2,
+    ),
+]
+
+for y_vals, x_vals, color_vals, idx_vals, r, c in _panels:
+    fig.add_trace(
+        go.Scatter(
+            x=x_vals,
+            y=y_vals,
+            mode="markers",
+            marker=dict(
+                color=color_vals,
+                colorscale="Sunset",
+                size=7,
+                showscale=(r == 1 and c == 2),
+                colorbar=dict(title="in-degree", x=1.02),
+            ),
+            customdata=idx_vals,
+            hovertemplate="node %{customdata}<extra></extra>",
+            showlegend=False,
+        ),
+        row=r,
+        col=c,
+    )
+    # lo, hi = _diag_range(x_vals, y_vals)
+    # fig.add_trace(
+    #     go.Scatter(
+    #         x=[lo, hi],
+    #         y=[lo, hi],
+    #         mode="lines",
+    #         line=dict(color="grey", dash="dash", width=1),
+    #         showlegend=False,
+    #     ),
+    #     row=r,
+    #     col=c,
+    # )
+
+_x_labels = [
+    "unrelated mean interf",
+    "unrelated mean interf",
+    "unrelated mean interf²",
+    "unrelated mean interf²",
+]
+_y_labels = [
+    "children mean interf",
+    "parents mean interf",
+    "children mean interf²",
+    "parents mean interf²",
+]
+for idx, (_, _, _, _, r, c) in enumerate(_panels):
+    fig.update_xaxes(title_text=_x_labels[idx], row=r, col=c)
+    fig.update_yaxes(title_text=_y_labels[idx], row=r, col=c)
+
+fig.update_layout(
+    title="Per-node interference with relatives vs unrelated  (above diagonal = relatives interfere more)",
+    height=750,
+)
+fig.show()
+
+# %%  ── directed interference asymmetry ────────────────────────────────────
+# For each directed edge i→j plot imat[i,j] (parent→child direction) against
+# imat[j,i] (child→parent direction).  Off-diagonal ⟹ the model encodes direction.
+edge_src, edge_dst = np.where(adj_bool)  # i→j for each edge
+ij_vals = imat[edge_src, edge_dst]  # interference i→j
+ji_vals = imat[edge_dst, edge_src]  # interference j→i
+
+lim = max(np.abs(ij_vals).max(), np.abs(ji_vals).max()) * 1.05
+fig = go.Figure()
+fig.add_trace(
+    go.Scatter(
+        x=ji_vals,
+        y=ij_vals,
+        mode="markers",
+        marker=dict(
+            color=in_deg[edge_src],
+            colorscale="Sunset",
+            size=5,
+            opacity=0.6,
+            colorbar=dict(title="in-degree of src"),
+            showscale=True,
+        ),
+        customdata=np.stack([edge_src, edge_dst], axis=1),
+        hovertemplate="edge %{customdata[0]}→%{customdata[1]}<extra></extra>",
+    )
+)
+fig.add_trace(
+    go.Scatter(
+        x=[-lim, lim],
+        y=[-lim, lim],
+        mode="lines",
+        line=dict(color="grey", dash="dash", width=1),
+        showlegend=False,
+    )
+)
+fig.update_layout(
+    title="Directed interference asymmetry  (each point = one edge i→j)",
+    xaxis_title="imat[j, i]  (child→parent direction)",
+    yaxis_title="imat[i, j]  (parent→child direction)",
+    xaxis=dict(range=[-lim, lim]),
+    yaxis=dict(range=[-lim, lim], scaleanchor="x", scaleratio=1),
+)
+fig.show()
+
+# %%  ── PCA of W columns colored by in-degree ───────────────────────────────
+with torch.no_grad():
+    W_np = tm.W.numpy()  # shape (n_hidden, n_features)
+
+W_cols = W_np.T  # (n_features, n_hidden) — one row per feature
+W_centered = W_cols - W_cols.mean(axis=0)
+_, S, Vt = np.linalg.svd(W_centered, full_matrices=False)
+W_2d = W_centered @ Vt[:2].T  # (n_features, 2)
+var_ratio = S[:2] ** 2 / (S**2).sum()
+
+fig = px.scatter(
+    x=W_2d[:, 0],
+    y=W_2d[:, 1],
+    color=in_deg,
+    hover_name=[f"node {i}" for i in node_ids],
+    color_continuous_scale="Plasma",
+    labels=dict(
+        x=f"PC1 ({var_ratio[0]:.1%})", y=f"PC2 ({var_ratio[1]:.1%})", color="in-degree"
+    ),
+    title="PCA of W columns  (each point = one feature vector in hidden space)",
+)
+fig.update_traces(marker=dict(size=8))
 fig.show()
 
 # %%
