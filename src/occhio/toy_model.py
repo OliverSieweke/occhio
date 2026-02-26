@@ -92,10 +92,11 @@ class ToyModel:
         hook_returns = [[] for _ in hooks]
 
         for ep in range(n_epochs):
-            x = self.distribution.sample(batch_size)
+            raw = self.distribution.sample(batch_size)
+            x = raw[0] if isinstance(raw, tuple) else raw
             optimizer.zero_grad()
             x_hat = self.ae.forward(x)[0]  # Only take x_hat
-            loss = self.loss(x, x_hat, self.importances)
+            loss = self.ae.loss(raw, x_hat, self.importances)  # type: ignore[call-arg]
             loss.backward()
             optimizer.step()
 
@@ -187,16 +188,21 @@ class ToyModel:
 
     @property
     @torch.no_grad()
-    def interferences(self) -> Tensor:
+    def interferences_sq(self) -> Tensor:
         return (self.W_normalized_features.T @ self.W) ** 2
 
     @property
     @torch.no_grad()
+    def interferences(self) -> Tensor:
+        return self.W_normalized_features.T @ self.W
+
+    @property
+    @torch.no_grad()
     def total_feature_interferences(self) -> Tensor:
-        interferences = self.interferences.clone()
+        interferences = self.interferences_sq.clone()
         return interferences.fill_diagonal_(0).sum(dim=1)
 
     @property
     @torch.no_grad()
     def total_feature_interferences_including_self(self) -> Tensor:
-        return self.interferences.sum(dim=1)
+        return self.interferences_sq.sum(dim=1)

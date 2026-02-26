@@ -1,3 +1,4 @@
+# %%
 """
 I investigate the Random Walk to Root distribution,
 to see if it exhibits ocllapse.
@@ -5,10 +6,11 @@ I also look at the AE representation of these distributions.
 """
 
 # %%
-from occhio.distributions.dag import DAGRandomWalkToRoot
+from occhio.distributions import DAGRandomWalkToRoot, DistributionStack
 from occhio.sae import SAESimple, TopKIgnoreSAE
 from occhio.autoencoder import MLPEncoder, TiedLinearRelu
 from occhio.toy_model import ToyModel
+from occhio.visualization import plot_embedding
 import torch
 import numpy as np
 import plotly.express as px
@@ -58,28 +60,32 @@ things: list[np.ndarray] = [
 # %%
 torch.set_printoptions(3, sci_mode=False)
 gen = torch.Generator()
-gen.manual_seed(3)
-N_FEAT = 6
+gen.manual_seed(2)
 
-# p_active = [1.0, 1.0, 1.0, 1.0]
+N_STACKS = 2
 
-# dist = DAGRandomWalkToRoot(
-#     n_features=3, beta=0.9, p_active=p_active, adjacency=things[1], generator=gen
-# )
-dist = DAGRandomWalkToRoot(
-    n_features=N_FEAT, p_edge=2.5 / N_FEAT, beta=0.9, generator=gen
+p_active = [1.0, 1.0, 1.0]
+
+dist = DistributionStack(
+    [
+        DAGRandomWalkToRoot(
+            n_features=3, p_active=p_active, adjacency=things[2], generator=gen
+        )
+        for i in range(N_STACKS)
+    ],
+    sampling_mode="sparse",
+    p_meta=0.3,
 )
+print(dist.n_features)
 
-print(dist.print_graph())
-
+# Validate p_active
 torch.mean(1.0 * (dist.sample(1000) > 0.0), dim=0)
 
 
 # %%
-# ae = MLPEncoder([3, 2], [2, 6, 3], generator=gen)
-ae = TiedLinearRelu(N_FEAT, 2, generator=gen)
+ae = TiedLinearRelu(3 * N_STACKS, 2, generator=gen)
 tm = ToyModel(dist, ae, generator=gen)
-losses = tm.fit(25_000, verbose=True)[0]
+losses = tm.fit(15_000, verbose=True)[0]
 
 # %%
 px.line(losses)
@@ -100,7 +106,7 @@ gen.manual_seed(2)
 
 # This can only learn if k=2!
 # sae = TopKIgnoreSAE(2, 5, 0.01, k=1, generator=gen)
-sae = SAESimple(2, 2 * N_FEAT, 0.02, generator=gen)
+sae = SAESimple(2, 5, 0.02, generator=gen)
 
 losses = sae.train_sae(tm.sample_latent, 20_000)
 
@@ -136,38 +142,10 @@ fig.add_trace(
 #     go.Scatter(x=em_hat_samples[0], y=em_hat_samples[1], mode="markers", name="SAE")
 # )
 
+
 # %%
 emb = tm.W.detach().numpy()
-px.scatter(
-    x=emb[0],
-    y=emb[1],
-    hover_name=list(range(N_FEAT)),
-    color=list(range(N_FEAT)),
-    color_continuous_scale="Phase",
-)
 
-# %%
-patterns = 1.0 * (dist.sample(6) > 0)
-px.imshow(
-    patterns.detach().numpy(), color_continuous_scale="Reds", labels=dict(y="Pattern")
-)
-
-# %%
-encoded_patterns = sae.encode(tm.encode(patterns)).detach().numpy()
-px.imshow(
-    encoded_patterns,
-    title="Encoded Patterns",
-    labels=dict(x="Latent Dim", y="Pattern"),
-    zmax=0.2,
-    color_continuous_scale="Reds",
-)
-
-# %%
-patterns = torch.eye(N_FEAT)
-
-encoded_patterns = sae.encode(tm.encode(patterns)).detach().numpy()
-px.imshow(
-    encoded_patterns, title="Encoded Patterns", labels=dict(x="Latent Dim", y="Pattern")
-)
+px.scatter(x=emb[0], y=emb[1], hover_name=list(range(emb.shape[1])))
 
 # %%

@@ -287,3 +287,100 @@ class AnticorrelatedPairs(Distribution):
 
         values = self._rand(batch_size, self.n_features)
         return mask * values
+
+
+class GaussianCorrelated(Distribution):
+    """Sparse distribution with correlated gating via a Gaussian copula.
+
+    Each feature *i* fires with marginal probability ``p_active[i]``. The
+    joint firing pattern is induced by a latent multivariate Gaussian:
+
+    .. math::
+        Z \\sim \\mathcal{N}(0, \\Sigma), \\quad
+        m_i = \\mathbf{1}[\\Phi(Z_i) < p_i]
+
+    where :math:`\\Phi` is the standard normal CDF. Conditional on firing,
+    each feature takes an independent ``Uniform(0, 1)`` value.
+
+    The correlation matrix :math:`\\Sigma` can be supplied directly or
+    auto-generated from a random factor model with ``n_factors`` latent
+    factors:
+
+    .. math::
+        \\Sigma = \\text{corr}(FF^\\top + I)
+
+    where :math:`F \\in \\mathbb{R}^{n \\times k}` with entries
+    :math:`\\sim \\mathcal{N}(0, \\text{factor\\_scale}^2 / k)`.
+
+    Args:
+        n_features: Dimensionality of the sample space.
+        p_active: Marginal firing probability per feature.
+            Scalar or per-feature.
+        correlation_matrix: Optional ``(n_features, n_features)`` positive-
+            definite correlation matrix. If ``None``, one is generated from a
+            random factor model.
+        n_factors: Number of latent factors for auto-generated correlation
+            matrix. Ignored if ``correlation_matrix`` is provided. Defaults
+            to ``max(1, n_features // 4)``.
+        factor_scale: Controls the strength of off-diagonal correlations in
+            the auto-generated matrix. Larger values → stronger correlations.
+            Ignored if ``correlation_matrix`` is provided. Defaults to 1.0.
+        device: Torch device for all generated tensors.
+        generator: Optional ``torch.Generator`` for deterministic sampling.
+
+    Note:
+        The Cholesky factor of :math:`\\Sigma` is precomputed at init and
+        cached as ``self.cholesky``. Sampling cost is dominated by the
+        matrix-vector product with the Cholesky factor, i.e.
+        :math:`O(\\text{batch} \\times n^2)`.
+    """
+
+    def __init__(
+        self,
+        n_features: int,
+        p_active: float | list[float] | Tensor,
+        correlation_matrix: Tensor | None = None,
+        n_factors: int | None = None,
+        factor_scale: float = 1.0,
+        **kwargs,
+    ):
+        super().__init__(n_features, **kwargs)
+        self.p_active = self._broadcast(p_active)
+
+        if correlation_matrix is not None:
+            assert correlation_matrix.shape == (n_features, n_features), (
+                f"correlation_matrix must be ({n_features}, {n_features}), "
+                f"got {correlation_matrix.shape}."
+            )
+            corr = correlation_matrix.to(self.device)
+        else:
+            if n_factors is None:
+                n_factors = max(1, n_features // 4)
+            corr = self._random_correlation_matrix(n_features, n_factors, factor_scale)
+
+        self.correlation_matrix = corr
+        self.cholesky = torch.linalg.cholesky(corr)
+
+        # Precompute the Gaussian thresholds: Φ^{-1}(p_i)
+        # We fire when Φ(Z_i) < p_i, i.e. Z_i < Φ^{-1}(p_i)
+        clamped = self.p_active.clamp(1e-7, 1 - 1e-7)
+        self.thresholds = torch.erfinv(2 * clamped - 1) * (2**0.5)
+
+    def _random_correlation_matrix(self, n: int, k: int, scale: float) -> Tensor:
+        """Generate a random correlation matrix via a factor model."""
+        F = self._randn(n, k) * (scale / k**0.5)
+        cov = F @ F.T + torch.eye(n, device=self.device)
+        # Normalize to correlation matrix
+        d = cov.diag().sqrt()
+        corr = cov / (d[:, None] * d[None, :])
+        return corr
+
+    def sample(self, batch_size: int) -> Tensor:
+        # Z = L @ eps, where eps ~ N(0, I)
+        eps = self._randn(batch_size, self.n_features)
+        z = eps @ self.cholesky.T  # (batch, n_features)
+
+        mask = z < self.thresholds  # fires when Φ(Z_i) < p_i
+
+        values = self._rand(batch_size, self.n_features)
+        return mask * values

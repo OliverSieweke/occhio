@@ -3,6 +3,8 @@
 import functools
 from math import sqrt
 from torch import Tensor
+import torch.nn.functional as F
+from typing import Literal, Callable
 import torch.nn as nn
 import torch
 from abc import ABC, abstractmethod
@@ -36,6 +38,7 @@ class AutoEncoderBase(nn.Module, ABC):
 
     def __init__(
         self,
+        loss_fn: Callable | None = None,
         device: torch.device | str | None = None,
         generator: torch.Generator | None = None,
     ):
@@ -44,6 +47,8 @@ class AutoEncoderBase(nn.Module, ABC):
         Note that we write device to `_init_device`, which remembers where the user intends to store the device.
         """
         super().__init__()
+        if loss_fn is not None:
+            self.loss = loss_fn  # type: ignore[method-assign]
         if device is not None and generator is not None:
             gen_device = torch.device(generator.device)
             dev = torch.device(device)
@@ -224,3 +229,104 @@ class MLPEncoder(AutoEncoderBase):
 
     def resample_weights(self, force_norm=False):
         self._build_layers()
+
+
+class ComputeAutoEncoder(AutoEncoderBase):
+    """
+    Autoencoder with a tied encoder/decoder and a linear compute step.
+
+    Subclasses occhio's AutoEncoderBase so it exposes encode/decode and slots
+    into ToyModel for geometric analysis (feature norms, interferences, etc.).
+
+    Parameters
+    ----------
+    N : int   — number of features
+    k : int   — hidden / latent dimension
+    decode_activation : "softmax" | "relu"
+        "softmax" — outputs a probability simplex; use for one-hot targets (CE/MSE).
+        "relu"    — outputs non-negative values; use for continuous targets like x @ P.
+    seed : int — weight init seed
+
+    Weights
+    -------
+    W : (k, N) — tied encoder / decoder
+    Z : (k, k) — linear compute step
+    b : (N,)   — decode bias
+    """
+
+    def __init__(
+        self,
+        N: int,
+        k: int,
+        decode_activation: Literal["softmax", "relu"] = "softmax",
+        seed: int = 10,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self.n_features = N
+        self.n_hidden = k
+        self.decode_activation = decode_activation
+
+        gen = torch.Generator().manual_seed(seed)
+        self.W = nn.Parameter(torch.randn(k, N, generator=gen) / N)
+        self.Z = nn.Parameter(torch.randn(k, k, generator=gen) / k)
+        self.b = nn.Parameter(torch.zeros(N))
+
+    # ── core operations ────────────────────────────────────────────────────
+
+    def encode(self, x: torch.Tensor) -> torch.Tensor:
+        """(B, N) → (B, k)  : embed into latent space."""
+        return x @ self.W.T
+
+    def compute_step(self, h: torch.Tensor) -> torch.Tensor:
+        """(B, k) → (B, k)  : linear compute / routing step."""
+        return h + h @ self.Z.T
+
+    def decode(self, z: torch.Tensor) -> torch.Tensor:
+        """(B, k) → (B, N)  : project back, then activate."""
+        logits = z @ self.W + self.b
+        if self.decode_activation == "softmax":
+            return F.softmax(logits, dim=-1)
+        return F.relu(logits)
+
+    def forward(self, x: torch.Tensor):
+        """(B, N) → (y_hat, z)."""
+        h = self.encode(x)
+        z = self.compute_step(h)
+        y_hat = self.decode(z)
+        return y_hat, z
+
+    def ce_loss(
+        self, y_hat: torch.Tensor, y_idx: torch.Tensor, importances: torch.Tensor
+    ) -> torch.Tensor:
+        """Importance-weighted NLL given softmax output probabilities."""
+        per_sample = F.nll_loss(y_hat.clamp(min=1e-9).log(), y_idx, reduction="none")
+        weights = importances[y_idx]
+        return (per_sample * weights).mean()
+
+    def mse_loss(
+        self, y_hat: torch.Tensor, y_true: torch.Tensor, importances: Tensor | None
+    ) -> torch.Tensor:
+        """Importance-weighted MSE. Prediction first, target second (mirrors ce_loss)."""
+        if importances is None:
+            importances = torch.ones(self.n_features, device=self.device)  # ty:ignore
+        per_sample = (y_true - y_hat).pow(2).sum(dim=-1)
+        weights = importances[y_hat.argmax(dim=-1)]
+        return (per_sample * weights).mean()
+
+    def loss(
+        self, x_true: Tensor, x_hat: Tensor, importances: Tensor | None
+    ) -> torch.Tensor:
+        """Importance-weighted MSE between predicted probs and one-hot target."""
+        if importances is None:
+            importances = torch.ones(self.n_features, device=self.device)  # ty:ignore
+        per_sample = (x_true - x_hat).pow(2).sum(dim=-1)
+        weights = importances[x_hat.argmax(dim=-1)]
+        return (per_sample * weights).mean()
+
+    def resample_weights(self):
+        gen = self.generator or torch.Generator()
+        N, k = self.n_features, self.n_hidden
+        self.W = nn.Parameter(torch.randn(k, N, generator=gen) / N)
+        self.Z = nn.Parameter(torch.randn(k, k, generator=gen) / k)
+        self.b = nn.Parameter(torch.zeros(N))
