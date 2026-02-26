@@ -30,14 +30,20 @@ def plot_phase_change_multi(model_grid: ModelGrid, *, up_to: int, max_cols: int 
         specs=specs,
     )
 
+    max_interferences = []
     for i in range(up_to):
         row = i // n_cols + 1
         col = i % n_cols + 1
-        _add_model_phases_trace(model_grid, i, fig, col=col, row=row)
+        max_interferences.append(
+            _add_model_phases_trace(model_grid, i, fig, col=col, row=row)
+        )
 
     colormap_row = up_to // n_cols + 1
     colormap_col = up_to % n_cols + 1
-    _add_colormap_trace(fig, col=colormap_col, row=colormap_row)
+    max_interference = max(max_interferences) if max_interferences else 1.0
+    _add_colormap_trace(
+        fig, col=colormap_col, row=colormap_row, max_interference=max_interference
+    )
 
     return fig
 
@@ -56,8 +62,10 @@ def plot_phase_change(model_grid: ModelGrid, *, tracked_feature=1):
         subplot_titles=(f"Phase Change [Feature {tracked_feature}]", "Colormap"),
     )
 
-    _add_model_phases_trace(model_grid, tracked_feature, fig, col=1, row=1)
-    _add_colormap_trace(fig, col=2, row=1)
+    max_interference = _add_model_phases_trace(
+        model_grid, tracked_feature, fig, col=1, row=1
+    )
+    _add_colormap_trace(fig, col=2, row=1, max_interference=max_interference)
 
     return fig
 
@@ -80,7 +88,11 @@ def _add_model_phases_trace(model_grid: ModelGrid, tracked_feature, fig, *, col,
         lambda m: m.total_feature_interferences[tracked_feature].cpu().item()
     )(model_grid.models)
 
-    phase_colors = _get_phase_color(norm, interference)
+    max_interference = interference.max()
+    interference_normalized = (
+        interference / max_interference if max_interference > 0 else interference
+    )
+    phase_colors = _get_phase_color(norm, interference_normalized)
 
     metadata = np.stack(
         [
@@ -132,8 +144,10 @@ def _add_model_phases_trace(model_grid: ModelGrid, tracked_feature, fig, *, col,
         col=col,
     )
 
+    return max_interference
 
-def _add_colormap_trace(fig, *, col, row):
+
+def _add_colormap_trace(fig, *, col, row, max_interference: float = 1.0):
     COLORMAP_SIZE = 100
     interference_mesh, norm_mesh = np.meshgrid(
         np.linspace(0, 1, COLORMAP_SIZE), np.linspace(1, 0, COLORMAP_SIZE)
@@ -143,7 +157,9 @@ def _add_colormap_trace(fig, *, col, row):
     fig.add_trace(
         go.Image(
             z=colormap,
-            customdata=np.stack([norm_mesh, interference_mesh], axis=-1),
+            customdata=np.stack(
+                [norm_mesh, interference_mesh * max_interference], axis=-1
+            ),
             hovertemplate="Interference: %{customdata[1]:.2f}<br>Norm: %{customdata[0]:.2f}<extra></extra>",
         ),
         row=row,
@@ -152,7 +168,7 @@ def _add_colormap_trace(fig, *, col, row):
     fig.update_xaxes(
         tickmode="array",
         tickvals=[0, COLORMAP_SIZE - 1],
-        ticktext=["0", "≥1"],
+        ticktext=["0", f"≥{max_interference:.2f}"],
         side="top",
         row=row,
         col=col,

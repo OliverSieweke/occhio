@@ -100,13 +100,7 @@ class ModelGrid:
     def _initialize_models(self) -> NDArray[np.object_]:
         shape: tuple[int, ...] = self._shape_from_axes
         models: NDArray[np.object_] = np.empty(shape, dtype=object)
-        for indices in tqdm(
-            product(*[range(s) for s in shape]),
-            total=np.prod(shape),
-            desc="Initializing models",
-            unit="model",
-            leave=True,
-        ):
+        for indices in product(*[range(s) for s in shape]):
             params: dict[str, Any] = {
                 axis.label: axis.values[i] for axis, i in zip(self.axes, indices)
             }
@@ -127,13 +121,7 @@ class ModelGrid:
         )
 
         for i, model in enumerate(
-            tqdm(
-                flattened_models,
-                desc="Validating models",
-                total=len(flattened_models),
-                leave=True,
-                unit="model",
-            ),
+            flattened_models,
             start=1,
         ):
             ae: AutoEncoderBase = model.ae
@@ -165,13 +153,7 @@ class ModelGrid:
         unique_distributions: list[Distribution] = []
         sample_index: list[int] = []
 
-        for model in tqdm(
-            flattened_models,
-            desc="Grouping distributions",
-            total=len(flattened_models),
-            leave=True,
-            unit="model",
-        ):
+        for model in flattened_models:
             dist: Distribution = model.distribution
             hash: str = dist._sampling_equivalence_hash
             if hash not in hash_to_idx:
@@ -192,13 +174,7 @@ class ModelGrid:
             dist.generator.get_state() for dist in self._unique_distributions
         ]
 
-        for model_idx, unique_idx in tqdm(
-            enumerate(self._sample_index.tolist()),
-            desc="Syncing generators",
-            total=len(self._sample_index.tolist()),
-            leave=True,
-            unit="model",
-        ):
+        for model_idx, unique_idx in enumerate(self._sample_index.tolist()):
             follower_dist: Distribution = flattened_models[model_idx].distribution
             if follower_dist is not self._unique_distributions[unique_idx]:
                 follower_dist.generator.set_state(lead_states[unique_idx])
@@ -390,11 +366,11 @@ class ModelGrid:
         if self.cache_samples:
             self._unique_distributions, self._sample_index = self._build_sample_index()
 
-        print(
-            f"Models loaded from '{path}': "
-            f"shape={self.models.shape}, device='{grid_device}', "
-            f"models={self.models.size}"
-        )
+        # print(
+        #     f"Models loaded from '{path}': "
+        #     f"shape={self.models.shape}, device='{grid_device}', "
+        #     f"models={self.models.size}"
+        # )
 
     # If you change the signature or implementation here, make sure you keep it
     # consistent with ToyModel.fit()
@@ -432,26 +408,30 @@ class ModelGrid:
         # a representative for all the Auto-Encoders. This relies on the models using
         # the same Auto-Encoder kind, which is enforced in the initialization.
         representative_ae: AutoEncoderBase = flattened_models[0].ae
-        stacked_forward = torch.vmap(
-            lambda params, buffers, x: functional_call(
-                representative_ae, (params, buffers), (x,)
-            )[0],
-            in_dims=(0, 0, 0),
+        stacked_forward = torch.compile(
+            torch.vmap(
+                lambda params, buffers, x: functional_call(
+                    representative_ae, (params, buffers), (x,)
+                )[0],
+                in_dims=(0, 0, 0),
+            )
         )
 
         use_vectorized_loss: bool = self._can_vectorize_loss()
         if use_vectorized_loss:
-            stacked_loss = torch.vmap(
-                lambda x_true, x_hat, importances: representative_ae.loss(
-                    x_true, x_hat, importances
-                ),
-                in_dims=(0, 0, 0),
+            stacked_loss = torch.compile(
+                torch.vmap(
+                    lambda x_true, x_hat, importances: representative_ae.loss(
+                        x_true, x_hat, importances
+                    ),
+                    in_dims=(0, 0, 0),
+                )
             )
 
         # Training ---------------------------------------------------------------------
         losses: list[float] | None = [] if track_losses else None
 
-        for ep in tqdm(range(n_epochs), desc="Training", unit="epoch"):
+        for ep in tqdm(range(n_epochs)):
             # [17.02.26 | OliverSieweke] TODO: Could attempt to vectorize when possible
             # here. This is not trivial though, one would need to:
             #   - group the distributions of the same kind

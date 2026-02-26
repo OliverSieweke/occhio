@@ -139,4 +139,5 @@ fig.update_yaxes(
     col=2,
     title=dict(text="<b>Norm</b>", font=dict(size=10), standoff=5),
 )
+
 fig.write_image("phase_changes.png", scale=3)

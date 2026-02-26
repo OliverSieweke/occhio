@@ -72,7 +72,6 @@ dist = DAGRandomWalkToRoot(
 
 print(dist.print_graph())
 
-# Validate p_active
 torch.mean(1.0 * (dist.sample(1000) > 0.0), dim=0)
 
 
@@ -80,7 +79,7 @@ torch.mean(1.0 * (dist.sample(1000) > 0.0), dim=0)
 # ae = MLPEncoder([3, 2], [2, 6, 3], generator=gen)
 ae = TiedLinearRelu(N_FEAT, 2, generator=gen)
 tm = ToyModel(dist, ae, generator=gen)
-losses = tm.fit(15_000, verbose=True)[0]
+losses = tm.fit(25_000, verbose=True)[0]
 
 # %%
 px.line(losses)

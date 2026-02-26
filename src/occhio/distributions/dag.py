@@ -222,11 +222,13 @@ class DAGRandomWalkToRoot(Distribution):
         adjacency: Tensor | np.ndarray | None = None,
         beta: float = 1.0,
         p_active: list[float] | Tensor | None = None,
+        shrinking: bool = True,
         **kwargs,
     ):
         super().__init__(n_features, **kwargs)
         self.p_edge = p_edge
         self.beta = beta
+        self.shrinking = shrinking
         if p_active is None:
             self.p_active = torch.ones(n_features, device=self.device) / n_features
         else:
@@ -300,9 +302,9 @@ class DAGRandomWalkToRoot(Distribution):
         current_values = activations
 
         for _ in range(self.n_features):
-            current_values = self.beta * current_values + (
-                1.0 - self.beta
-            ) * current_values * self._rand(batch_size)
+            current_values = self.beta * current_values + (1.0 - self.beta) * (
+                current_values**self.shrinking
+            ) * self._rand(batch_size)
 
             still_walking = self._has_parents_mask[current_nodes]  # (batch_size,)
             if not still_walking.any():
@@ -349,3 +351,57 @@ class DAGRandomWalkToRoot(Distribution):
                 print(f"  {labels[i]} → {', '.join(targets)}")
             else:
                 print(f"  {labels[i]}  (no outgoing)")
+
+    def print_sources_and_sinks(self, labels=None):
+        n = self.adjacency.shape[0]
+        if labels is None:
+            labels = [str(i) for i in range(n)]
+
+        has_outgoing = self.adjacency.any(dim=1)
+        has_incoming = self.adjacency.any(dim=0)
+
+        sources = [
+            labels[i] for i in range(n) if has_outgoing[i] and not has_incoming[i]
+        ]
+        sinks = [labels[i] for i in range(n) if has_incoming[i] and not has_outgoing[i]]
+        isolated = [
+            labels[i] for i in range(n) if not has_outgoing[i] and not has_incoming[i]
+        ]
+
+        print(f"  Sources:  {', '.join(sources) or '(none)'}")
+        print(f"  Sinks:    {', '.join(sinks) or '(none)'}")
+        if isolated:
+            print(f"  Isolated: {', '.join(isolated)}")
+
+    def print_connected_components(self, labels=None):
+        n = self.adjacency.shape[0]
+        if labels is None:
+            labels = [str(i) for i in range(n)]
+
+        # Build undirected adjacency (ignore direction)
+        undirected = self.adjacency | self.adjacency.T
+
+        visited = [False] * n
+        components = []
+
+        def bfs(start):
+            queue = [start]
+            visited[start] = True
+            comp = [start]
+            while queue:
+                node = queue.pop(0)
+                for j in range(n):
+                    if undirected[node, j] and not visited[j]:
+                        visited[j] = True
+                        queue.append(j)
+                        comp.append(j)
+            return comp
+
+        for i in range(n):
+            if not visited[i]:
+                components.append(bfs(i))
+
+        print(f"  {len(components)} connected component(s):")
+        for k, comp in enumerate(components):
+            names = [labels[i] for i in comp]
+            print(f"    Component {k}: {', '.join(names)}")
