@@ -1,12 +1,14 @@
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 import numpy as np
 import torch
 from torch import Tensor
 import plotly.express as px
 import plotly.graph_objects as go
 import torch.nn.functional as F
+from occhio.toy_model import ToyModel
 
 
+@runtime_checkable
 class _ComputeAE(Protocol):
     n_features: int
 
@@ -15,7 +17,9 @@ class _ComputeAE(Protocol):
     def decode(self, z: Tensor) -> Tensor: ...
 
 
-def plot_decode_plane(ae: _ComputeAE, title: str = "Decode plane"):
+def plot_decode_plane(tm: ToyModel, title: str = "Decode plane"):
+    assert isinstance(tm.ae, _ComputeAE)
+    ae = tm.ae
     """
     Grid the 2-D latent space, decode every point, colour by dominant feature,
     and overlay where each one-hot e_i maps after encode → compute_step.
