@@ -1991,6 +1991,18 @@ wheels = [
 ]
 
 [[package]]
+name = "nbstripout"
+version = "0.9.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "nbformat" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f9/6f/b52c4da26babeb521078c08c78c3187a59197098ffc7a70b0fe76851813a/nbstripout-0.9.1.tar.gz", hash = "sha256:313bbb4217c8e38998567e5d790b6bd6c3a17a8c39073b205b84dadfc5d756dc", size = 32356, upload-time = "2026-02-21T16:19:55.975Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/20/16/e777eadfa0c0305878c36fae1d5e6db474fbb15dae202b9ec378809dfb4d/nbstripout-0.9.1-py3-none-any.whl", hash = "sha256:ca027ee45742ee77e4f8e9080254f9a707f1161ba11367b82fdf4a29892c759e", size = 19136, upload-time = "2026-02-21T16:19:54.868Z" },
+]
+
+[[package]]
 name = "nest-asyncio"
 version = "1.6.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2396,11 +2408,13 @@ dev = [
     { name = "matplotlib" },
     { name = "mkdocs" },
     { name = "nbformat" },
+    { name = "nbstripout" },
     { name = "plotly" },
     { name = "pre-commit" },
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "ruff" },
+    { name = "ruff-jupyter-jetbrains" },
     { name = "seaborn" },
     { name = "statsmodels" },
     { name = "ty" },
@@ -2433,11 +2447,13 @@ dev = [
     { name = "matplotlib", specifier = ">=3.10.8" },
     { name = "mkdocs", specifier = ">=1.6.1" },
     { name = "nbformat", specifier = ">=5.10.4" },
+    { name = "nbstripout", specifier = ">=0.9.0" },
     { name = "plotly", specifier = ">=6.5.2" },
     { name = "pre-commit", specifier = ">=4.5.1" },
     { name = "pytest", specifier = ">=9.0.2" },
     { name = "pytest-cov", specifier = ">=7.0.0" },
     { name = "ruff", specifier = ">=0.15.0" },
+    { name = "ruff-jupyter-jetbrains", specifier = ">=1.0.0" },
     { name = "seaborn", specifier = ">=0.13.2" },
     { name = "statsmodels", specifier = ">=0.14.6" },
     { name = "ty", specifier = ">=0.0.14" },
@@ -3442,6 +3458,18 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/6f/b0/69adf22f4e24f3677208adb715c578266842e6e6a3cc77483f48dd999ede/ruff-0.15.0-py3-none-win32.whl", hash = "sha256:238a717ef803e501b6d51e0bdd0d2c6e8513fe9eec14002445134d3907cd46c3", size = 10465945, upload-time = "2026-02-03T17:53:12.591Z" },
     { url = "https://files.pythonhosted.org/packages/51/ad/f813b6e2c97e9b4598be25e94a9147b9af7e60523b0cb5d94d307c15229d/ruff-0.15.0-py3-none-win_amd64.whl", hash = "sha256:dd5e4d3301dc01de614da3cdffc33d4b1b96fb89e45721f1598e5532ccf78b18", size = 11564657, upload-time = "2026-02-03T17:52:51.893Z" },
     { url = "https://files.pythonhosted.org/packages/f6/b0/2d823f6e77ebe560f4e397d078487e8d52c1516b331e3521bc75db4272ca/ruff-0.15.0-py3-none-win_arm64.whl", hash = "sha256:c480d632cc0ca3f0727acac8b7d053542d9e114a462a145d0b00e7cd658c515a", size = 10865753, upload-time = "2026-02-03T17:53:03.014Z" },
+]
+
+[[package]]
+name = "ruff-jupyter-jetbrains"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "nbformat" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5b/06/c227d1d1ebf5b33cf631a2137ca8a6be7b91a18500b5155f60d66f60ef36/ruff_jupyter_jetbrains-1.0.0.tar.gz", hash = "sha256:e8af7d96ea7719570c37cc4239a5fbaf37499cd9f41244d3648393685b5b3bd8", size = 4359, upload-time = "2025-11-11T18:23:28.356Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5c/30/53a9c729335188a263a99a7904926763879bb6dc85e8202cb1213ffc784a/ruff_jupyter_jetbrains-1.0.0-py3-none-any.whl", hash = "sha256:e79890da409b0ba94853267756294533a55d51dc8f3d7ec817d086fdeba5da46", size = 5676, upload-time = "2025-11-11T18:23:27.295Z" },
 ]
 
 [[package]]

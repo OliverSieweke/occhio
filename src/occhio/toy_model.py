@@ -67,7 +67,10 @@ class ToyModel:
         if importances is None:
             self.importances = torch.ones(self.n_features, device=ae.device)
         else:
-            self.importances = importances.to(ae.device)
+            if isinstance(importances, Tensor):
+                self.importances = importances.to(ae.device)
+            else:
+                self.importances = torch.tensor(importances, device=ae.device)
 
     # If you change the signature or implementation here, make sure you keep it
     # consistent with ModelGrid.fit()
@@ -170,6 +173,11 @@ class ToyModel:
     @torch.no_grad()
     def W(self) -> Tensor:
         return self.get_one_hot_embeddings().T
+
+    @property
+    @torch.no_grad()
+    def W_T_W(self) -> Tensor:
+        return self.W.T @ self.W
 
     @property
     @torch.no_grad()
