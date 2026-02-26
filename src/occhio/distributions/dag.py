@@ -2,6 +2,7 @@
 
 from .base import Distribution
 from torch import Tensor
+from typing import Literal
 import torch
 import numpy as np
 
@@ -341,10 +342,17 @@ class DAGRandomWalkToRoot(Distribution):
         self._has_parents_mask = self._has_parents_mask.to(device)
         return self
 
-    def print_graph(self, labels=None):
+    def print_graph(self, labels=None, center: int | None = None):
         n = self.adjacency.shape[0]
         if labels is None:
             labels = [str(i) for i in range(n)]
+        if center is not None:
+            parents = [labels[i] for i in range(n) if self.adjacency[i, center]]
+            children = [labels[j] for j in range(n) if self.adjacency[center, j]]
+            print(f"  {labels[center]}")
+            print(f"    parents:  {', '.join(parents) or '(none)'}")
+            print(f"    children: {', '.join(children) or '(none)'}")
+            return
         for i in range(n):
             targets = [labels[j] for j in range(n) if self.adjacency[i, j]]
             if targets:
@@ -405,3 +413,152 @@ class DAGRandomWalkToRoot(Distribution):
         for k, comp in enumerate(components):
             names = [labels[i] for i in comp]
             print(f"    Component {k}: {', '.join(names)}")
+
+
+class PowerLawDigraph(Distribution):
+    """Digraph with power-law in-degree distribution and one-step cascade propagation.
+
+    Node **0** has the highest expected in-degree (many nodes point to it), and
+    node **N-1** has the lowest.  The graph is a general directed graph — cycles
+    are allowed and harmless because propagation is exactly one step.
+
+    ``adjacency[j, i] = True`` encodes the directed edge j → i.  The per-edge
+    connection probability for edges targeting node *i* follows a power law:
+
+    .. math::
+        p_i = \\min\\!\\left(1,\\; p_{\\text{edge}} \\cdot
+              \\left(\\frac{N - i}{N}\\right)^{\\!\\alpha}\\right)
+
+    so node 0 always gets connection probability ``p_edge`` (the maximum), and
+    later nodes receive proportionally fewer in-edges as ``alpha`` grows.
+    ``alpha=0`` recovers Erdős-Rényi with uniform edge probability.
+
+    Sampling:
+
+    1. Each node fires **independently** with probability ``p_active`` (like
+       :class:`SparseUniform`).
+    2. **One-step cascade**: every independently-fired node tries to trigger each
+       of its out-neighbours.  Each out-edge fires the child independently with
+       probability ``p_child``.  With *k* independently-fired parents, the
+       combined probability that a child is cascade-triggered is
+       :math:`1 - (1 - p_{\\text{child}})^{k}` (noisy-OR).
+    3. Active nodes (independent OR cascade) take values drawn from ``value_dist``.
+
+    Args:
+        n_features: Number of nodes.
+        alpha: Power-law exponent for the in-degree distribution.
+            ``alpha=0`` gives Erdős-Rényi.  ``alpha=1`` makes node 0 receive
+            roughly *N* times more in-edges than node N-1.  Default: ``1.0``.
+        p_edge: Base edge probability (equals the per-edge probability for
+            in-edges to node 0).  Controls overall graph density.
+            Default: ``0.1``.
+        p_active: Unconditional firing probability.  Scalar or per-feature.
+            Default: ``0.05``.
+        p_child: Per-edge cascade probability.  Each out-edge from a fired node
+            independently triggers the child with this probability.
+            ``1.0`` = deterministic cascade; ``0.0`` = no cascade.
+            Default: ``0.9``.
+        value_dist: Value distribution for active nodes.
+            ``'uniform'`` — Uniform(0, 1).  ``'exponential'`` — Exponential(1).
+            Default: ``'uniform'``.
+        device: Torch device for all generated tensors.
+        generator: Optional ``torch.Generator`` for deterministic sampling.
+    """
+
+    def __init__(
+        self,
+        n_features: int,
+        alpha: float = 1.0,
+        p_edge: float = 0.1,
+        p_active: float | list[float] | Tensor = 0.05,
+        p_child: float = 0.9,
+        value_dist: Literal["uniform", "exponential"] = "uniform",
+        **kwargs,
+    ):
+        super().__init__(n_features, **kwargs)
+        self.alpha = alpha
+        self.p_edge = p_edge
+        self.p_active = self._broadcast(p_active)
+        self.p_child = p_child
+        self.value_dist = value_dist
+        self.regenerate_graph()
+
+    def _generate_graph(self) -> Tensor:
+        """Generate adjacency matrix with power-law in-degree distribution.
+
+        Returns a boolean tensor where ``adj[j, i]`` is ``True`` iff there is a
+        directed edge j → i.  Column *i* has per-entry probability
+        ``p_edge * ((N - i) / N) ** alpha``; self-loops are excluded.
+        """
+        N = self.n_features
+        node_idx = torch.arange(N, device=self.device, dtype=torch.float)
+        p_per_target = (self.p_edge * ((N - node_idx) / N).pow(self.alpha)).clamp(
+            max=1.0
+        )
+        # rand[j, i] < p_per_target[i] for all j — broadcast across rows.
+        adj = self._rand(N, N) < p_per_target.unsqueeze(0)
+        adj.fill_diagonal_(False)
+        return adj
+
+    def regenerate_graph(self) -> None:
+        """Sample a new graph from the power-law digraph prior."""
+        self.adjacency = self._generate_graph()
+
+    def sample(self, batch_size: int) -> Tensor:
+        """Sample activations via independent firing and one-step cascade."""
+        # Step 1: independent fires — (batch_size, N)
+        ind_active = self._rand(batch_size, self.n_features) < self.p_active
+
+        # Step 2: cascade — count active parents per node via matmul.
+        # ind_active @ adjacency: result[b, i] = number of independently-fired
+        # parents of node i in sample b.
+        n_active_parents = ind_active.float() @ self.adjacency.float()
+        cascade_prob = 1.0 - (1.0 - self.p_child) ** n_active_parents
+        cascade_active = self._rand(batch_size, self.n_features) < cascade_prob
+
+        active = ind_active | cascade_active
+
+        if self.value_dist == "uniform":
+            values = self._rand(batch_size, self.n_features)
+        else:  # "exponential"
+            u = self._rand(batch_size, self.n_features).clamp(max=1.0 - 1e-6)
+            values = -torch.log(1.0 - u)
+
+        return active.float() * values
+
+    def in_degrees(self) -> Tensor:
+        """Return the in-degree (number of parents) for each node."""
+        return self.adjacency.float().sum(dim=0)
+
+    def out_degrees(self) -> Tensor:
+        """Return the out-degree (number of children) for each node."""
+        return self.adjacency.float().sum(dim=1)
+
+    def get_expected_activation(self, n_samples: int = 10_000) -> Tensor:
+        """Estimate marginal activation probabilities via Monte Carlo."""
+        samples = self.sample(n_samples)
+        return (samples > 0).float().mean(dim=0)
+
+    def print_graph(self, labels=None, center: int | None = None):
+        n = self.adjacency.shape[0]
+        if labels is None:
+            labels = [str(i) for i in range(n)]
+        if center is not None:
+            parents = [labels[i] for i in range(n) if self.adjacency[i, center]]
+            children = [labels[j] for j in range(n) if self.adjacency[center, j]]
+            print(f"  {labels[center]}")
+            print(f"    parents:  {', '.join(parents) or '(none)'}")
+            print(f"    children: {', '.join(children) or '(none)'}")
+            return
+        for i in range(n):
+            targets = [labels[j] for j in range(n) if self.adjacency[i, j]]
+            if targets:
+                print(f"  {labels[i]} → {', '.join(targets)}")
+            else:
+                print(f"  {labels[i]}  (no outgoing)")
+
+    def to(self, device: torch.device | str):
+        """Move distribution to device."""
+        super().to(device)
+        self.adjacency = self.adjacency.to(device)
+        return self

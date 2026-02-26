@@ -33,6 +33,7 @@ dev = [
     "pytest-cov>=7.0.0",
     "ruff>=0.15.0",
     "seaborn>=0.13.2",
+    "statsmodels>=0.14.6",
     "ty>=0.0.14",
 ]
 

@@ -8,7 +8,12 @@ from .correlated import (
 )
 from .relational import RelationalSimple, MultiRelational
 from .hierarchical import HierarchicalSparse
-from .dag import DAGBayesianPropagation, DAGDistribution, DAGRandomWalkToRoot
+from .dag import (
+    DAGBayesianPropagation,
+    DAGDistribution,
+    DAGRandomWalkToRoot,
+    PowerLawDigraph,
+)
 
 
 __all__ = [
@@ -27,4 +32,5 @@ __all__ = [
     "DAGBayesianPropagation",
     "DAGDistribution",
     "DAGRandomWalkToRoot",
+    "PowerLawDigraph",
 ]
