@@ -29,11 +29,10 @@ N_HIDDEN = 10
 
 dist = PowerLawDigraph(
     n_features=N_FEATURES,
-    alpha=1.5,  # steepness of power-law in-degree
-    p_edge=0.10,  # base edge probability
-    p_active=0.03,  # unconditional firing probability
-    p_child=0.3,  # cascade probability per active parent
-    value_dist="uniform",
+    alpha=1.5,
+    p_edge=0.10,
+    p_active=2 / N_FEATURES,
+    p_child=0.2,
     generator=gen,
     device=DEVICE,
 )
