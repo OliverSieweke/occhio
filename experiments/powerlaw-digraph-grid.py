@@ -48,7 +48,7 @@ def create_model(params):
 mg = ModelGrid(
     create_model,
     axes=[
-        Axis(label="p_active", values=torch.logspace(-0.2, -2.5, steps=20)),
+        Axis(label="p_active", values=torch.logspace(-0.2, -2.5, steps=24)),
     ],
 )
 
@@ -57,8 +57,5 @@ mg.fit(10_000)
 
 # %%
 ov.plot_geometry(mg)
-
-# %%
-torch.logspace(-0.1, -3, steps=10)
 
 # %%

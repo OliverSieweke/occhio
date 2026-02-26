@@ -25,7 +25,7 @@ gen = torch.Generator(DEVICE)
 gen.manual_seed(1)
 
 N_FEATURES = 200
-N_HIDDEN = 15
+N_HIDDEN = 16
 
 dist = PowerLawDigraph(
     n_features=N_FEATURES,
@@ -285,10 +285,11 @@ dist.print_graph(center=1)
 CENTER = 2
 
 adj = dist.adjacency  # adj[j, i] = True  ⟹  j → i
-children = adj[CENTER, :].nonzero(as_tuple=True)[0].tolist()
+# children = adj[CENTER, :].nonzero(as_tuple=True)[0].tolist()
+parents = adj[:, CENTER].nonzero(as_tuple=True)[0].tolist()
 
 # Build ordered index list: parents | center | children (sorted within groups)
-neighborhood = [CENTER] + sorted(children)
+neighborhood = [CENTER] + sorted(parents)  # + sorted(children)
 
 # Slice the interference matrix to the neighborhood
 nbr = np.array(neighborhood)
@@ -297,7 +298,8 @@ vmax = np.max(np.abs(imat_nbr))
 
 # Build axis labels that show role
 role = {CENTER: "center"}
-role.update({i: "child" for i in children})
+# role.update({i: "child" for i in children})
+role.update({i: "parent" for i in parents})
 tick_labels = [f"{i} ({role[i]})" for i in neighborhood]
 
 fig = px.imshow(
@@ -428,7 +430,7 @@ for y_vals, x_vals, color_vals, idx_vals, r, c in _panels:
             mode="markers",
             marker=dict(
                 color=color_vals,
-                colorscale="Sunset",
+                colorscale="turbo",
                 size=7,
                 showscale=(r == 1 and c == 2),
                 colorbar=dict(title="in-degree", x=1.02),
@@ -491,7 +493,7 @@ fig.add_trace(
         mode="markers",
         marker=dict(
             color=in_deg[edge_src],
-            colorscale="Sunset",
+            colorscale="inferno",
             size=5,
             opacity=0.6,
             colorbar=dict(title="in-degree of src"),
