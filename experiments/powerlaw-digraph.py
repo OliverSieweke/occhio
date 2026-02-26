@@ -1,6 +1,6 @@
 # %%
 """
-PowerLawDigraphCascade – toy model experiment.
+PowerLawDigraph – toy model experiment.
 
 We train a TiedLinearRelu autoencoder on a power-law digraph distribution and
 inspect how the learned geometry relates to graph structure (in-degree, cascade
@@ -9,7 +9,7 @@ activation rates, etc.).
 
 # %%
 from occhio import ToyModel
-from occhio.distributions import PowerLawDigraphCascade
+from occhio.distributions import PowerLawDigraph
 from occhio.autoencoder import TiedLinearRelu
 from occhio.visualization.dynamic import plot_dynamic_scatter
 
@@ -27,7 +27,7 @@ gen.manual_seed(42)
 N_FEATURES = 100
 N_HIDDEN = 10
 
-dist = PowerLawDigraphCascade(
+dist = PowerLawDigraph(
     n_features=N_FEATURES,
     alpha=1.5,  # steepness of power-law in-degree
     p_edge=0.10,  # base edge probability
