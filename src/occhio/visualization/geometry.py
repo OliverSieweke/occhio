@@ -110,7 +110,7 @@ def _plot_geometry_static(
                     x=x_vals_jittered,
                     y=feature_dimensionalities,
                     mode="markers",
-                    marker=dict(size=1.5, color="#333333", opacity=0.4),
+                    marker=dict(size=3, color="#333333", opacity=0.7),
                     name="Feature Dimensionality",
                     hovertemplate="Feature Dimensionality: %{y:.3f}<extra></extra>",
                 )
@@ -266,7 +266,7 @@ def _plot_geometry_static(
                 x=x_vals_jittered,
                 y=feature_dimensionalities,
                 mode="markers",
-                marker=dict(size=1.5, color="#333333", opacity=0.4),
+                marker=dict(size=3, color="#333333", opacity=0.7),
                 name="Feature Dimensionality",
                 hovertemplate="Feature Dimensionality: %{y:.3f}<extra></extra>",
             )
@@ -577,7 +577,7 @@ def _create_geometry_figure(
                 x=x_vals_jittered,
                 y=feature_dimensionalities,
                 mode="markers",
-                marker=dict(size=1.5, color="#333333", opacity=0.4),
+                marker=dict(size=3, color="#333333", opacity=0.7),
                 name="Feature Dimensionality",
                 hovertemplate="Feature Dimensionality: %{y:.3f}<extra></extra>",
             )
