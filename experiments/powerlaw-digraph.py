@@ -29,8 +29,8 @@ N_HIDDEN = 16
 
 dist = PowerLawDigraph(
     n_features=N_FEATURES,
-    alpha=1.2,
-    p_edge=0.10,
+    alpha=5,
+    p_edge=10 / N_FEATURES,
     p_active=2 / N_FEATURES,
     p_child=0.2,
     generator=gen,
@@ -543,6 +543,33 @@ fig = px.scatter(
     title="PCA of W columns  (each point = one feature vector in hidden space)",
 )
 fig.update_traces(marker=dict(size=8))
+fig.show()
+
+# %%  ── interference vs correlation comparison ─────────────────────────────
+N_CORR_SAMPLES = 100_000
+samples = dist.sample(N_CORR_SAMPLES).numpy()  # (N_CORR_SAMPLES, N_FEATURES)
+
+# Pearson correlation matrix from samples
+corr_mat = np.corrcoef(samples, rowvar=False)  # (N_FEATURES, N_FEATURES)
+
+# Sort both matrices by in-degree (descending) for comparable layout
+imat_sorted_corr = imat[np.ix_(order, order)]
+corr_sorted = corr_mat[np.ix_(order, order)]
+
+
+# ── scatter: imat[i,j] vs corr[i,j] for all off-diagonal pairs ───────────
+mask = ~np.eye(N_FEATURES, dtype=bool)
+imat_flat = imat[mask]
+corr_flat = corr_mat[mask]
+
+fig = px.scatter(
+    x=corr_flat,
+    y=imat_flat,
+    opacity=0.3,
+    labels=dict(x="Pearson correlation", y="Interference  imat[i,j]"),
+    title="Per-pair: interference vs empirical correlation  (all off-diagonal pairs)",
+    trendline="ols",
+)
 fig.show()
 
 # %%
