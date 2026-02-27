@@ -118,7 +118,7 @@ class ModelGrid:
             )
 
     def _initialize_models(self) -> NDArray[np.object_]:
-        shape: tuple[int, ...] = self.shape
+        shape: tuple[int, ...] = tuple(len(axis.values) for axis in self.axes)
         models: NDArray[np.object_] = np.empty(shape, dtype=object)
         for indices in product(*[range(s) for s in shape]):
             params: dict[str, Any] = {
