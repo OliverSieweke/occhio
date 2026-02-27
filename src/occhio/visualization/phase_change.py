@@ -48,7 +48,11 @@ def plot_phase_change_multi(model_grid: ModelGrid, *, up_to: int, max_cols: int 
     return fig
 
 
-def plot_phase_change(model_grid: ModelGrid, *, tracked_feature=1):
+def plot_phase_change(model_grid: ModelGrid | list[ModelGrid], *, tracked_feature=1):
+    # Handle list of ModelGrids
+    if isinstance(model_grid, list):
+        return _plot_phase_change_multi_grids(model_grid, tracked_feature)
+
     # Find TrainingAxis if present
     training_axis_idx = None
     for idx, axis in enumerate(model_grid.axes):
@@ -78,6 +82,50 @@ def plot_phase_change(model_grid: ModelGrid, *, tracked_feature=1):
         return _plot_phase_change_animated(
             model_grid, training_axis_idx, tracked_feature
         )
+
+
+def _plot_phase_change_multi_grids(model_grids: list[ModelGrid], tracked_feature: int):
+    """Create static phase change plot for multiple 2D grids with shared colormap."""
+    # Validate all grids are 2D and have no TrainingAxis
+    for i, grid in enumerate(model_grids):
+        for axis in grid.axes:
+            if isinstance(axis, TrainingAxis):
+                raise ValueError(
+                    f"Grid {i} contains a TrainingAxis. Multiple grids with TrainingAxis are not supported."
+                )
+        if len(grid.shape) != 2:
+            raise ValueError(
+                f"plot_phase_change with multiple grids requires all grids to be 2-dimensional, "
+                f"got {len(grid.shape)}-dimensional for grid {i} (shape: {grid.shape})."
+            )
+
+    n_grids = len(model_grids)
+    # Column widths: equal space for each grid, plus one smaller column for colormap
+    column_widths = [1.0] * n_grids + [0.2]
+
+    fig = make_subplots(
+        rows=1,
+        cols=n_grids + 1,
+        column_widths=column_widths,
+        subplot_titles=[f"Phase Change [Feature {tracked_feature}]"] * n_grids
+        + ["Colormap"],
+    )
+
+    # Collect all traces and find max interference across all grids
+    max_interferences = []
+    for i, grid in enumerate(model_grids):
+        max_interference = _add_model_phases_trace(
+            grid, tracked_feature, fig, col=i + 1, row=1
+        )
+        max_interferences.append(max_interference)
+
+    # Add shared colormap with global max interference
+    global_max_interference = max(max_interferences) if max_interferences else 1.0
+    _add_colormap_trace(
+        fig, col=n_grids + 1, row=1, max_interference=global_max_interference
+    )
+
+    return fig
 
 
 def _plot_phase_change_static(model_grid: ModelGrid, tracked_feature: int):

@@ -4,31 +4,42 @@ import math
 import os  # E401: multiple imports on one line
 import sys
 
+import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from occhio.model_grid import ModelGrid
+from occhio.toy_model import ToyModel
 
 
-def plot_representation(model_grid: ModelGrid):
-    """Plot W^T W heatmaps, bias vectors, and feature norms/interferences for models in a 1D grid.
+def plot_representation(model_grid: ToyModel | ModelGrid):
+    """Plot W^T W heatmaps, bias vectors, and feature norms/interferences for models in a 0D or 1D grid.
 
     Args:
-        model_grid: A 1-dimensional ModelGrid containing the models to visualize.
+        model_grid: A ToyModel or 0/1-dimensional ModelGrid containing the models to visualize.
 
     Returns:
         A plotly Figure with heatmaps and bar charts arranged in a grid.
 
     Raises:
-        ValueError: If model_grid is not 1-dimensional or is empty.
+        ValueError: If model_grid is not 0 or 1-dimensional or is empty.
     """
-    if len(model_grid.shape) != 1:
+    # Convert ToyModel to ModelGrid
+    if isinstance(model_grid, ToyModel):
+        model_grid = ModelGrid(
+            create_model=lambda: model_grid,
+            axes=[],
+            cache_samples=False,
+            _models=np.array([model_grid]),
+        )
+
+    if len(model_grid.shape) > 1:
         raise ValueError(
-            f"plot_representation requires a 1-dimensional ModelGrid, "
+            f"plot_representation requires a 0 or 1-dimensional ModelGrid, "
             f"got {len(model_grid.shape)}-dimensional (shape: {model_grid.shape})."
         )
 
-    n_models = len(model_grid.models)
+    n_models = len(model_grid.models.flat)
     if n_models == 0:
         raise ValueError("Cannot plot representation for an empty ModelGrid.")
 
@@ -211,17 +222,18 @@ def plot_representation(model_grid: ModelGrid):
         )
 
         # Add annotation with axis label and value
-        fig.add_annotation(
-            text=f"{model_grid.axes[0].label} = {model_grid.axes[0].values[model_idx]:.3f}",
-            xref=f"x{(heatmap_row - 1) * len(column_widths) + model_col_offset + 1}",
-            yref=f"y{(heatmap_row - 1) * len(column_widths) + model_col_offset + 1}",
-            x=-0.5,
-            y=n_features,
-            showarrow=False,
-            xanchor="left",
-            yanchor="top",
-            font=dict(size=8),
-        )
+        if len(model_grid.axes) > 0:
+            fig.add_annotation(
+                text=f"{model_grid.axes[0].label} = {model_grid.axes[0].values[model_idx]:.3f}",
+                xref=f"x{(heatmap_row - 1) * len(column_widths) + model_col_offset + 1}",
+                yref=f"y{(heatmap_row - 1) * len(column_widths) + model_col_offset + 1}",
+                x=-0.5,
+                y=n_features,
+                showarrow=False,
+                xanchor="left",
+                yanchor="top",
+                font=dict(size=8),
+            )
 
     fig.update_layout(
         showlegend=False,

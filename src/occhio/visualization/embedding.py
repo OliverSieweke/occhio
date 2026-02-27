@@ -1,23 +1,65 @@
+import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from occhio.model_grid import ModelGrid
+from occhio.toy_model import ToyModel
 
 
 # [18.02.26 | OliverSieweke] TODO: Make this more general so it works with 1-dimensional embedding space (maybe 3 dimensional too)
 def plot_embedding(
-    model_grid: ModelGrid,
+    model_grid: ToyModel | ModelGrid | list[ToyModel],
 ):
+    # Convert ToyModel or list of ToyModels to ModelGrid
+    if isinstance(model_grid, ToyModel):
+        import torch
+
+        from occhio.model_grid import Axis
+
+        model_grid = ModelGrid(
+            create_model=lambda params: model_grid,
+            axes=[Axis(label="model", values=torch.tensor([0.0]))],
+            cache_samples=False,
+            _models=np.array([model_grid], dtype=object),
+        )
+    elif isinstance(model_grid, list):
+        import torch
+
+        from occhio.model_grid import Axis
+
+        model_grid = ModelGrid(
+            create_model=lambda params: None,
+            axes=[
+                Axis(
+                    label="model",
+                    values=torch.arange(len(model_grid), dtype=torch.float32),
+                )
+            ],
+            cache_samples=False,
+            _models=np.array(model_grid, dtype=object),
+        )
+
     if len(model_grid.shape) > 2:
         raise ValueError(
             f"plot_embedding requires a 1 or 2-dimensional ModelGrid, "
             f"got {len(model_grid.shape)}-dimensional (shape: {model_grid.shape})."
         )
 
+    # Check embedding dimension
+    sample_model = model_grid.models.ravel()[0]
+    embedding_dim = sample_model.W.shape[0]
+    if embedding_dim not in [1, 2]:
+        raise ValueError(
+            f"plot_embedding only supports 1 or 2-dimensional embedding spaces, "
+            f"but the model has {embedding_dim}-dimensional embeddings (W.shape = {sample_model.W.shape})."
+        )
+
     # Create subplots based on grid dimensions
     n_axes = len(model_grid.shape)
-    if n_axes == 1:
+    if n_axes == 0:
+        n_rows, n_cols = 1, 1
+    elif n_axes == 1:
         n_rows, n_cols = 1, model_grid.shape[0]
     else:  # n_axes == 2
         n_rows, n_cols = model_grid.shape
@@ -27,7 +69,9 @@ def plot_embedding(
     fig = make_subplots(
         rows=n_rows,
         cols=n_cols,
-        subplot_titles=[
+        subplot_titles=[]
+        if n_axes == 0
+        else [
             f"{model_grid.axes[0].label}: {model_grid.axes[0].values[i]}"
             for i in range(n_cols)
         ]
@@ -69,7 +113,9 @@ def plot_embedding(
 
     # Loop over grid positions and create subplots
     for idx in range(n_rows * n_cols):
-        if n_axes == 1:
+        if n_axes == 0:
+            row, col = 1, 1
+        elif n_axes == 1:
             row, col = 1, idx + 1
         else:  # n_axes == 2
             row = idx // n_cols + 1
@@ -99,10 +145,12 @@ def plot_embedding(
             color_idx = int(
                 model.importances[feature_idx].item() * 0.9 * (len(colorscale) - 1)
             )
+            # Clamp color_idx to valid range
+            color_idx = max(0, min(color_idx, len(colorscale) - 1))
             color = colorscale[color_idx]
 
             x_val = model.W[0, feature_idx].cpu().item()
-            y_val = model.W[1, feature_idx].cpu().item()
+            y_val = model.W[1, feature_idx].cpu().item() if embedding_dim == 2 else 0.0
             importance = model.importances[feature_idx].item()
 
             # Add arrow annotation (no hover support)
