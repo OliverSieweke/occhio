@@ -27,7 +27,6 @@ def create_model_experiment_a(params: dict[str, Any]) -> ToyModel:
     n_features = 6
     correlation = params["Correlation"]
     density = params["Density"]
-
     dist = CorrelatedPairs(
         n_features=n_features,
         correlation=correlation,
@@ -41,8 +40,7 @@ def create_model_experiment_a(params: dict[str, Any]) -> ToyModel:
         generator=torch.Generator().manual_seed(7),
     )
 
-    device = "mps" if torch.backends.mps.is_available() else "cpu"
-    return ToyModel(distribution=dist, ae=ae, device=device)
+    return ToyModel(distribution=dist, ae=ae)
 
 
 def create_model_experiment_b(params: dict[str, Any]) -> ToyModel:
@@ -50,7 +48,6 @@ def create_model_experiment_b(params: dict[str, Any]) -> ToyModel:
     n_features = 10
     correlation = params["Correlation"]
     density = params["Density"]
-
     dist = CorrelatedPairs(
         n_features=n_features,
         correlation=correlation,
@@ -64,15 +61,13 @@ def create_model_experiment_b(params: dict[str, Any]) -> ToyModel:
         generator=torch.Generator().manual_seed(7),
     )
 
-    device = "mps" if torch.backends.mps.is_available() else "cpu"
-    return ToyModel(distribution=dist, ae=ae, device=device)
+    return ToyModel(distribution=dist, ae=ae)
 
 
 def create_model_experiment_c(params: dict[str, Any]) -> ToyModel:
     """Factory for Experiment C models (anticorrelated control)."""
     n_features = 6
     density = params["Density"]
-
     dist = AnticorrelatedPairs(
         n_features=n_features,
         p_active=density,
@@ -85,8 +80,7 @@ def create_model_experiment_c(params: dict[str, Any]) -> ToyModel:
         generator=torch.Generator().manual_seed(7),
     )
 
-    device = "mps" if torch.backends.mps.is_available() else "cpu"
-    return ToyModel(distribution=dist, ae=ae, device=device)
+    return ToyModel(distribution=dist, ae=ae)
 
 
 print("✓ Model factories defined")
