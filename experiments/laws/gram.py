@@ -1,6 +1,9 @@
 # ABOUTME: Law 1 experiment: correlation-interference relationship in CorrelatedPairs
 # ABOUTME: Trains ModelGrids to extract Gram metrics and validate monotonic increase with correlation
 
+# %%
+# Cell 1: Imports
+
 import os
 import torch
 import numpy as np
@@ -12,8 +15,10 @@ from occhio.model_grid import Axis
 from occhio.autoencoder import TiedLinearRelu
 from occhio.distributions import CorrelatedPairs, AnticorrelatedPairs
 
+print("✓ Imports successful")
 
-# ── Experiment A: Primary (6 features, 2 hidden, 3 pairs) ──────────────────
+# %%
+# Cell 2: Model factories
 
 
 def create_model_experiment_a(params: dict[str, Any]) -> ToyModel:
@@ -80,7 +85,92 @@ def create_model_experiment_c(params: dict[str, Any]) -> ToyModel:
     return ToyModel(distribution=dist, ae=ae, device="cpu")
 
 
-# ── Run experiments ────────────────────────────────────────────────────────
+print("✓ Model factories defined")
+
+# %%
+# Cell 3: Metric extraction functions
+
+
+def extract_metrics(grid: ModelGrid, n_features: int) -> dict[str, np.ndarray]:
+    """Extract within-pair and cross-pair cosines from trained grid."""
+    n_pairs = n_features // 2
+    shape = grid.shape
+
+    within_pair_cos = np.zeros(shape)
+    cross_pair_cos_mean = np.zeros(shape)
+    feature_norms_mean = np.zeros(shape)
+    feature_dims_mean = np.zeros(shape)
+
+    for idx in np.ndindex(shape):
+        model = grid.models[idx]
+        interf = model.interferences.cpu().numpy()
+
+        # Within-pair cosines (extract diagonal elements for each pair)
+        within_pair_vals = []
+        for pair_idx in range(n_pairs):
+            i, j = 2 * pair_idx, 2 * pair_idx + 1
+            within_pair_vals.append(interf[i, j])
+        within_pair_cos[idx] = np.mean(within_pair_vals)
+
+        # Cross-pair cosines (all inter-pair interactions)
+        cross_pair_vals = []
+        for i in range(n_features):
+            for j in range(n_features):
+                pair_i, pair_j = i // 2, j // 2
+                if pair_i != pair_j and i != j:
+                    cross_pair_vals.append(abs(interf[i, j]))
+        cross_pair_cos_mean[idx] = np.mean(cross_pair_vals) if cross_pair_vals else 0.0
+
+        # Feature norms and dimensionalities
+        feature_norms_mean[idx] = model.feature_norms.mean().item()
+        feature_dims_mean[idx] = model.feature_dimensionalities.mean().item()
+
+    return {
+        "within_pair_cos": within_pair_cos,
+        "cross_pair_cos_mean": cross_pair_cos_mean,
+        "feature_norms_mean": feature_norms_mean,
+        "feature_dims_mean": feature_dims_mean,
+    }
+
+
+def extract_metrics_anticorr(grid: ModelGrid, n_features: int) -> dict[str, np.ndarray]:
+    """Extract metrics for anticorrelated control (1D grid)."""
+    n_pairs = n_features // 2
+    shape = grid.shape
+
+    within_pair_cos = np.zeros(shape)
+    cross_pair_cos_mean = np.zeros(shape)
+
+    for idx in np.ndindex(shape):
+        model = grid.models[idx]
+        interf = model.interferences.cpu().numpy()
+
+        # Within-pair cosines
+        within_pair_vals = []
+        for pair_idx in range(n_pairs):
+            i, j = 2 * pair_idx, 2 * pair_idx + 1
+            within_pair_vals.append(interf[i, j])
+        within_pair_cos[idx] = np.mean(within_pair_vals)
+
+        # Cross-pair cosines
+        cross_pair_vals = []
+        for i in range(n_features):
+            for j in range(n_features):
+                pair_i, pair_j = i // 2, j // 2
+                if pair_i != pair_j and i != j:
+                    cross_pair_vals.append(abs(interf[i, j]))
+        cross_pair_cos_mean[idx] = np.mean(cross_pair_vals) if cross_pair_vals else 0.0
+
+    return {
+        "within_pair_cos": within_pair_cos,
+        "cross_pair_cos_mean": cross_pair_cos_mean,
+    }
+
+
+print("✓ Metric extraction functions defined")
+
+# %%
+# Cell 4: Run all three experiments
 
 
 def run_experiments():
@@ -166,83 +256,10 @@ def run_experiments():
     return metrics_a, metrics_b, metrics_c, grid_a, grid_b, grid_c
 
 
-def extract_metrics(grid: ModelGrid, n_features: int) -> dict[str, np.ndarray]:
-    """Extract within-pair and cross-pair cosines from trained grid."""
-    n_pairs = n_features // 2
-    shape = grid.shape
+print("✓ Experiment runner defined")
 
-    within_pair_cos = np.zeros(shape)
-    cross_pair_cos_mean = np.zeros(shape)
-    feature_norms_mean = np.zeros(shape)
-    feature_dims_mean = np.zeros(shape)
-
-    for idx in np.ndindex(shape):
-        model = grid.models[idx]
-        interf = model.interferences.cpu().numpy()
-
-        # Within-pair cosines (extract diagonal elements for each pair)
-        within_pair_vals = []
-        for pair_idx in range(n_pairs):
-            i, j = 2 * pair_idx, 2 * pair_idx + 1
-            within_pair_vals.append(interf[i, j])
-        within_pair_cos[idx] = np.mean(within_pair_vals)
-
-        # Cross-pair cosines (all inter-pair interactions)
-        cross_pair_vals = []
-        for i in range(n_features):
-            for j in range(n_features):
-                pair_i, pair_j = i // 2, j // 2
-                if pair_i != pair_j and i != j:
-                    cross_pair_vals.append(abs(interf[i, j]))
-        cross_pair_cos_mean[idx] = np.mean(cross_pair_vals) if cross_pair_vals else 0.0
-
-        # Feature norms and dimensionalities
-        feature_norms_mean[idx] = model.feature_norms.mean().item()
-        feature_dims_mean[idx] = model.feature_dimensionalities.mean().item()
-
-    return {
-        "within_pair_cos": within_pair_cos,
-        "cross_pair_cos_mean": cross_pair_cos_mean,
-        "feature_norms_mean": feature_norms_mean,
-        "feature_dims_mean": feature_dims_mean,
-    }
-
-
-def extract_metrics_anticorr(grid: ModelGrid, n_features: int) -> dict[str, np.ndarray]:
-    """Extract metrics for anticorrelated control (1D grid)."""
-    n_pairs = n_features // 2
-    shape = grid.shape
-
-    within_pair_cos = np.zeros(shape)
-    cross_pair_cos_mean = np.zeros(shape)
-
-    for idx in np.ndindex(shape):
-        model = grid.models[idx]
-        interf = model.interferences.cpu().numpy()
-
-        # Within-pair cosines
-        within_pair_vals = []
-        for pair_idx in range(n_pairs):
-            i, j = 2 * pair_idx, 2 * pair_idx + 1
-            within_pair_vals.append(interf[i, j])
-        within_pair_cos[idx] = np.mean(within_pair_vals)
-
-        # Cross-pair cosines
-        cross_pair_vals = []
-        for i in range(n_features):
-            for j in range(n_features):
-                pair_i, pair_j = i // 2, j // 2
-                if pair_i != pair_j and i != j:
-                    cross_pair_vals.append(abs(interf[i, j]))
-        cross_pair_cos_mean[idx] = np.mean(cross_pair_vals) if cross_pair_vals else 0.0
-
-    return {
-        "within_pair_cos": within_pair_cos,
-        "cross_pair_cos_mean": cross_pair_cos_mean,
-    }
-
-
-# ── Plotting ───────────────────────────────────────────────────────────────
+# %%
+# Cell 5: Figure generation
 
 
 def create_figures(metrics_a, metrics_b, metrics_c, grid_a, grid_b, grid_c):
@@ -491,7 +508,10 @@ def create_figures(metrics_a, metrics_b, metrics_c, grid_a, grid_b, grid_c):
     print("\n✓ All 8 figures saved to experiments/laws/figures/")
 
 
-# ── Summary statistics ──────────────────────────────────────────────────────
+print("✓ Figure generation function defined")
+
+# %%
+# Cell 6: Summary and analysis
 
 
 def print_summary(metrics_a, metrics_b, metrics_c, grid_a, grid_b, grid_c):
@@ -562,8 +582,17 @@ def print_summary(metrics_a, metrics_b, metrics_c, grid_a, grid_b, grid_c):
     print("\n" + "=" * 80)
 
 
-if __name__ == "__main__":
-    metrics_a, metrics_b, metrics_c, grid_a, grid_b, grid_c = run_experiments()
-    print_summary(metrics_a, metrics_b, metrics_c, grid_a, grid_b, grid_c)
-    create_figures(metrics_a, metrics_b, metrics_c, grid_a, grid_b, grid_c)
-    print("\n✓ Experiment complete!")
+print("✓ Summary function defined")
+
+# %%
+# Cell 7: MAIN EXECUTION
+
+print("\n" + "=" * 80)
+print("STARTING EXPERIMENTS")
+print("=" * 80)
+
+metrics_a, metrics_b, metrics_c, grid_a, grid_b, grid_c = run_experiments()
+print_summary(metrics_a, metrics_b, metrics_c, grid_a, grid_b, grid_c)
+create_figures(metrics_a, metrics_b, metrics_c, grid_a, grid_b, grid_c)
+
+print("\n✓ Experiment complete!")
