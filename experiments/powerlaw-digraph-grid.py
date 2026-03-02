@@ -23,7 +23,7 @@ from plotly.subplots import make_subplots
 
 # %%  ── config ───────────────────────────────────────────────────────────────
 def create_model(params):
-    DEVICE = "cpu"
+    DEVICE = "mps"
     gen = torch.Generator(DEVICE)
     gen.manual_seed(1)
 
@@ -32,10 +32,10 @@ def create_model(params):
 
     dist = PowerLawDigraph(
         n_features=N_FEATURES,
-        alpha=1.5,
+        alpha=2,
         p_edge=0.10,
         p_active=params["p_active"],
-        p_child=0.2,
+        p_child=0.3,
         generator=gen,
         device=DEVICE,
     )
@@ -48,7 +48,7 @@ def create_model(params):
 mg = ModelGrid(
     create_model,
     axes=[
-        Axis(label="p_active", values=torch.logspace(-0.2, -2.5, steps=24)),
+        Axis(label="p_active", values=torch.logspace(-1, -4, steps=32)),
     ],
 )
 
