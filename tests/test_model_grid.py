@@ -478,6 +478,89 @@ class TestFitting:
         assert len(losses) == 20
 
 
+# ── Sample Every ─────────────────────────────────────────────────────────────
+
+
+class TestSampleEvery:
+    def test_sample_every_with_cache(self):
+        grid = _make_grid(n_density=3, n_importance=2, cache=True)
+        before = {
+            i: m.ae.state_dict()["W"].clone() for i, m in enumerate(grid.models.ravel())
+        }
+        grid.fit(n_epochs=20, batch_size=64, sample_every=5)
+        for i, m in enumerate(grid.models.ravel()):
+            assert not torch.equal(before[i], m.ae.state_dict()["W"])
+
+    def test_sample_every_without_cache(self):
+        grid = _make_grid(n_density=3, n_importance=2, cache=False)
+        before = {
+            i: m.ae.state_dict()["W"].clone() for i, m in enumerate(grid.models.ravel())
+        }
+        grid.fit(n_epochs=20, batch_size=64, sample_every=5)
+        for i, m in enumerate(grid.models.ravel()):
+            assert not torch.equal(before[i], m.ae.state_dict()["W"])
+
+    def test_sample_every_1_runs(self):
+        """sample_every=1 should work without error."""
+        grid = _make_grid(n_density=3, n_importance=2, cache=True)
+        before = {
+            i: m.ae.state_dict()["W"].clone() for i, m in enumerate(grid.models.ravel())
+        }
+        grid.fit(n_epochs=20, batch_size=64, sample_every=1)
+        for i, m in enumerate(grid.models.ravel()):
+            assert not torch.equal(before[i], m.ae.state_dict()["W"])
+
+    def test_sample_every_not_evenly_divisible(self):
+        """n_epochs=23 with sample_every=5: should handle the remainder correctly."""
+        grid = _make_grid(n_density=3, n_importance=2, cache=True)
+        before = {
+            i: m.ae.state_dict()["W"].clone() for i, m in enumerate(grid.models.ravel())
+        }
+        grid.fit(n_epochs=23, batch_size=64, sample_every=5)
+        for i, m in enumerate(grid.models.ravel()):
+            assert not torch.equal(before[i], m.ae.state_dict()["W"])
+
+    def test_sample_every_validation_zero(self):
+        grid = _make_grid(n_density=3, n_importance=2, cache=True)
+        with pytest.raises(ValueError, match="sample_every"):
+            grid.fit(n_epochs=20, batch_size=64, sample_every=0)
+
+    def test_sample_every_validation_negative(self):
+        grid = _make_grid(n_density=3, n_importance=2, cache=True)
+        with pytest.raises(ValueError, match="sample_every"):
+            grid.fit(n_epochs=20, batch_size=64, sample_every=-1)
+
+    def test_sample_every_with_snapshot_interval(self):
+        grid = _make_grid(n_density=3, n_importance=2, cache=True)
+        history = grid.fit(
+            n_epochs=20,
+            batch_size=64,
+            sample_every=5,
+            snapshot_interval=10,
+        )
+        assert history is not None
+        # Should have 3 snapshots: epoch 0, 10, 20
+        assert history.models.shape[0] == 3
+
+    def test_sample_every_state_written_back(self):
+        grid = _make_grid(n_density=3, n_importance=2, cache=True)
+        before = {
+            i: m.ae.state_dict()["W"].clone() for i, m in enumerate(grid.models.ravel())
+        }
+        grid.fit(n_epochs=30, batch_size=64, sample_every=10)
+        for i, m in enumerate(grid.models.ravel()):
+            after = m.ae.state_dict()["W"]
+            assert not torch.equal(before[i], after), f"Model {i} weights unchanged"
+
+    def test_sample_every_default_is_10(self):
+        """Verify the default value is 10 by checking fit works without the argument."""
+        grid = _make_grid(n_density=3, n_importance=2, cache=True)
+        before = grid.models.ravel()[0].ae.state_dict()["W"].clone()
+        grid.fit(n_epochs=20, batch_size=64)
+        after = grid.models.ravel()[0].ae.state_dict()["W"]
+        assert not torch.equal(before, after)
+
+
 # ── Sub-grid Fitting & View Mutation ─────────────────────────────────────────
 
 

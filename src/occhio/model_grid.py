@@ -404,7 +404,12 @@ class ModelGrid:
         compile: bool = False,
         track_losses: bool = False,
         snapshot_interval: int | None = None,
+        sample_every: int = 10,
     ) -> ModelGrid | None:
+        # Validate sample_every
+        if sample_every < 1:
+            raise ValueError(f"sample_every must be positive, got {sample_every}")
+
         # Validate snapshot_interval
         if snapshot_interval is not None:
             if snapshot_interval <= 0:
@@ -494,6 +499,10 @@ class ModelGrid:
                 )
             )
 
+        # Pre-allocated sample buffer: sample once every `sample_every` epochs
+        # with sample_every × batch_size samples, then slice per epoch.
+        sample_buffer: Tensor | None = None
+
         for ep in tqdm(range(n_epochs)):
             # [17.02.26 | OliverSieweke] TODO: Could attempt to vectorize when possible
             # here. This is not trivial though, one would need to:
@@ -502,18 +511,31 @@ class ModelGrid:
             #       (make this a property on the distribution?)
             #   - find a good way to expose/use this stackability
 
-            if self.cache_samples:
-                unique_samples = torch.stack(
-                    [dist.sample(batch_size) for dist in self._unique_distributions]
-                )
-                stacked_samples = unique_samples[self._sample_index]
-            else:
-                stacked_samples = torch.stack(
-                    [
-                        model.distribution.sample(batch_size)
-                        for model in flattened_models
-                    ]
-                )
+            buf_offset = ep % sample_every
+            if buf_offset == 0:
+                # Determine how many epochs remain to avoid over-sampling
+                epochs_left = min(sample_every, n_epochs - ep)
+                total_samples = epochs_left * batch_size
+
+                if self.cache_samples:
+                    unique_samples = torch.stack(
+                        [
+                            dist.sample(total_samples)
+                            for dist in self._unique_distributions
+                        ]
+                    )
+                    sample_buffer = unique_samples[self._sample_index]
+                else:
+                    sample_buffer = torch.stack(
+                        [
+                            model.distribution.sample(total_samples)
+                            for model in flattened_models
+                        ]
+                    )
+
+            start = buf_offset * batch_size
+            end = start + batch_size
+            stacked_samples = sample_buffer[:, start:end, :]
 
             optimizer.zero_grad()
             stacked_x_hat = stacked_forward(
