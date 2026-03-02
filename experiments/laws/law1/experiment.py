@@ -7,7 +7,8 @@
 import os
 import torch
 import numpy as np
-import matplotlib.pyplot as plt
+import plotly.graph_objects as go
+import plotly.express as px
 from typing import Any
 
 from occhio import ToyModel, ModelGrid
@@ -40,7 +41,8 @@ def create_model_experiment_a(params: dict[str, Any]) -> ToyModel:
         generator=torch.Generator().manual_seed(7),
     )
 
-    return ToyModel(distribution=dist, ae=ae, device="cpu")
+    device = "mps" if torch.backends.mps.is_available() else "cpu"
+    return ToyModel(distribution=dist, ae=ae, device=device)
 
 
 def create_model_experiment_b(params: dict[str, Any]) -> ToyModel:
@@ -62,7 +64,8 @@ def create_model_experiment_b(params: dict[str, Any]) -> ToyModel:
         generator=torch.Generator().manual_seed(7),
     )
 
-    return ToyModel(distribution=dist, ae=ae, device="cpu")
+    device = "mps" if torch.backends.mps.is_available() else "cpu"
+    return ToyModel(distribution=dist, ae=ae, device=device)
 
 
 def create_model_experiment_c(params: dict[str, Any]) -> ToyModel:
@@ -82,7 +85,8 @@ def create_model_experiment_c(params: dict[str, Any]) -> ToyModel:
         generator=torch.Generator().manual_seed(7),
     )
 
-    return ToyModel(distribution=dist, ae=ae, device="cpu")
+    device = "mps" if torch.backends.mps.is_available() else "cpu"
+    return ToyModel(distribution=dist, ae=ae, device=device)
 
 
 print("✓ Model factories defined")
@@ -263,7 +267,7 @@ print("✓ Experiment runner defined")
 
 
 def create_figures(metrics_a, metrics_b, metrics_c, grid_a, grid_b, grid_c):
-    """Generate 8 figures for Law 1 analysis."""
+    """Generate 8 interactive figures for Law 1 analysis using Plotly."""
     os.makedirs("figures", exist_ok=True)
 
     # Extract axes from grids
@@ -298,26 +302,25 @@ def create_figures(metrics_a, metrics_b, metrics_c, grid_a, grid_b, grid_c):
     )
 
     # Figure 1: Within-pair cosine heatmap (Correlation × Density)
-    fig, ax = plt.subplots(figsize=(10, 7))
-    im = ax.imshow(
-        metrics_a["within_pair_cos"].T, aspect="auto", origin="lower", cmap="viridis"
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=metrics_a["within_pair_cos"].T,
+            x=corr_vals_a,
+            y=dens_vals_a,
+            colorscale="Viridis",
+            colorbar=dict(title="Mean Within-Pair Cosine"),
+        )
     )
-    ax.set_xlabel("Correlation")
-    ax.set_ylabel("Density (log scale)")
-    ax.set_title(
-        "Figure 1: Within-pair cosine vs (Correlation, Density)\n[Law 1 Core Observable]"
+    fig.update_layout(
+        title="Figure 1: Within-pair cosine vs (Correlation, Density)<br>[Law 1 Core Observable]",
+        xaxis_title="Correlation",
+        yaxis_title="Density (log scale)",
+        height=600,
+        width=900,
     )
-    ax.set_xticks(np.linspace(0, len(corr_vals_a) - 1, 5))
-    ax.set_xticklabels([f"{c:.2f}" for c in corr_vals_a[:: len(corr_vals_a) // 4]])
-    ax.set_yticks(np.linspace(0, len(dens_vals_a) - 1, 5))
-    ax.set_yticklabels([f"{d:.3f}" for d in dens_vals_a[:: len(dens_vals_a) // 4]])
-    plt.colorbar(im, ax=ax, label="Mean Within-Pair Cosine")
-    plt.tight_layout()
-    plt.savefig("figures/01_within_pair_heatmap.png", dpi=150)
-    plt.close()
+    fig.write_html("figures/01_within_pair_heatmap.html")
 
     # Figure 2: Within-pair cosine vs Correlation at selected densities
-    fig, ax = plt.subplots(figsize=(10, 6))
     selected_dens_idx = [
         0,
         len(dens_vals_a) // 4,
@@ -325,187 +328,187 @@ def create_figures(metrics_a, metrics_b, metrics_c, grid_a, grid_b, grid_c):
         3 * len(dens_vals_a) // 4,
         -1,
     ]
-    cmap = plt.get_cmap("coolwarm")
-    colors = cmap(np.linspace(0, 1, len(selected_dens_idx)))
+    color_list = px.colors.qualitative.Set2
 
+    fig = go.Figure()
     for i, dens_idx in enumerate(selected_dens_idx):
         within_pair = metrics_a["within_pair_cos"][:, dens_idx]
-        ax.plot(
-            corr_vals_a,
-            within_pair,
-            marker="o",
-            label=f"Density={dens_vals_a[dens_idx]:.3f}",
-            color=colors[i],
-            linewidth=2,
+        fig.add_trace(
+            go.Scatter(
+                x=corr_vals_a,
+                y=within_pair,
+                mode="lines+markers",
+                name=f"Density={dens_vals_a[dens_idx]:.3f}",
+                line=dict(color=color_list[i % len(color_list)], width=2),
+                marker=dict(size=6),
+            )
         )
 
-    ax.set_xlabel("Correlation", fontsize=12)
-    ax.set_ylabel("Mean Within-Pair Cosine", fontsize=12)
-    ax.set_title(
-        "Figure 2: Functional Form: Within-pair Cosine vs Correlation\n[Test h(c, S) Monotonicity]",
-        fontsize=13,
+    fig.update_layout(
+        title="Figure 2: Functional Form: Within-pair Cosine vs Correlation<br>[Test h(c, S) Monotonicity]",
+        xaxis_title="Correlation",
+        yaxis_title="Mean Within-Pair Cosine",
+        height=600,
+        width=900,
+        hovermode="x unified",
     )
-    ax.legend(fontsize=10)
-    ax.grid(alpha=0.3)
-    plt.tight_layout()
-    plt.savefig("figures/02_within_pair_vs_correlation.png", dpi=150)
-    plt.close()
+    fig.write_html("figures/02_within_pair_vs_correlation.html")
 
     # Figure 3: Cross-pair cosine heatmap (should be independent of correlation)
-    fig, ax = plt.subplots(figsize=(10, 7))
-    im = ax.imshow(
-        metrics_a["cross_pair_cos_mean"].T, aspect="auto", origin="lower", cmap="plasma"
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=metrics_a["cross_pair_cos_mean"].T,
+            x=corr_vals_a,
+            y=dens_vals_a,
+            colorscale="Plasma",
+            colorbar=dict(title="Mean |Cross-Pair Cosine|"),
+        )
     )
-    ax.set_xlabel("Correlation")
-    ax.set_ylabel("Density (log scale)")
-    ax.set_title(
-        "Figure 3: Cross-pair |Cosine| vs (Correlation, Density)\n[Control: Should NOT depend on correlation]"
+    fig.update_layout(
+        title="Figure 3: Cross-pair |Cosine| vs (Correlation, Density)<br>[Control: Should NOT depend on correlation]",
+        xaxis_title="Correlation",
+        yaxis_title="Density (log scale)",
+        height=600,
+        width=900,
     )
-    ax.set_xticks(np.linspace(0, len(corr_vals_a) - 1, 5))
-    ax.set_xticklabels([f"{c:.2f}" for c in corr_vals_a[:: len(corr_vals_a) // 4]])
-    ax.set_yticks(np.linspace(0, len(dens_vals_a) - 1, 5))
-    ax.set_yticklabels([f"{d:.3f}" for d in dens_vals_a[:: len(dens_vals_a) // 4]])
-    plt.colorbar(im, ax=ax, label="Mean |Cross-Pair Cosine|")
-    plt.tight_layout()
-    plt.savefig("figures/03_cross_pair_heatmap.png", dpi=150)
-    plt.close()
+    fig.write_html("figures/03_cross_pair_heatmap.html")
 
-    # Figure 4: Structural interference = within_pair - cross_pair (isolates correlation effect)
+    # Figure 4: Structural interference = within_pair - cross_pair
     structural = metrics_a["within_pair_cos"] - metrics_a["cross_pair_cos_mean"]
-    fig, ax = plt.subplots(figsize=(10, 7))
-    im = ax.imshow(structural.T, aspect="auto", origin="lower", cmap="RdBu_r")
-    ax.set_xlabel("Correlation")
-    ax.set_ylabel("Density (log scale)")
-    ax.set_title(
-        "Figure 4: Structural Interference = Within-pair - Cross-pair\n[Isolates Correlation-Driven Component]"
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=structural.T,
+            x=corr_vals_a,
+            y=dens_vals_a,
+            colorscale="RdBu",
+            zmid=0,
+            colorbar=dict(title="Structural Interference"),
+        )
     )
-    ax.set_xticks(np.linspace(0, len(corr_vals_a) - 1, 5))
-    ax.set_xticklabels([f"{c:.2f}" for c in corr_vals_a[:: len(corr_vals_a) // 4]])
-    ax.set_yticks(np.linspace(0, len(dens_vals_a) - 1, 5))
-    ax.set_yticklabels([f"{d:.3f}" for d in dens_vals_a[:: len(dens_vals_a) // 4]])
-    plt.colorbar(im, ax=ax, label="Structural Interference")
-    plt.tight_layout()
-    plt.savefig("figures/04_structural_interference.png", dpi=150)
-    plt.close()
+    fig.update_layout(
+        title="Figure 4: Structural Interference = Within-pair - Cross-pair<br>[Isolates Correlation-Driven Component]",
+        xaxis_title="Correlation",
+        yaxis_title="Density (log scale)",
+        height=600,
+        width=900,
+    )
+    fig.write_html("figures/04_structural_interference.html")
 
     # Figure 5: Mean feature norms (phase diagram)
-    fig, ax = plt.subplots(figsize=(10, 7))
-    im = ax.imshow(
-        metrics_a["feature_norms_mean"].T, aspect="auto", origin="lower", cmap="magma"
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=metrics_a["feature_norms_mean"].T,
+            x=corr_vals_a,
+            y=dens_vals_a,
+            colorscale="Magma",
+            colorbar=dict(title="Mean Feature Norm"),
+        )
     )
-    ax.set_xlabel("Correlation")
-    ax.set_ylabel("Density (log scale)")
-    ax.set_title(
-        "Figure 5: Mean Feature Norms vs (Correlation, Density)\n[Phase Diagram]"
+    fig.update_layout(
+        title="Figure 5: Mean Feature Norms vs (Correlation, Density)<br>[Phase Diagram]",
+        xaxis_title="Correlation",
+        yaxis_title="Density (log scale)",
+        height=600,
+        width=900,
     )
-    ax.set_xticks(np.linspace(0, len(corr_vals_a) - 1, 5))
-    ax.set_xticklabels([f"{c:.2f}" for c in corr_vals_a[:: len(corr_vals_a) // 4]])
-    ax.set_yticks(np.linspace(0, len(dens_vals_a) - 1, 5))
-    ax.set_yticklabels([f"{d:.3f}" for d in dens_vals_a[:: len(dens_vals_a) // 4]])
-    plt.colorbar(im, ax=ax, label="Mean Feature Norm")
-    plt.tight_layout()
-    plt.savefig("figures/05_feature_norms_heatmap.png", dpi=150)
-    plt.close()
+    fig.write_html("figures/05_feature_norms_heatmap.html")
 
     # Figure 6: Within-pair cosine vs analytical prediction 1/(1-c) scaling
-    fig, ax = plt.subplots(figsize=(10, 6))
-
-    for dens_idx in selected_dens_idx:
+    fig = go.Figure()
+    for i, dens_idx in enumerate(selected_dens_idx):
         within_pair = metrics_a["within_pair_cos"][:, dens_idx]
-        ax.plot(
-            corr_vals_a,
-            within_pair,
-            marker="o",
-            label=f"Measured (ρ={dens_vals_a[dens_idx]:.3f})",
-            linewidth=2,
-            markersize=5,
+        fig.add_trace(
+            go.Scatter(
+                x=corr_vals_a,
+                y=within_pair,
+                mode="lines+markers",
+                name=f"Measured (ρ={dens_vals_a[dens_idx]:.3f})",
+                line=dict(color=color_list[i % len(color_list)], width=2),
+                marker=dict(size=6),
+            )
         )
 
-    # Add theoretical prediction: a * 1/(1-c) for some scaling a
+    # Add theoretical prediction
     c_vals = corr_vals_a[corr_vals_a < 0.99]
     for i, dens_idx in enumerate(selected_dens_idx):
         within_pair = metrics_a["within_pair_cos"][: len(c_vals), dens_idx]
         if len(within_pair) > 0 and c_vals[0] > 0:
-            # Scale at c=0.5 to fit
             scale = within_pair[len(c_vals) // 2] * (1 - c_vals[len(c_vals) // 2])
             theoretical = scale / (1 - c_vals)
-            ax.plot(c_vals, theoretical, "--", linewidth=1.5, alpha=0.5)
+            fig.add_trace(
+                go.Scatter(
+                    x=c_vals,
+                    y=theoretical,
+                    mode="lines",
+                    name=f"Theory (ρ={dens_vals_a[dens_idx]:.3f})",
+                    line=dict(dash="dash", width=1),
+                    showlegend=False,
+                )
+            )
 
-    ax.set_xlabel("Correlation", fontsize=12)
-    ax.set_ylabel("Within-Pair Cosine", fontsize=12)
-    ax.set_title(
-        "Figure 6: Comparison to 1/(1-c) Scaling\n[Test Theoretical Cost Model]",
-        fontsize=13,
+    fig.update_layout(
+        title="Figure 6: Comparison to 1/(1-c) Scaling<br>[Test Theoretical Cost Model]",
+        xaxis_title="Correlation",
+        yaxis_title="Within-Pair Cosine",
+        height=600,
+        width=900,
+        hovermode="x unified",
     )
-    ax.legend(fontsize=9, loc="best")
-    ax.grid(alpha=0.3)
-    plt.tight_layout()
-    plt.savefig("figures/06_theoretical_scaling.png", dpi=150)
-    plt.close()
+    fig.write_html("figures/06_theoretical_scaling.html")
 
     # Figure 7: Scale validation (Experiment B within-pair heatmap)
-    fig, ax = plt.subplots(figsize=(10, 7))
-    im = ax.imshow(
-        metrics_b["within_pair_cos"].T, aspect="auto", origin="lower", cmap="viridis"
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=metrics_b["within_pair_cos"].T,
+            x=corr_vals_b,
+            y=dens_vals_b,
+            colorscale="Viridis",
+            colorbar=dict(title="Mean Within-Pair Cosine"),
+        )
     )
-    ax.set_xlabel("Correlation")
-    ax.set_ylabel("Density (log scale)")
-    ax.set_title(
-        "Figure 7: Scale Validation (Exp B: n_features=10, n_hidden=3)\n[Confirms Generalization]"
+    fig.update_layout(
+        title="Figure 7: Scale Validation (Exp B: n_features=10, n_hidden=3)<br>[Confirms Generalization]",
+        xaxis_title="Correlation",
+        yaxis_title="Density (log scale)",
+        height=600,
+        width=900,
     )
-    ax.set_xticks(np.linspace(0, len(corr_vals_b) - 1, 5))
-    ax.set_xticklabels([f"{c:.2f}" for c in corr_vals_b[:: len(corr_vals_b) // 3]])
-    ax.set_yticks(np.linspace(0, len(dens_vals_b) - 1, 5))
-    ax.set_yticklabels([f"{d:.3f}" for d in dens_vals_b[:: len(dens_vals_b) // 3]])
-    plt.colorbar(im, ax=ax, label="Mean Within-Pair Cosine")
-    plt.tight_layout()
-    plt.savefig("figures/07_scale_validation.png", dpi=150)
-    plt.close()
+    fig.write_html("figures/07_scale_validation.html")
 
     # Figure 8: Anticorrelated control (opposite trend)
-    fig, ax = plt.subplots(figsize=(10, 6))
     anticorr_within = metrics_c["within_pair_cos"].flatten()
-    correlated_within_mean = metrics_a["within_pair_cos"].mean(
-        axis=0
-    )  # Average over all correlations
+    correlated_within_mean = metrics_a["within_pair_cos"].mean(axis=0)
 
-    x_pos = np.arange(len(dens_vals_c))
-    width = 0.35
-
-    ax.bar(
-        x_pos - width / 2,
-        anticorr_within,
-        width,
-        label="Anticorrelated",
-        color="#e74c3c",
-        alpha=0.8,
+    fig = go.Figure()
+    fig.add_trace(
+        go.Bar(
+            x=dens_vals_c,
+            y=anticorr_within,
+            name="Anticorrelated",
+            marker=dict(color="#e74c3c"),
+        )
     )
-    ax.bar(
-        x_pos + width / 2,
-        correlated_within_mean[: len(dens_vals_c)],
-        width,
-        label="Correlated (avg)",
-        color="#3498db",
-        alpha=0.8,
+    fig.add_trace(
+        go.Bar(
+            x=dens_vals_c,
+            y=correlated_within_mean[: len(dens_vals_c)],
+            name="Correlated (avg)",
+            marker=dict(color="#3498db"),
+        )
     )
 
-    ax.set_xlabel("Density (log scale)", fontsize=12)
-    ax.set_ylabel("Mean Within-Pair Cosine", fontsize=12)
-    ax.set_title(
-        "Figure 8: Anticorrelated Control\n[Opposite Pattern: Features Repel]",
-        fontsize=13,
+    fig.update_layout(
+        title="Figure 8: Anticorrelated Control<br>[Opposite Pattern: Features Repel]",
+        xaxis_title="Density (log scale)",
+        yaxis_title="Mean Within-Pair Cosine",
+        barmode="group",
+        height=600,
+        width=900,
+        hovermode="x unified",
     )
-    ax.set_xticks(x_pos)
-    ax.set_xticklabels(
-        [f"{d:.3f}" for d in dens_vals_c[:: len(dens_vals_c) // 4]], rotation=45
-    )
-    ax.legend(fontsize=11)
-    ax.grid(alpha=0.3, axis="y")
-    plt.tight_layout()
-    plt.savefig("figures/08_anticorrelated_control.png", dpi=150)
-    plt.close()
+    fig.write_html("figures/08_anticorrelated_control.html")
 
-    print("\n✓ All 8 figures saved to figures/")
+    print("\n✓ All 8 figures saved as interactive html in figures/")
 
 
 print("✓ Figure generation function defined")
