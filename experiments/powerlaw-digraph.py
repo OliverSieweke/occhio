@@ -15,12 +15,13 @@ from occhio.visualization.dynamic import plot_dynamic_scatter
 
 import torch
 import numpy as np
+import plotly.colors as pc
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 # %%  ── config ───────────────────────────────────────────────────────────────
-DEVICE = "cpu"
+DEVICE = "mps"
 gen = torch.Generator(DEVICE)
 gen.manual_seed(1)
 
@@ -29,7 +30,7 @@ N_HIDDEN = 16
 
 dist = PowerLawDigraph(
     n_features=N_FEATURES,
-    alpha=5,
+    alpha=3,
     p_edge=10 / N_FEATURES,
     p_active=2 / N_FEATURES,
     p_child=0.2,
@@ -41,8 +42,8 @@ ae = TiedLinearRelu(N_FEATURES, N_HIDDEN, generator=gen, device=DEVICE)
 tm = ToyModel(distribution=dist, ae=ae, generator=gen, device=DEVICE)
 
 # %%  ── graph structure ──────────────────────────────────────────────────────
-in_deg = dist.in_degrees().numpy()
-out_deg = dist.out_degrees().numpy()
+in_deg = dist.in_degrees().cpu().numpy()
+out_deg = dist.out_degrees().cpu().numpy()
 tot_deg = in_deg + out_deg
 
 print(f"Average in-degree = {in_deg.mean()}")
@@ -66,7 +67,7 @@ fig.update_layout(title="Graph degree distribution", showlegend=True)
 fig.show()
 
 # %%  ── adjacency heatmap ────────────────────────────────────────────────────
-adj_np = dist.adjacency.float().numpy()
+adj_np = dist.adjacency.float().cpu().numpy()
 
 fig = px.imshow(
     adj_np,
@@ -78,10 +79,10 @@ fig = px.imshow(
 fig.show()
 
 # %%  ── empirical activation rates ──────────────────────────────────────────
-empirical_act = dist.get_expected_activation(n_samples=50_000).numpy()
+empirical_act = dist.get_expected_activation(n_samples=50_000).cpu().numpy()
 
 # Theoretical lower bound: independent-only (no cascade)
-p_active_np = dist.p_active.numpy()
+p_active_np = dist.p_active.cpu().numpy()
 
 fig = go.Figure()
 fig.add_trace(
@@ -113,12 +114,16 @@ fig.show()
 # %%  ── train ───────────────────────────────────────────────────────────────
 in_deg_t = torch.from_numpy(in_deg).float()
 
+# %%
+
 
 def norm_hook(hook_data):
     epoch = hook_data["epoch"]
-    norms_t = hook_data["tm"].feature_norms  # Tensor[N_FEATURES]
+    norms_t = hook_data["tm"].feature_norms.cpu()  # Tensor[N_FEATURES]
     return (epoch, torch.stack([in_deg_t, norms_t]))
 
+
+# %%
 
 losses, hook_returns = tm.fit(
     35_000,
@@ -135,9 +140,9 @@ fig.show()
 
 # %%  ── feature geometry ────────────────────────────────────────────────────
 with torch.no_grad():
-    norms = tm.feature_norms.numpy()
-    interferences = tm.total_feature_interferences.numpy()
-    feat_dims = tm.feature_dimensionalities.numpy()
+    norms = tm.feature_norms.cpu().numpy()
+    interferences = tm.total_feature_interferences.cpu().numpy()
+    feat_dims = tm.feature_dimensionalities.cpu().numpy()
 
 # %%  ── histogram: norms and interference ───────────────────────────────────
 fig = make_subplots(
@@ -183,7 +188,7 @@ fig.show()
 
 # %%  ── full interference matrix ─────────────────────────────────────────────
 with torch.no_grad():
-    imat = tm.interferences.numpy()
+    imat = tm.interferences.cpu().numpy()
 
 # Sort nodes by in-degree for legible ordering
 order = np.argsort(-in_deg)  # descending
@@ -318,7 +323,7 @@ fig.show()
 
 # %%  ── interference: children / parents vs unrelated nodes ─────────────────
 # adj[j, i] = True ⟹  j → i  (j is a parent of i, i is a child of j)
-adj_bool = dist.adjacency.numpy().astype(bool)
+adj_bool = dist.adjacency.cpu().numpy().astype(bool)
 
 child_interf = np.full(N_FEATURES, np.nan)
 parent_interf = np.full(N_FEATURES, np.nan)
@@ -353,6 +358,7 @@ for i in range(N_FEATURES):
 
 has_children = ~np.isnan(child_interf)
 has_parents = ~np.isnan(parent_interf)
+has_both = has_children & has_parents
 
 # ── summary stats ────────────────────────────────────────────────────────────
 print("\n=== Interference: children vs unrelated nodes (per-node means) ===")
@@ -380,9 +386,10 @@ fig = make_subplots(
     subplot_titles=[
         "Children: interference vs unrelated",
         "Parents: interference vs unrelated",
-        "Children: interference² vs unrelated",
-        "Parents: interference² vs unrelated",
+        "Children mean interf vs Parents mean interf (per node)",
+        "",
     ],
+    specs=[[{}, {}], [{"colspan": 2}, None]],
     horizontal_spacing=0.12,
     vertical_spacing=0.15,
 )
@@ -402,22 +409,6 @@ _panels = [
         in_deg[has_parents],
         node_ids[has_parents],
         1,
-        2,
-    ),
-    (
-        child_interf_sq[has_children],
-        other_interf_c_sq[has_children],
-        in_deg[has_children],
-        node_ids[has_children],
-        2,
-        1,
-    ),
-    (
-        parent_interf_sq[has_parents],
-        other_interf_p_sq[has_parents],
-        in_deg[has_parents],
-        node_ids[has_parents],
-        2,
         2,
     ),
 ]
@@ -442,38 +433,51 @@ for y_vals, x_vals, color_vals, idx_vals, r, c in _panels:
         row=r,
         col=c,
     )
-    # lo, hi = _diag_range(x_vals, y_vals)
-    # fig.add_trace(
-    #     go.Scatter(
-    #         x=[lo, hi],
-    #         y=[lo, hi],
-    #         mode="lines",
-    #         line=dict(color="grey", dash="dash", width=1),
-    #         showlegend=False,
-    #     ),
-    #     row=r,
-    #     col=c,
-    # )
 
-_x_labels = [
-    "unrelated mean interf",
-    "unrelated mean interf",
-    "unrelated mean interf²",
-    "unrelated mean interf²",
-]
-_y_labels = [
-    "children mean interf",
-    "parents mean interf",
-    "children mean interf²",
-    "parents mean interf²",
-]
+_x_labels = ["unrelated mean interf", "unrelated mean interf"]
+_y_labels = ["children mean interf", "parents mean interf"]
 for idx, (_, _, _, _, r, c) in enumerate(_panels):
     fig.update_xaxes(title_text=_x_labels[idx], row=r, col=c)
     fig.update_yaxes(title_text=_y_labels[idx], row=r, col=c)
 
+# Bottom panel: children mean interf (x) vs parents mean interf (y), one point per node
+fig.add_trace(
+    go.Scatter(
+        x=child_interf[has_both],
+        y=parent_interf[has_both],
+        mode="markers",
+        marker=dict(
+            color=in_deg[has_both],
+            colorscale="turbo",
+            size=7,
+            showscale=False,
+        ),
+        customdata=node_ids[has_both],
+        hovertemplate="node %{customdata}<extra></extra>",
+        showlegend=False,
+    ),
+    row=2,
+    col=1,
+)
+fig.update_xaxes(title_text="children mean interf", row=2, col=1)
+fig.update_yaxes(title_text="parents mean interf", row=2, col=1)
+
+_diag_lim = _diag_range(child_interf[has_both], parent_interf[has_both])
+fig.add_trace(
+    go.Scatter(
+        x=_diag_lim,
+        y=_diag_lim,
+        mode="lines",
+        line=dict(color="grey", dash="dot", width=1),
+        showlegend=False,
+    ),
+    row=2,
+    col=1,
+)
+
 fig.update_layout(
     title="Per-node interference with relatives vs unrelated  (above diagonal = relatives interfere more)",
-    height=750,
+    height=900,
 )
 fig.show()
 
@@ -523,7 +527,7 @@ fig.show()
 
 # %%  ── PCA of W columns colored by in-degree ───────────────────────────────
 with torch.no_grad():
-    W_np = tm.W.numpy()  # shape (n_hidden, n_features)
+    W_np = tm.W.cpu().numpy()  # shape (n_hidden, n_features)
 
 W_cols = W_np.T  # (n_features, n_hidden) — one row per feature
 W_centered = W_cols - W_cols.mean(axis=0)
@@ -547,7 +551,7 @@ fig.show()
 
 # %%  ── interference vs correlation comparison ─────────────────────────────
 N_CORR_SAMPLES = 100_000
-samples = dist.sample(N_CORR_SAMPLES).numpy()  # (N_CORR_SAMPLES, N_FEATURES)
+samples = dist.sample(N_CORR_SAMPLES).cpu().numpy()  # (N_CORR_SAMPLES, N_FEATURES)
 
 # Pearson correlation matrix from samples
 corr_mat = np.corrcoef(samples, rowvar=False)  # (N_FEATURES, N_FEATURES)
@@ -569,6 +573,206 @@ fig = px.scatter(
     labels=dict(x="Pearson correlation", y="Interference  imat[i,j]"),
     title="Per-pair: interference vs empirical correlation  (all off-diagonal pairs)",
     trendline="ols",
+    trendline_color_override="black",
+)
+fig.show()
+
+# %% ── ego-graph: centre node and its direct neighbourhood ───────────────────
+# adj_np[j, i] > 0  ⟹  directed edge j → i
+# Layout: parents left, centre middle, children right.
+CENTER = 11  # node 0 has the highest expected in-degree by construction
+
+parents = [j for j in range(N_FEATURES) if adj_np[j, CENTER] and j != CENTER]
+children = [i for i in range(N_FEATURES) if adj_np[CENTER, i] and i != CENTER]
+
+print(f"Node {CENTER}: {len(parents)} parents  |  {len(children)} children")
+
+all_ego_nodes = [CENTER] + parents + children
+
+role_of = {CENTER: "centre"}
+role_of.update({p: "parent" for p in parents})
+role_of.update({c: "child" for c in children})
+
+
+def _column(nodes, x):
+    """Evenly-spaced y-positions for a column of nodes at a fixed x."""
+    ys = np.linspace(1, -1, len(nodes)) if len(nodes) > 1 else [0.0]
+    return {nd: (float(x), float(y)) for nd, y in zip(nodes, ys)}
+
+
+pos = {CENTER: (0.0, 0.0), **_column(parents, -2.0), **_column(children, 2.0)}
+
+# ── ALL directed edges within the neighbourhood ───────────────────────────────
+edge_data = []
+for u in all_ego_nodes:
+    for v in all_ego_nodes:
+        if u != v and adj_np[u, v]:
+            edge_data.append((u, v, float(imat[u, v]), f"{role_of[u]}→{role_of[v]}"))
+
+interf_vals = (
+    np.array([v for _, _, v, _ in edge_data]) if edge_data else np.array([0.0])
+)
+vmax_e = max(np.abs(interf_vals).max(), 1e-8)
+
+
+def _clr_rgba(val, alpha=0.85):
+    rgb = pc.sample_colorscale("RdBu_r", [(val + vmax_e) / (2 * vmax_e)])[0]
+    r, g, b = pc.unlabel_rgb(rgb)
+    return f"rgba({int(r)},{int(g)},{int(b)},{alpha})"
+
+
+def _lw(val):
+    return 0.5 + 4.5 * abs(val) / vmax_e
+
+
+def _arrow_endpoints(x0, y0, x1, y1, r=0.12):
+    """Shorten both ends of an edge by r data-units so arrows land at node border."""
+    dx, dy = x1 - x0, y1 - y0
+    L = np.sqrt(dx**2 + dy**2) or 1e-8
+    return x0 + r * dx / L, y0 + r * dy / L, x1 - r * dx / L, y1 - r * dy / L
+
+
+# ── build figure ──────────────────────────────────────────────────────────────
+fig = go.Figure()
+
+# Arrows: one annotation per edge, plus an invisible midpoint marker for hover.
+for s, d, val, label in edge_data:
+    x0, y0 = pos[s]
+    x1, y1 = pos[d]
+    ax, ay, x1a, y1a = _arrow_endpoints(x0, y0, x1, y1)
+    color = _clr_rgba(val)
+    fig.add_annotation(
+        x=x1a,
+        y=y1a,
+        ax=ax,
+        ay=ay,
+        xref="x",
+        yref="y",
+        axref="x",
+        ayref="y",
+        showarrow=True,
+        arrowhead=2,
+        arrowsize=1.0,
+        arrowwidth=_lw(val),
+        arrowcolor=color,
+        text="",
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=[(x0 + x1) / 2],
+            y=[(y0 + y1) / 2],
+            mode="markers",
+            marker=dict(size=12, opacity=0),
+            customdata=[[s, d, val, label]],
+            hovertemplate=(
+                "<b>%{customdata[3]}</b><br>"
+                "imat[%{customdata[0]:.0f} → %{customdata[1]:.0f}]"
+                " = %{customdata[2]:.4f}<extra></extra>"
+            ),
+            showlegend=False,
+        )
+    )
+
+# Nodes — single trace so the colorscale maps correctly across all nodes.
+norm_min_ego = min(norms[n] for n in all_ego_nodes)
+norm_max_ego = max(norms[n] for n in all_ego_nodes)
+indeg_min_ego = min(in_deg[n] for n in all_ego_nodes)
+indeg_max_ego = max(in_deg[n] for n in all_ego_nodes) + 1e-8
+
+border_color = {"centre": "black", "parent": "#4e79a7", "child": "#e15759"}
+border_width = {"centre": 3, "parent": 1.5, "child": 1.5}
+base_size = {"centre": 30, "parent": 18, "child": 18}
+
+node_sizes = [
+    base_size[role_of[nd]]
+    + 12 * (in_deg[nd] - indeg_min_ego) / (indeg_max_ego - indeg_min_ego)
+    for nd in all_ego_nodes
+]
+fig.add_trace(
+    go.Scatter(
+        x=[pos[nd][0] for nd in all_ego_nodes],
+        y=[pos[nd][1] for nd in all_ego_nodes],
+        mode="markers+text",
+        marker=dict(
+            size=node_sizes,
+            color=[norms[nd] for nd in all_ego_nodes],
+            colorscale="plasma",
+            cmin=norm_min_ego,
+            cmax=norm_max_ego,
+            showscale=True,
+            colorbar=dict(title="feature norm", x=1.0, thickness=14),
+            line=dict(
+                width=[border_width[role_of[nd]] for nd in all_ego_nodes],
+                color=[border_color[role_of[nd]] for nd in all_ego_nodes],
+            ),
+        ),
+        text=[str(nd) for nd in all_ego_nodes],
+        textposition="middle center",
+        textfont=dict(size=9, color="white"),
+        customdata=[
+            [nd, in_deg[nd], out_deg[nd], norms[nd], role_of[nd]]
+            for nd in all_ego_nodes
+        ],
+        hovertemplate=(
+            "<b>node %{customdata[0]:.0f}</b>  (%{customdata[4]})<br>"
+            "in-degree: %{customdata[1]:.0f}<br>"
+            "out-degree: %{customdata[2]:.0f}<br>"
+            "norm: %{customdata[3]:.3f}<extra></extra>"
+        ),
+        showlegend=False,
+    )
+)
+
+# Dummy trace for the edge interference colorbar.
+fig.add_trace(
+    go.Scatter(
+        x=[None],
+        y=[None],
+        mode="markers",
+        marker=dict(
+            colorscale="RdBu_r",
+            showscale=True,
+            cmin=-vmax_e,
+            cmax=vmax_e,
+            colorbar=dict(title="interference<br>imat[src→dst]", x=1.12, thickness=14),
+        ),
+        hoverinfo="none",
+        showlegend=False,
+    )
+)
+
+# Column header annotations.
+for label, x in [
+    (f"parents  (j → {CENTER})", -2.0),
+    (f"node {CENTER}", 0.0),
+    (f"children  ({CENTER} → i)", 2.0),
+]:
+    fig.add_annotation(
+        x=x,
+        y=1.05,
+        text=f"<b>{label}</b>",
+        showarrow=False,
+        font=dict(size=12),
+        xref="x",
+        yref="paper",
+    )
+
+n_rows = max(len(parents), len(children), 1)
+fig.update_layout(
+    title=(
+        f"Ego-graph — node {CENTER}  "
+        f"({len(parents)} parents, {len(children)} children)<br>"
+        "<sup>Node colour = feature norm  |  Node size ∝ in-degree  |  "
+        "Edge colour = imat[src→dst]  (blue < 0, red > 0)  |  "
+        "Edge width = |interference|  |  "
+        "Border: blue = parent, coral = child</sup>"
+    ),
+    xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-2.8, 2.8]),
+    yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-1.2, 1.2]),
+    plot_bgcolor="white",
+    hovermode="closest",
+    width=1000,
+    height=max(500, 60 * n_rows),
 )
 fig.show()
 

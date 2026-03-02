@@ -14,9 +14,13 @@ class ToyModel:
     """This is the ToyModel class which is the base for most experiments.
 
     Args:
-        distribution: A Distribution object.
+        distribution: A Distribution object. May live on a different device from
+            the AutoEncoder (e.g. CPU for fast sampling while ae runs on GPU/MPS).
+            Samples are moved to the ae device automatically during training.
         ae: An AutoEncoderBase object.
-        device: Where the torch objects live.
+        device: Device for the AutoEncoder and all computation. If the distribution
+            has no explicit device it is also moved here for convenience. Pass
+            ``None`` to infer from the ae or distribution.
         generator: For seeded experiments.
         importances: Weighing of the distribution.
     """
@@ -39,38 +43,39 @@ class ToyModel:
         assert distribution.n_features == ae.n_features
         self.n_features: int = ae.n_features
 
+        # Resolve the ae/computation device.
         if device is None:
-            device = ae._init_device or distribution._init_device or torch.device("cpu")
+            ae_device = (
+                ae._init_device or distribution._init_device or torch.device("cpu")
+            )
         else:
-            device = torch.device(device)
+            ae_device = torch.device(device)
             if ae._init_device is not None and not _same_device(
-                ae._init_device, device
+                ae._init_device, ae_device
             ):
                 raise ValueError(
                     f"AutoEncoder was explicitly created on {ae._init_device}, "
-                    f"but ToyModel device is {device}. "
+                    f"but ToyModel device is {ae_device}. "
                     f"Either omit the device from the AutoEncoder or make them match."
                 )
-            if distribution._init_device is not None and not _same_device(
-                distribution._init_device, device
-            ):
-                raise ValueError(
-                    f"Distribution was explicitly created on {distribution._init_device}, "
-                    f"but ToyModel device is {device}. "
-                    f"Either omit the device from the Distribution or make them match."
-                )
 
-        ae.to(device)
-        distribution.to(device)
-        self.device = device
+        ae.to(ae_device)
+        self.device = ae_device
+
+        # Distribution keeps its own device when it was explicitly placed on one,
+        # allowing distribution and ae to live on different devices (e.g. CPU vs MPS).
+        # If the distribution has no explicit device, move it alongside the ae for
+        # backward-compatible behaviour.
+        if distribution._init_device is None:
+            distribution.to(ae_device)
 
         if importances is None:
-            self.importances = torch.ones(self.n_features, device=ae.device)
+            self.importances = torch.ones(self.n_features, device=ae_device)
         else:
             if isinstance(importances, Tensor):
-                self.importances = importances.to(ae.device)
+                self.importances = importances.to(ae_device)
             else:
-                self.importances = torch.tensor(importances, device=ae.device)
+                self.importances = torch.tensor(importances, device=ae_device)
 
     # If you change the signature or implementation here, make sure you keep it
     # consistent with ModelGrid.fit()
@@ -91,12 +96,25 @@ class ToyModel:
                 self.ae.parameters(), lr=learning_rate, weight_decay=weight_decay
             )
 
-        losses = []
         hook_returns = [[] for _ in hooks]
+
+        ae_device = self.ae.device
+        # Pre-allocate a device-side buffer so loss tracking never forces a
+        # per-step MPS→CPU sync. Converted to a Python list in one transfer
+        # at the end.
+        loss_buffer = torch.empty(n_epochs, device=ae_device) if track_losses else None
 
         for ep in range(n_epochs):
             raw = self.distribution.sample(batch_size)
-            x = raw[0] if isinstance(raw, tuple) else raw
+            # Move samples to the ae device; distribution may be on a different device.
+            if isinstance(raw, tuple):
+                raw = tuple(
+                    t.to(ae_device) if isinstance(t, Tensor) else t for t in raw
+                )
+                x = raw[0]
+            else:
+                raw = raw.to(ae_device)
+                x = raw
             optimizer.zero_grad()
             x_hat = self.ae.forward(x)[0]  # Only take x_hat
             loss = self.ae.loss(raw, x_hat, self.importances)  # type: ignore[call-arg]
@@ -104,7 +122,7 @@ class ToyModel:
             optimizer.step()
 
             if track_losses:
-                losses.append(loss.item())
+                loss_buffer[ep] = loss.detach()  # type: ignore[index]
             if verbose and (ep + 1) % 1000 == 0:
                 print(f"AE Epoch {ep + 1}/{n_epochs}, Loss: {loss.item():.6f}")
             if hooks and (ep % hook_freq == 0 or ep == n_epochs - 1):
@@ -115,11 +133,13 @@ class ToyModel:
                     for i, h in enumerate(hooks):
                         hook_returns[i].append(h(hook_data))
 
+        losses = loss_buffer.cpu().tolist() if track_losses else []
         return losses, hook_returns
 
     def sample_latent(self, batch_size) -> Tensor:
-        inputs = self.distribution.sample(batch_size)
-        return self.ae.encode(inputs)
+        raw = self.distribution.sample(batch_size)
+        x = raw[0] if isinstance(raw, tuple) else raw
+        return self.ae.encode(x.to(self.ae.device))
 
     def get_one_hot_embeddings(self) -> Tensor:
         return self.ae.encode(torch.eye(self.n_features, device=self.ae.device))
