@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from functools import cached_property
 from inspect import signature
 from itertools import product
-from typing import Any, Callable
+from typing import Any, Callable, overload
 from warnings import warn
 
 import numpy as np
@@ -607,7 +607,7 @@ class ModelGrid:
                 f"Too many indices: got {len(key)}, grid has {len(self.axes)} axes"
             )
 
-        numpy_key: list[slice] = []
+        numpy_key: list = []
         new_axes: list[Axis] = []
 
         for dim, k in enumerate(key):
@@ -621,8 +621,8 @@ class ModelGrid:
                         f"Index {k} out of bounds for axis '{axis.label}' "
                         f"with size {dim_size}"
                     )
-                numpy_key.append(slice(idx, idx + 1))
-                values = axis.values[idx : idx + 1]
+                # Integer index collapses the axis (NumPy convention)
+                numpy_key.append(idx)
 
             elif isinstance(k, slice):
                 start, stop, step = k.start, k.stop, k.step
@@ -659,31 +659,28 @@ class ModelGrid:
                     values = axis.values[indices]
                 else:
                     values = axis.values[s]
+
+                # Preserve axis type (e.g., TrainingAxis)
+                if isinstance(axis, TrainingAxis):
+                    new_axes.append(TrainingAxis(label=axis.label, values=values))
+                else:
+                    new_axes.append(Axis(label=axis.label, values=values))
             else:
                 raise IndexError(f"Unsupported index type: {type(k)}")
-
-            # Preserve axis type (e.g., TrainingAxis)
-            if isinstance(axis, TrainingAxis):
-                new_axes.append(TrainingAxis(label=axis.label, values=values))
-            else:
-                new_axes.append(Axis(label=axis.label, values=values))
 
         for dim in range(len(key), len(self.axes)):
             new_axes.append(self.axes[dim])
             numpy_key.append(slice(None))
 
-        all_int: bool = len(key) == len(self.axes) and all(
-            isinstance(k, int) for k in key
-        )
-        if all_int:
-            resolved_idx = tuple(s.start for s in numpy_key)
-            return self.models[resolved_idx]
+        result = self.models[tuple(numpy_key)]
 
-        sliced_models: NDArray[np.object_] = self.models[tuple(numpy_key)]
+        # If result is a scalar (all indices were integers), return the ToyModel
+        if not isinstance(result, np.ndarray):
+            return result
 
         return ModelGrid(
             create_model=self.create_model,
             axes=new_axes,
             broadcast_samples=self.broadcast_samples,
-            _models=sliced_models,
+            _models=result,
         )

@@ -163,28 +163,13 @@ def _plot_phase_change_animated(
 
     # Helper to slice grid at a specific epoch
     def slice_at_epoch(epoch_idx: int) -> ModelGrid:
-        """Extract 2D grid at specific epoch, squeezing out singleton dimension."""
+        """Extract 2D grid at specific epoch."""
         if training_axis_idx == 0:
-            sliced = model_grid[epoch_idx, :, :]
+            return model_grid[epoch_idx, :, :]
         elif training_axis_idx == 1:
-            sliced = model_grid[:, epoch_idx, :]
+            return model_grid[:, epoch_idx, :]
         else:  # training_axis_idx == 2
-            sliced = model_grid[:, :, epoch_idx]
-
-        # Squeeze out singleton dimensions and their axes
-        # (integer indexing creates size-1 dimensions by design)
-        squeezed_models = sliced.models.squeeze()
-        # Exclude the training axis (which was sliced out) from the new axes
-        squeezed_axes = [
-            axis for idx, axis in enumerate(model_grid.axes) if idx != training_axis_idx
-        ]
-
-        return ModelGrid(
-            create_model=sliced.create_model,
-            axes=squeezed_axes,
-            broadcast_samples=sliced.broadcast_samples,
-            _models=squeezed_models,
-        )
+            return model_grid[:, :, epoch_idx]
 
     # Get the 2D grid structure (without slicing yet)
     # We need this for axis configuration
