@@ -18,7 +18,6 @@ class RepresentationPlot(BasePlot):
         self,
         fig: FigureProxy,
         model: ToyModel,
-        **kwargs,
     ) -> None:
         colorscale = ["#6699FF", "#F0F0F0", "#FF6666"]
         W_T_W = model.W_T_W.detach().cpu().numpy()
