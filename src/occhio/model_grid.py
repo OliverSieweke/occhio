@@ -99,7 +99,7 @@ class ModelGrid:
             self.models: NDArray[np.object_] = _models
         else:
             self.models = self._initialize_models()
-            self._validate_autoencoders()
+            self._validate_vmap()
 
             if self.cache_samples:
                 self._unique_distributions, self._sample_index = (
@@ -127,7 +127,7 @@ class ModelGrid:
             models[indices] = self.create_model(params)
         return models
 
-    def _validate_autoencoders(self) -> None:
+    def _validate_vmap(self) -> None:
         if self.models.size <= 1:
             return
 
@@ -405,7 +405,7 @@ class ModelGrid:
         track_losses: bool = False,
         snapshot_interval: int | None = None,
         sample_every: int = 10,
-    ) -> ModelGrid | None:
+    ) -> ModelGrid | list[float] | None:
         # Validate sample_every
         if sample_every < 1:
             raise ValueError(f"sample_every must be positive, got {sample_every}")
@@ -761,14 +761,3 @@ class ModelGrid:
             cache_samples=self.cache_samples,
             _models=sliced_models,
         )
-
-    def _validate_args(
-        self, create_model: Callable[..., ToyModel], axes: list[Axis]
-    ) -> None:
-        if not axes:
-            raise ValueError("At least one axis must be provided.")
-
-        if "params" not in signature(create_model).parameters:
-            raise TypeError(
-                "create_model must accept a 'params' parameter (dict[str, Any])."
-            )
