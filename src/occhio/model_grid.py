@@ -505,14 +505,7 @@ class ModelGrid:
         # with sample_every × batch_size samples, then slice per epoch.
         sample_buffer: Tensor | None = None
 
-        for ep in tqdm(range(n_epochs)):
-            # [17.02.26 | OliverSieweke] TODO: Could attempt to vectorize when possible
-            # here. This is not trivial though, one would need to:
-            #   - group the distributions of the same kind
-            #   - think through which distributions are actually stackable
-            #       (make this a property on the distribution?)
-            #   - find a good way to expose/use this stackability
-
+        for ep in tqdm(range(n_epochs), unit="epoch"):
             buf_offset = ep % sample_every
             if buf_offset == 0:
                 # Determine how many epochs remain to avoid over-sampling
@@ -633,7 +626,7 @@ class ModelGrid:
             stacked_params_snapshot,
             stacked_buffers_snapshot,
         ) in enumerate(
-            tqdm(snapshots, desc="Building history grid", unit="snapshot", leave=True)
+            tqdm(snapshots, desc="Building history grid", unit="epoch", leave=True)
         ):
             for model_idx, original_model in enumerate(flattened_models):
                 # Create a new ToyModel with the same distribution and architecture
