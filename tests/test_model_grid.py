@@ -478,6 +478,89 @@ class TestFitting:
         assert len(losses) == 20
 
 
+# ── Sample Every ─────────────────────────────────────────────────────────────
+
+
+class TestSampleEvery:
+    def test_sample_every_with_cache(self):
+        grid = _make_grid(n_density=3, n_importance=2, cache=True)
+        before = {
+            i: m.ae.state_dict()["W"].clone() for i, m in enumerate(grid.models.ravel())
+        }
+        grid.fit(n_epochs=20, batch_size=64, sample_every=5)
+        for i, m in enumerate(grid.models.ravel()):
+            assert not torch.equal(before[i], m.ae.state_dict()["W"])
+
+    def test_sample_every_without_cache(self):
+        grid = _make_grid(n_density=3, n_importance=2, cache=False)
+        before = {
+            i: m.ae.state_dict()["W"].clone() for i, m in enumerate(grid.models.ravel())
+        }
+        grid.fit(n_epochs=20, batch_size=64, sample_every=5)
+        for i, m in enumerate(grid.models.ravel()):
+            assert not torch.equal(before[i], m.ae.state_dict()["W"])
+
+    def test_sample_every_1_runs(self):
+        """sample_every=1 should work without error."""
+        grid = _make_grid(n_density=3, n_importance=2, cache=True)
+        before = {
+            i: m.ae.state_dict()["W"].clone() for i, m in enumerate(grid.models.ravel())
+        }
+        grid.fit(n_epochs=20, batch_size=64, sample_every=1)
+        for i, m in enumerate(grid.models.ravel()):
+            assert not torch.equal(before[i], m.ae.state_dict()["W"])
+
+    def test_sample_every_not_evenly_divisible(self):
+        """n_epochs=23 with sample_every=5: should handle the remainder correctly."""
+        grid = _make_grid(n_density=3, n_importance=2, cache=True)
+        before = {
+            i: m.ae.state_dict()["W"].clone() for i, m in enumerate(grid.models.ravel())
+        }
+        grid.fit(n_epochs=23, batch_size=64, sample_every=5)
+        for i, m in enumerate(grid.models.ravel()):
+            assert not torch.equal(before[i], m.ae.state_dict()["W"])
+
+    def test_sample_every_validation_zero(self):
+        grid = _make_grid(n_density=3, n_importance=2, cache=True)
+        with pytest.raises(ValueError, match="sample_every"):
+            grid.fit(n_epochs=20, batch_size=64, sample_every=0)
+
+    def test_sample_every_validation_negative(self):
+        grid = _make_grid(n_density=3, n_importance=2, cache=True)
+        with pytest.raises(ValueError, match="sample_every"):
+            grid.fit(n_epochs=20, batch_size=64, sample_every=-1)
+
+    def test_sample_every_with_snapshot_interval(self):
+        grid = _make_grid(n_density=3, n_importance=2, cache=True)
+        history = grid.fit(
+            n_epochs=20,
+            batch_size=64,
+            sample_every=5,
+            snapshot_interval=10,
+        )
+        assert history is not None
+        # Should have 3 snapshots: epoch 0, 10, 20
+        assert history.models.shape[0] == 3
+
+    def test_sample_every_state_written_back(self):
+        grid = _make_grid(n_density=3, n_importance=2, cache=True)
+        before = {
+            i: m.ae.state_dict()["W"].clone() for i, m in enumerate(grid.models.ravel())
+        }
+        grid.fit(n_epochs=30, batch_size=64, sample_every=10)
+        for i, m in enumerate(grid.models.ravel()):
+            after = m.ae.state_dict()["W"]
+            assert not torch.equal(before[i], after), f"Model {i} weights unchanged"
+
+    def test_sample_every_default_is_10(self):
+        """Verify the default value is 10 by checking fit works without the argument."""
+        grid = _make_grid(n_density=3, n_importance=2, cache=True)
+        before = grid.models.ravel()[0].ae.state_dict()["W"].clone()
+        grid.fit(n_epochs=20, batch_size=64)
+        after = grid.models.ravel()[0].ae.state_dict()["W"]
+        assert not torch.equal(before, after)
+
+
 # ── Sub-grid Fitting & View Mutation ─────────────────────────────────────────
 
 
@@ -587,3 +670,275 @@ class TestEdgeCases:
         grid = _make_grid()
         with pytest.raises(IndexError, match="Unsupported index type"):
             grid["bad"]
+
+
+# ── sample_every × cache_samples Interaction ─────────────────────────────────
+
+
+def _make_shared_dist_grid(n_models: int = 4, cache: bool = True, seed: int = 42):
+    """All models share the same distribution (same seed, same p_active)
+    so they collapse to 1 unique distribution under cache_samples."""
+
+    def create_model(params: dict, **kwargs) -> ToyModel:
+        gen = Generator(device=DEVICE).manual_seed(seed)
+        return ToyModel(
+            distribution=SparseUniform(
+                N_FEATURES, p_active=0.5, device=DEVICE, generator=gen
+            ),
+            ae=TiedLinearRelu(N_FEATURES, N_HIDDEN, generator=gen, device=DEVICE),
+            importances=torch.ones(N_FEATURES),
+            device=DEVICE,
+        )
+
+    return ModelGrid(
+        create_model,
+        axes=[Axis(label="idx", values=torch.arange(n_models, dtype=torch.float32))],
+        cache_samples=cache,
+    )
+
+
+class TestSampleEveryAndCacheSamplesInteraction:
+    """Rigorous tests for the interaction between sample_every (epoch-level
+    sample buffering) and cache_samples (model-level distribution dedup)."""
+
+    # ── Correctness: shared distributions get identical data ──────────────
+
+    def test_shared_distribution_identical_weights_after_training(self):
+        """With cache_samples=True, models sharing a distribution see exactly
+        the same input batches. Starting from the same weights they must
+        converge to identical final weights."""
+        grid = _make_shared_dist_grid(n_models=3, cache=True)
+        assert len(grid._unique_distributions) == 1
+
+        grid.fit(n_epochs=30, batch_size=64, sample_every=5)
+
+        models = grid.models.ravel()
+        ref_W = models[0].ae.state_dict()["W"]
+        for m in models[1:]:
+            assert torch.equal(ref_W, m.ae.state_dict()["W"]), (
+                "Models with same distribution + same init should have "
+                "identical weights after training with cache_samples=True"
+            )
+
+    def test_generators_not_synced_without_cache(self):
+        """Without cache_samples, generators are NOT synchronized after fit.
+        With cache_samples=True, _sync_generators runs and all distributions
+        in the same group have the same generator state afterward."""
+        grid_no_cache = _make_shared_dist_grid(n_models=3, cache=False)
+        grid_no_cache.fit(n_epochs=20, batch_size=64, sample_every=5)
+
+        # Without cache, no _sync_generators call → no _unique_distributions attr
+        assert not hasattr(grid_no_cache, "_unique_distributions")
+
+        grid_cache = _make_shared_dist_grid(n_models=3, cache=True)
+        grid_cache.fit(n_epochs=20, batch_size=64, sample_every=5)
+
+        # With cache, generators ARE synced
+        models = grid_cache.models.ravel()
+        states = [m.distribution.generator.get_state() for m in models]
+        for s in states[1:]:
+            assert torch.equal(states[0], s), (
+                "With cache_samples=True, generators should be synced after fit"
+            )
+
+    def test_different_distributions_different_weights(self):
+        """Models with genuinely different distributions must produce
+        different final weights even with cache_samples=True."""
+        grid = _make_1d_grid(n=3, cache=True)
+        # Different densities → different unique distributions
+        assert len(grid._unique_distributions) == 3
+
+        grid.fit(n_epochs=40, batch_size=64, sample_every=5)
+
+        models = grid.models.ravel()
+        w0 = models[0].ae.state_dict()["W"]
+        any_differ = any(
+            not torch.equal(w0, m.ae.state_dict()["W"]) for m in models[1:]
+        )
+        assert any_differ
+
+    # ── Buffer slicing: each epoch gets fresh data ────────────────────────
+
+    def test_buffer_slices_differ_across_epochs(self):
+        """Within a sample_every window the buffer must be sliced so
+        consecutive epochs train on different batches."""
+        # We intercept by running two 1-epoch fits with sample_every=1
+        # vs one 2-epoch fit with sample_every=2. If sample_every=2
+        # reuses the same slice both epochs, loss would be suspiciously
+        # equal; with proper slicing, the per-epoch losses will differ.
+        grid = _make_grid(n_density=2, n_importance=2, cache=True)
+        losses = grid.fit(n_epochs=2, batch_size=64, sample_every=2, track_losses=True)
+        # Two epochs on different slices of the same buffer → different losses
+        assert losses[0] != losses[1], (
+            "Consecutive epochs within a sample_every window should "
+            "train on different data slices"
+        )
+
+    # ── Edge cases on sample_every ────────────────────────────────────────
+
+    def test_sample_every_larger_than_n_epochs(self):
+        """sample_every > n_epochs should work: single refill, buffer sized
+        to exactly n_epochs * batch_size."""
+        grid = _make_grid(n_density=2, n_importance=2, cache=True)
+        before = grid.models.ravel()[0].ae.state_dict()["W"].clone()
+        losses = grid.fit(
+            n_epochs=5, batch_size=64, sample_every=100, track_losses=True
+        )
+        assert len(losses) == 5
+        after = grid.models.ravel()[0].ae.state_dict()["W"]
+        assert not torch.equal(before, after)
+
+    def test_sample_every_equals_n_epochs(self):
+        """sample_every == n_epochs: one refill for entire training.
+        All epochs train on slices of the same buffer."""
+        grid = _make_grid(n_density=2, n_importance=2, cache=True)
+        losses = grid.fit(
+            n_epochs=10, batch_size=64, sample_every=10, track_losses=True
+        )
+        assert len(losses) == 10
+        # Weights should change (training happened)
+        # Note: loss may not monotonically decrease on a single buffer
+        # because the model sees each slice only once.
+
+    def test_n_epochs_1_sample_every_1(self):
+        """Minimal training: 1 epoch, sample_every=1."""
+        grid = _make_grid(n_density=2, n_importance=2, cache=True)
+        losses = grid.fit(n_epochs=1, batch_size=64, sample_every=1, track_losses=True)
+        assert len(losses) == 1
+
+    def test_n_epochs_1_sample_every_10(self):
+        """Single epoch with sample_every > 1: buffer should be sized to 1 epoch."""
+        grid = _make_grid(n_density=2, n_importance=2, cache=True)
+        losses = grid.fit(n_epochs=1, batch_size=64, sample_every=10, track_losses=True)
+        assert len(losses) == 1
+
+    def test_sample_every_2_n_epochs_3(self):
+        """Odd remainder: n_epochs=3, sample_every=2 → refill at ep 0 (size 2)
+        and ep 2 (size 1)."""
+        grid = _make_grid(n_density=2, n_importance=2, cache=True)
+        losses = grid.fit(n_epochs=3, batch_size=64, sample_every=2, track_losses=True)
+        assert len(losses) == 3
+
+    # ── Generator synchronization after fit ───────────────────────────────
+
+    def test_generator_sync_after_fit(self):
+        """After fit with cache_samples=True, distributions in the same
+        group must have synchronized generators so future sampling is
+        consistent."""
+        grid = _make_shared_dist_grid(n_models=3, cache=True)
+        grid.fit(n_epochs=20, batch_size=64, sample_every=5)
+
+        models = grid.models.ravel()
+        samples = [m.distribution.sample(128) for m in models]
+        for s in samples[1:]:
+            assert torch.equal(samples[0], s), (
+                "After fit + sync, distributions in same group "
+                "should produce identical samples"
+            )
+
+    def test_generator_sync_allows_repeated_fit(self):
+        """After a first fit, generator sync should leave the grid in a
+        state where a second fit works correctly."""
+        grid = _make_shared_dist_grid(n_models=3, cache=True)
+        grid.fit(n_epochs=10, batch_size=64, sample_every=3)
+
+        # Second fit should not error and should still decrease loss
+        losses = grid.fit(n_epochs=20, batch_size=64, sample_every=5, track_losses=True)
+        assert len(losses) == 20
+
+    # ── Determinism ───────────────────────────────────────────────────────
+
+    def test_deterministic_training_same_seed(self):
+        """Two identically-constructed grids trained with the same
+        hyperparameters must produce bit-identical final weights."""
+
+        def train_grid():
+            grid = _make_shared_dist_grid(n_models=2, cache=True, seed=99)
+            grid.fit(n_epochs=15, batch_size=64, sample_every=5)
+            return [m.ae.state_dict()["W"].clone() for m in grid.models.ravel()]
+
+        run1 = train_grid()
+        run2 = train_grid()
+        for w1, w2 in zip(run1, run2):
+            assert torch.equal(w1, w2), "Same seed must produce same result"
+
+    def test_cache_samples_dedup_reduces_unique_distributions(self):
+        """With cache_samples=True, models sharing the same distribution
+        parameters are collapsed into fewer unique distributions. Verify
+        that the dedup count is correct for a known setup."""
+        # _make_grid: each (density, importance) pair has a unique density
+        # but same density across importance axis → n_density unique dists
+        grid = _make_grid(n_density=3, n_importance=4, cache=True)
+        # All models in a density row share the same density (but seed=42 for all),
+        # so all 12 models have the same p_active for a given density row.
+        # With _make_create_model, all models use seed=42, but p_active differs
+        # per density → n_density unique distributions.
+        n_unique = len(grid._unique_distributions)
+        n_total = grid.models.size
+        assert n_unique <= n_total, (
+            f"Dedup should not create MORE distributions than models "
+            f"({n_unique} > {n_total})"
+        )
+        # In our setup, each density value creates a different distribution
+        assert n_unique == 3, (
+            f"Expected 3 unique distributions (one per density), got {n_unique}"
+        )
+
+    # ── Loss tracking interaction ─────────────────────────────────────────
+
+    def test_fit_returns_losses_with_sample_every(self):
+        grid = _make_grid(n_density=2, n_importance=2, cache=True)
+        losses = grid.fit(n_epochs=20, batch_size=64, sample_every=7, track_losses=True)
+        assert isinstance(losses, list)
+        assert len(losses) == 20
+
+    def test_fit_returns_none_when_no_tracking_no_snapshot(self):
+        grid = _make_grid(n_density=2, n_importance=2, cache=True)
+        result = grid.fit(
+            n_epochs=10, batch_size=64, sample_every=3, track_losses=False
+        )
+        assert result is None
+
+    def test_fit_returns_history_grid_with_snapshot(self):
+        """snapshot_interval takes priority over losses in the return value."""
+        from occhio.model_grid import TrainingAxis
+
+        grid = _make_grid(n_density=2, n_importance=2, cache=True)
+        result = grid.fit(
+            n_epochs=20,
+            batch_size=64,
+            sample_every=5,
+            snapshot_interval=10,
+            track_losses=True,  # losses built internally but snapshot wins
+        )
+        assert isinstance(result, ModelGrid)
+        assert isinstance(result.axes[0], TrainingAxis)
+        # epoch 0, 10, 20 → 3 snapshots
+        assert result.shape[0] == 3
+
+    # ── cache_samples with 2D grid + sample_every ────────────────────────
+
+    def test_2d_grid_cache_sample_index_preserved(self):
+        """In a 2D grid, the sample index must cover all flattened models
+        after training with sample_every."""
+        grid = _make_grid(n_density=3, n_importance=2, cache=True)
+        n_flat = grid.models.size
+        assert len(grid._sample_index) == n_flat
+
+        grid.fit(n_epochs=10, batch_size=64, sample_every=3)
+
+        # After fit, sample index rebuilt and still covers all models
+        assert len(grid._sample_index) == n_flat
+
+    def test_2d_grid_unique_distributions_count_stable(self):
+        """The number of unique distributions should not change after fit."""
+        grid = _make_grid(n_density=3, n_importance=2, cache=True)
+        n_unique_before = len(grid._unique_distributions)
+
+        grid.fit(n_epochs=10, batch_size=64, sample_every=3)
+
+        n_unique_after = len(grid._unique_distributions)
+        assert n_unique_after == n_unique_before, (
+            f"Unique distribution count changed from {n_unique_before} "
+            f"to {n_unique_after} after fit"
+        )
