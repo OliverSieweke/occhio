@@ -12,13 +12,13 @@ import torch
 
 # %% ── config ─────────────────────────────────────────────────────────────────
 DEVICE = "mps"
-N_FEATURES = 20
-N_HIDDEN = 4
+N_FEATURES = 12
+N_HIDDEN = 2
 
 
 def create_model(params):
     gen = torch.Generator(DEVICE)
-    gen.manual_seed(42)
+    gen.manual_seed(8)
 
     p = params["p"]
     p_active = [p / (i + 1) for i in range(N_FEATURES)]
@@ -32,12 +32,12 @@ def create_model(params):
 mg = ModelGrid(
     create_model,
     axes=[
-        Axis(label="p", values=torch.logspace(0, -3, steps=24)),
+        Axis(label="p", values=torch.logspace(0, -2, steps=24)),
     ],
 )
 
 # %% ── train ──────────────────────────────────────────────────────────────────
-mg.fit(20_000, batch_size=512)
+mg.fit(20_000, batch_size=128)
 
 # %% ── visualize ──────────────────────────────────────────────────────────────
 fig = ov.plot_geometry(mg)
@@ -51,6 +51,11 @@ fig.show()
 
 # %%
 fig = ov.plot_representation(mg[-3:])
+fig.update_layout(height=600)
+fig.show()
+
+# %%
+fig = ov.plot_embedding(mg[-3:])
 fig.update_layout(height=600)
 fig.show()
 
