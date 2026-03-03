@@ -86,11 +86,11 @@ class ModelGrid:
         self,
         create_model: Callable[[dict[str, Any]], ToyModel],
         axes: list[Axis],
-        cache_samples: bool = True,
+        broadcast_samples: bool = True,
         *,
         _models: NDArray[np.object_] | None = None,
     ):
-        self.cache_samples: bool = cache_samples
+        self.broadcast_samples: bool = broadcast_samples
         self._validate_args(create_model, axes)
         self.axes: list[Axis] = axes
         self.create_model: Callable[[dict[str, Any]], ToyModel] = create_model
@@ -101,9 +101,9 @@ class ModelGrid:
             self.models = self._initialize_models()
             self._validate_vmap()
 
-            if self.cache_samples:
+            if self.broadcast_samples:
                 self._unique_distributions, self._sample_index = (
-                    self._build_sample_index()
+                    self._build_sample_broadcast()
                 )
 
     def _validate_args(
@@ -158,16 +158,16 @@ class ModelGrid:
                     f"received: {ae_signature}, "
                     f"expected: {reference_signature}"
                 )
-            if self.cache_samples and not (model.distribution.generator):
+            if self.broadcast_samples and not (model.distribution.generator):
                 raise ValueError(
                     f"All distributions should have a fixed generator. "
                     f"Distribution at index {i} does not have a fixed generator."
                 )
 
-    def _build_sample_index(self) -> tuple[list[Distribution], Tensor]:
+    def _build_sample_broadcast(self) -> tuple[list[Distribution], Tensor]:
         """Precompute which models share a distribution so the training loop
-        only needs to sample once per unique distribution and index into the
-        results — no hashing or dict lookups at training time."""
+        only needs to sample once per unique distribution and broadcast the
+        results — without dict lookups at training time."""
         flattened_models: NDArray[np.object_] = self.models.ravel()
         hash_to_idx: dict[str, int] = {}
         unique_distributions: list[Distribution] = []
@@ -292,7 +292,7 @@ class ModelGrid:
         return ModelGrid(
             create_model=self.create_model,
             axes=new_axes,
-            cache_samples=self.cache_samples,
+            broadcast_samples=self.broadcast_samples,
             _models=sliced_models,
         )
 
@@ -381,10 +381,12 @@ class ModelGrid:
         )
 
         self.models = models
-        self._validate_autoencoders()
+        self._validate_vmap()
 
-        if self.cache_samples:
-            self._unique_distributions, self._sample_index = self._build_sample_index()
+        if self.broadcast_samples:
+            self._unique_distributions, self._sample_index = (
+                self._build_sample_broadcast()
+            )
 
         # print(
         #     f"Models loaded from '{path}': "
@@ -396,8 +398,8 @@ class ModelGrid:
     # consistent with ToyModel.fit()
     def fit(
         self,
-        n_epochs: int = 10000,
-        batch_size: int = 1024,
+        n_epochs: int = 10_000,
+        batch_size: int = 512,
         learning_rate: float = 3e-4,
         weight_decay: float = 0.05,
         verbose: bool = False,
@@ -517,7 +519,7 @@ class ModelGrid:
                 epochs_left = min(sample_every, n_epochs - ep)
                 total_samples = epochs_left * batch_size
 
-                if self.cache_samples:
+                if self.broadcast_samples:
                     unique_samples = torch.stack(
                         [
                             dist.sample(total_samples)
@@ -590,11 +592,13 @@ class ModelGrid:
                     }
                 )
 
-        if self.cache_samples:
+        if self.broadcast_samples:
             self._sync_generators()
             for model in flattened_models:
                 model.distribution.__dict__.pop("_sampling_equivalence_hash", None)
-            self._unique_distributions, self._sample_index = self._build_sample_index()
+            self._unique_distributions, self._sample_index = (
+                self._build_sample_broadcast()
+            )
 
         # Build history grid if snapshots were captured
         if snapshots is not None:
@@ -663,12 +667,12 @@ class ModelGrid:
         new_axes = [TrainingAxis(values=epoch_values)] + self.axes
 
         # Create and return the history grid
-        # Note: cache_samples=False because history grids are read-only snapshots
+        # Note: broadcast_samples=False because history grids are read-only snapshots
         # and won't be trained, so we don't need sample caching infrastructure
         return ModelGrid(
             create_model=self.create_model,
             axes=new_axes,
-            cache_samples=False,
+            broadcast_samples=False,
             _models=history_models,
         )
 
@@ -758,6 +762,6 @@ class ModelGrid:
         return ModelGrid(
             create_model=self.create_model,
             axes=new_axes,
-            cache_samples=self.cache_samples,
+            broadcast_samples=self.broadcast_samples,
             _models=sliced_models,
         )
