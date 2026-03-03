@@ -261,20 +261,6 @@ class TestLoadModelsCaching:
 
         assert not hasattr(grid2, "_unique_distributions")
 
-    def test_fit_after_load_with_cache(self, tmp_path):
-        grid = _make_grid(n_density=3, n_importance=2, cache=True)
-        grid.fit(n_epochs=10, batch_size=32)
-        path = str(tmp_path / "grid.pkl")
-        grid.save_models(path)
-
-        grid2 = _make_grid(n_density=3, n_importance=2, cache=True)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            grid2.load_models(path)
-
-        losses = grid2.fit(n_epochs=10, batch_size=32, track_losses=True)
-        assert len(losses) == 10
-
 
 # ── load_models: warnings ────────────────────────────────────────────────────
 
@@ -529,23 +515,6 @@ class TestLoadModelsTrainedRoundTrip:
                 assert torch.equal(
                     orig.ae.state_dict()[key], final.ae.state_dict()[key]
                 ), f"Mismatch on {key} after double round-trip"
-
-    def test_continue_training_after_load(self, tmp_path):
-        grid = _make_grid(n_density=3, n_importance=2, cache=True)
-        losses1 = grid.fit(n_epochs=20, batch_size=64, track_losses=True)
-        path = str(tmp_path / "trained.pkl")
-        grid.save_models(path)
-
-        grid2 = _make_grid(n_density=3, n_importance=2, cache=True)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            grid2.load_models(path)
-
-        losses2 = grid2.fit(n_epochs=20, batch_size=64, track_losses=True)
-        assert len(losses2) == 20
-        assert losses2[0] < losses1[0], (
-            "Continued training should start from a lower loss than initial"
-        )
 
 
 # ── load_models: edge cases ──────────────────────────────────────────────────

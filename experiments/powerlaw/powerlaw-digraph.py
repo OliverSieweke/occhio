@@ -15,6 +15,7 @@ from occhio.visualization.dynamic import plot_dynamic_scatter
 
 import torch
 import numpy as np
+import networkx as nx
 import plotly.colors as pc
 import plotly.express as px
 import plotly.graph_objects as go
@@ -32,7 +33,7 @@ dist = PowerLawDigraph(
     n_features=N_FEATURES,
     alpha=3,
     p_edge=10 / N_FEATURES,
-    p_active=2 / N_FEATURES,
+    p_active=1 / N_FEATURES,
     p_child=0.2,
     generator=gen,
     device=DEVICE,
@@ -65,6 +66,7 @@ fig.add_trace(
 )
 fig.update_layout(title="Graph degree distribution", showlegend=True)
 fig.show()
+
 
 # %%  ── adjacency heatmap ────────────────────────────────────────────────────
 adj_np = dist.adjacency.float().cpu().numpy()
