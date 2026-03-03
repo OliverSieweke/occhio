@@ -27,7 +27,7 @@ gen = torch.Generator(DEVICE)
 gen.manual_seed(1)
 
 N_FEATURES = 200
-N_HIDDEN = 16
+N_HIDDEN = 10
 
 dist = PowerLawDigraph(
     n_features=N_FEATURES,
@@ -128,8 +128,8 @@ def norm_hook(hook_data):
 # %%
 
 losses, hook_returns = tm.fit(
-    35_000,
-    batch_size=512,
+    50_000,
+    batch_size=1024,
     learning_rate=3e-4,
     verbose=True,
     hooks=[norm_hook],
@@ -289,7 +289,7 @@ print(f"  out-degree ↔ interference : r = {corr_int_outdeg:+.3f}")
 dist.print_graph(center=1)
 
 # %%  ── neighborhood interference heatmap ──────────────────────────────────
-CENTER = 2
+CENTER = 3
 
 adj = dist.adjacency  # adj[j, i] = True  ⟹  j → i
 # children = adj[CENTER, :].nonzero(as_tuple=True)[0].tolist()
@@ -582,7 +582,7 @@ fig.show()
 # %% ── ego-graph: centre node and its direct neighbourhood ───────────────────
 # adj_np[j, i] > 0  ⟹  directed edge j → i
 # Layout: parents left, centre middle, children right.
-CENTER = 11  # node 0 has the highest expected in-degree by construction
+CENTER = 3  # node 0 has the highest expected in-degree by construction
 
 parents = [j for j in range(N_FEATURES) if adj_np[j, CENTER] and j != CENTER]
 children = [i for i in range(N_FEATURES) if adj_np[CENTER, i] and i != CENTER]
