@@ -28,7 +28,7 @@ def plot_geometry(
         model_grid = ModelGrid(
             create_model=lambda: model_grid,
             axes=[],
-            cache_samples=False,
+            broadcast_samples=False,
             _models=np.array([model_grid]),
         )
 
@@ -421,7 +421,7 @@ def _plot_geometry_animated(
         return ModelGrid(
             create_model=sliced.create_model,
             axes=squeezed_axes,
-            cache_samples=sliced.cache_samples,
+            broadcast_samples=sliced.broadcast_samples,
             _models=squeezed_models,
         )
 

@@ -116,9 +116,6 @@ fig.show()
 # %%
 losses = mg.fit(5_000, track_losses=True)
 
-# %%
-losses
-
 
 # %%
 fig = ov.plot_geometry(mg)

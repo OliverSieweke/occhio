@@ -20,7 +20,7 @@ def plot_embedding(
         model_grid = ModelGrid(
             create_model=lambda params: model_grid,
             axes=[Axis(label="model", values=torch.tensor([0.0]))],
-            cache_samples=False,
+            broadcast_samples=False,
             _models=np.array([model_grid], dtype=object),
         )
     elif isinstance(model_grid, list):
@@ -36,7 +36,7 @@ def plot_embedding(
                     values=torch.arange(len(model_grid), dtype=torch.float32),
                 )
             ],
-            cache_samples=False,
+            broadcast_samples=False,
             _models=np.array(model_grid, dtype=object),
         )
 

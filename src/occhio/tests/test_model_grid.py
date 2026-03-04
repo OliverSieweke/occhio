@@ -52,7 +52,7 @@ def _make_grid(
             Axis(label="density", values=torch.linspace(0.1, 1.0, n_density)),
             Axis(label="importance", values=torch.linspace(0.5, 2.0, n_importance)),
         ],
-        cache_samples=cache,
+        broadcast_samples=cache,
     )
 
 
@@ -74,7 +74,7 @@ def _make_1d_grid(n: int = 8, cache: bool = True, seed: int = 42) -> ModelGrid:
     return ModelGrid(
         create_model,
         axes=[Axis(label="density", values=torch.linspace(0.1, 1.0, n))],
-        cache_samples=cache,
+        broadcast_samples=cache,
     )
 
 
@@ -409,7 +409,7 @@ class TestSampleCaching:
         grid = ModelGrid(
             create_model,
             axes=[Axis(label="dummy", values=torch.arange(5, dtype=torch.float32))],
-            cache_samples=True,
+            broadcast_samples=True,
         )
         assert len(grid._unique_distributions) == 1
         assert (grid._sample_index == 0).all()
@@ -502,11 +502,11 @@ class TestSubgridFitting:
     def test_subgrid_retains_cache_setting(self):
         grid = _make_grid(cache=True)
         sub = grid[1:3]
-        assert sub.cache_samples is True
+        assert sub.broadcast_samples is True
 
         grid2 = _make_grid(cache=False)
         sub2 = grid2[1:3]
-        assert sub2.cache_samples is False
+        assert sub2.broadcast_samples is False
 
 
 # ── Validation ───────────────────────────────────────────────────────────────
@@ -515,7 +515,7 @@ class TestSubgridFitting:
 class TestValidation:
     def test_empty_axes_raises(self):
         with pytest.raises(ValueError, match="At least one axis"):
-            ModelGrid(_make_create_model(), axes=[], cache_samples=False)
+            ModelGrid(_make_create_model(), axes=[], broadcast_samples=False)
 
     def test_missing_params_arg_raises(self):
         def bad_create_model(x: int) -> ToyModel:
@@ -530,7 +530,7 @@ class TestValidation:
             ModelGrid(
                 bad_create_model,
                 axes=[Axis(label="x", values=torch.tensor([1.0]))],
-                cache_samples=False,
+                broadcast_samples=False,
             )
 
     def test_no_generator_with_cache_raises(self):
@@ -550,7 +550,7 @@ class TestValidation:
                 axes=[
                     Axis(label="density", values=torch.tensor([0.1, 0.5])),
                 ],
-                cache_samples=True,
+                broadcast_samples=True,
             )
 
 

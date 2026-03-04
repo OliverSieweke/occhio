@@ -52,7 +52,7 @@ def _make_grid(
             Axis(label="density", values=torch.linspace(0.1, 1.0, n_density)),
             Axis(label="importance", values=torch.linspace(0.5, 2.0, n_importance)),
         ],
-        cache_samples=cache,
+        broadcast_samples=cache,
     )
 
 
@@ -74,7 +74,7 @@ def _make_1d_grid(n: int = 8, cache: bool = True, seed: int = 42) -> ModelGrid:
     return ModelGrid(
         create_model,
         axes=[Axis(label="density", values=torch.linspace(0.1, 1.0, n))],
-        cache_samples=cache,
+        broadcast_samples=cache,
     )
 
 
@@ -409,7 +409,7 @@ class TestSampleCaching:
         grid = ModelGrid(
             create_model,
             axes=[Axis(label="dummy", values=torch.arange(5, dtype=torch.float32))],
-            cache_samples=True,
+            broadcast_samples=True,
         )
         assert len(grid._unique_distributions) == 1
         assert (grid._sample_index == 0).all()
@@ -585,11 +585,11 @@ class TestSubgridFitting:
     def test_subgrid_retains_cache_setting(self):
         grid = _make_grid(cache=True)
         sub = grid[1:3]
-        assert sub.cache_samples is True
+        assert sub.broadcast_samples is True
 
         grid2 = _make_grid(cache=False)
         sub2 = grid2[1:3]
-        assert sub2.cache_samples is False
+        assert sub2.broadcast_samples is False
 
 
 # ── Validation ───────────────────────────────────────────────────────────────
@@ -598,7 +598,7 @@ class TestSubgridFitting:
 class TestValidation:
     def test_empty_axes_raises(self):
         with pytest.raises(ValueError, match="At least one axis"):
-            ModelGrid(_make_create_model(), axes=[], cache_samples=False)
+            ModelGrid(_make_create_model(), axes=[], broadcast_samples=False)
 
     def test_missing_params_arg_raises(self):
         def bad_create_model(x: int) -> ToyModel:
@@ -613,7 +613,7 @@ class TestValidation:
             ModelGrid(
                 bad_create_model,
                 axes=[Axis(label="x", values=torch.tensor([1.0]))],
-                cache_samples=False,
+                broadcast_samples=False,
             )
 
     def test_no_generator_with_cache_raises(self):
@@ -633,7 +633,7 @@ class TestValidation:
                 axes=[
                     Axis(label="density", values=torch.tensor([0.1, 0.5])),
                 ],
-                cache_samples=True,
+                broadcast_samples=True,
             )
 
 
@@ -672,12 +672,12 @@ class TestEdgeCases:
             grid["bad"]
 
 
-# ── sample_every × cache_samples Interaction ─────────────────────────────────
+# ── sample_every × broadcast_samples Interaction ─────────────────────────────────
 
 
 def _make_shared_dist_grid(n_models: int = 4, cache: bool = True, seed: int = 42):
     """All models share the same distribution (same seed, same p_active)
-    so they collapse to 1 unique distribution under cache_samples."""
+    so they collapse to 1 unique distribution under broadcast_samples."""
 
     def create_model(params: dict, **kwargs) -> ToyModel:
         gen = Generator(device=DEVICE).manual_seed(seed)
@@ -693,18 +693,18 @@ def _make_shared_dist_grid(n_models: int = 4, cache: bool = True, seed: int = 42
     return ModelGrid(
         create_model,
         axes=[Axis(label="idx", values=torch.arange(n_models, dtype=torch.float32))],
-        cache_samples=cache,
+        broadcast_samples=cache,
     )
 
 
 class TestSampleEveryAndCacheSamplesInteraction:
     """Rigorous tests for the interaction between sample_every (epoch-level
-    sample buffering) and cache_samples (model-level distribution dedup)."""
+    sample buffering) and broadcast_samples (model-level distribution dedup)."""
 
     # ── Correctness: shared distributions get identical data ──────────────
 
     def test_shared_distribution_identical_weights_after_training(self):
-        """With cache_samples=True, models sharing a distribution see exactly
+        """With broadcast_samples=True, models sharing a distribution see exactly
         the same input batches. Starting from the same weights they must
         converge to identical final weights."""
         grid = _make_shared_dist_grid(n_models=3, cache=True)
@@ -717,12 +717,12 @@ class TestSampleEveryAndCacheSamplesInteraction:
         for m in models[1:]:
             assert torch.equal(ref_W, m.ae.state_dict()["W"]), (
                 "Models with same distribution + same init should have "
-                "identical weights after training with cache_samples=True"
+                "identical weights after training with broadcast_samples=True"
             )
 
     def test_generators_not_synced_without_cache(self):
-        """Without cache_samples, generators are NOT synchronized after fit.
-        With cache_samples=True, _sync_generators runs and all distributions
+        """Without broadcast_samples, generators are NOT synchronized after fit.
+        With broadcast_samples=True, _sync_generators runs and all distributions
         in the same group have the same generator state afterward."""
         grid_no_cache = _make_shared_dist_grid(n_models=3, cache=False)
         grid_no_cache.fit(n_epochs=20, batch_size=64, sample_every=5)
@@ -738,12 +738,12 @@ class TestSampleEveryAndCacheSamplesInteraction:
         states = [m.distribution.generator.get_state() for m in models]
         for s in states[1:]:
             assert torch.equal(states[0], s), (
-                "With cache_samples=True, generators should be synced after fit"
+                "With broadcast_samples=True, generators should be synced after fit"
             )
 
     def test_different_distributions_different_weights(self):
         """Models with genuinely different distributions must produce
-        different final weights even with cache_samples=True."""
+        different final weights even with broadcast_samples=True."""
         grid = _make_1d_grid(n=3, cache=True)
         # Different densities → different unique distributions
         assert len(grid._unique_distributions) == 3
@@ -822,7 +822,7 @@ class TestSampleEveryAndCacheSamplesInteraction:
     # ── Generator synchronization after fit ───────────────────────────────
 
     def test_generator_sync_after_fit(self):
-        """After fit with cache_samples=True, distributions in the same
+        """After fit with broadcast_samples=True, distributions in the same
         group must have synchronized generators so future sampling is
         consistent."""
         grid = _make_shared_dist_grid(n_models=3, cache=True)
@@ -862,8 +862,8 @@ class TestSampleEveryAndCacheSamplesInteraction:
         for w1, w2 in zip(run1, run2):
             assert torch.equal(w1, w2), "Same seed must produce same result"
 
-    def test_cache_samples_dedup_reduces_unique_distributions(self):
-        """With cache_samples=True, models sharing the same distribution
+    def test_broadcast_samples_dedup_reduces_unique_distributions(self):
+        """With broadcast_samples=True, models sharing the same distribution
         parameters are collapsed into fewer unique distributions. Verify
         that the dedup count is correct for a known setup."""
         # _make_grid: each (density, importance) pair has a unique density
@@ -916,7 +916,7 @@ class TestSampleEveryAndCacheSamplesInteraction:
         # epoch 0, 10, 20 → 3 snapshots
         assert result.shape[0] == 3
 
-    # ── cache_samples with 2D grid + sample_every ────────────────────────
+    # ── broadcast_samples with 2D grid + sample_every ────────────────────────
 
     def test_2d_grid_cache_sample_index_preserved(self):
         """In a 2D grid, the sample index must cover all flattened models
