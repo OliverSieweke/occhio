@@ -1,7 +1,10 @@
+# ABOUTME: Defines ModelGrid, a vectorized multi-dimensional grid of ToyModels.
+# ABOUTME: Uses torch.vmap + torch.compile for fast parallel training across grid points.
 from __future__ import annotations
 
 import pickle
 from collections.abc import Sequence
+from copy import deepcopy
 from dataclasses import dataclass
 from functools import cached_property
 from inspect import signature
@@ -102,6 +105,7 @@ class ModelGrid:
             self._validate_vmap()
 
             if self.broadcast_samples:
+                self._validate_generators()
                 self._unique_distributions, self._sample_index = (
                     self._build_sample_broadcast()
                 )
@@ -140,10 +144,7 @@ class ModelGrid:
             reference.device,
         )
 
-        for i, model in enumerate(
-            flattened_models,
-            start=1,
-        ):
+        for i, model in enumerate(flattened_models, start=1):
             ae: AutoEncoderBase = model.ae
             ae_signature = (
                 type(ae),
@@ -158,7 +159,15 @@ class ModelGrid:
                     f"received: {ae_signature}, "
                     f"expected: {reference_signature}"
                 )
-            if self.broadcast_samples and not (model.distribution.generator):
+
+    def _validate_generators(self) -> None:
+        if self.models.size <= 1:
+            return
+
+        flattened_models: NDArray[np.object_] = self.models.ravel()
+
+        for i, model in enumerate(flattened_models, start=1):
+            if not model.distribution.generator:
                 raise ValueError(
                     f"All distributions should have a fixed generator. "
                     f"Distribution at index {i} does not have a fixed generator."
@@ -175,11 +184,11 @@ class ModelGrid:
 
         for model in flattened_models:
             dist: Distribution = model.distribution
-            hash: str = dist._sampling_equivalence_hash
-            if hash not in hash_to_idx:
-                hash_to_idx[str(hash)] = len(unique_distributions)
+            dist_hash: str = dist._sampling_equivalence_hash
+            if dist_hash not in hash_to_idx:
+                hash_to_idx[dist_hash] = len(unique_distributions)
                 unique_distributions.append(dist)
-            sample_index.append(hash_to_idx[str(hash)])
+            sample_index.append(hash_to_idx[dist_hash])
 
         device: torch.device | str = flattened_models[0].ae.device
         return unique_distributions, torch.tensor(
@@ -210,92 +219,6 @@ class ModelGrid:
             for model in flattened_models[1:]
         )
 
-    def __getitem__(self, key) -> ModelGrid | ToyModel:
-        if not isinstance(key, tuple):
-            key = (key,)
-
-        if len(key) > len(self.axes):
-            raise IndexError(
-                f"Too many indices: got {len(key)}, grid has {len(self.axes)} axes"
-            )
-
-        numpy_key: list[slice] = []
-        new_axes: list[Axis] = []
-
-        for dim, k in enumerate(key):
-            axis: Axis = self.axes[dim]
-            dim_size: int = len(axis.values)
-
-            if isinstance(k, int):
-                idx: int = k + dim_size if k < 0 else k
-                if idx < 0 or idx >= dim_size:
-                    raise IndexError(
-                        f"Index {k} out of bounds for axis '{axis.label}' "
-                        f"with size {dim_size}"
-                    )
-                numpy_key.append(slice(idx, idx + 1))
-                values = axis.values[idx : idx + 1]
-
-            elif isinstance(k, slice):
-                start, stop, step = k.start, k.stop, k.step
-                if start is not None and start < 0:
-                    start += dim_size
-                if stop is not None and stop < 0:
-                    stop += dim_size
-
-                if start is not None and (start < 0 or start >= dim_size):
-                    raise IndexError(
-                        f"Slice start {k.start} out of bounds for axis "
-                        f"'{axis.label}' with size {dim_size}"
-                    )
-                if stop is not None and (stop < 0 or stop > dim_size):
-                    raise IndexError(
-                        f"Slice stop {k.stop} out of bounds for axis "
-                        f"'{axis.label}' with size {dim_size}"
-                    )
-
-                if (
-                    step is None
-                    and start is not None
-                    and stop is not None
-                    and start > stop
-                ):
-                    step = -1
-
-                s = slice(start, stop, step)
-                numpy_key.append(s)
-                if step is not None and step < 0:
-                    range_start = start if start is not None else dim_size - 1
-                    range_stop = stop if stop is not None else -1
-                    indices = list(range(range_start, range_stop, step))
-                    values = axis.values[indices]
-                else:
-                    values = axis.values[s]
-            else:
-                raise IndexError(f"Unsupported index type: {type(k)}")
-
-            new_axes.append(Axis(label=axis.label, values=values))
-
-        for dim in range(len(key), len(self.axes)):
-            new_axes.append(self.axes[dim])
-            numpy_key.append(slice(None))
-
-        all_int: bool = len(key) == len(self.axes) and all(
-            isinstance(k, int) for k in key
-        )
-        if all_int:
-            resolved_idx = tuple(s.start for s in numpy_key)
-            return self.models[resolved_idx]
-
-        sliced_models: NDArray[np.object_] = self.models[tuple(numpy_key)]
-
-        return ModelGrid(
-            create_model=self.create_model,
-            axes=new_axes,
-            broadcast_samples=self.broadcast_samples,
-            _models=sliced_models,
-        )
-
     @cached_property
     def parameters_mesh(self):
         """Returns a tuple of the meshgrid of the axes."""
@@ -311,11 +234,16 @@ class ModelGrid:
         return self.models.shape
 
     @property
-    def describe(self) -> dict[str, int]:
+    def description(self) -> dict[str, int]:
         """Returns a dictionary of the axis labels and their lengths."""
         return {axis.label: len(axis.values) for axis in self.axes}
 
     def save_models(self, path: str) -> None:
+        """Serialize the model grid to disk using pickle.
+
+        Warning: pickle files are tied to the current Python and library versions.
+        Loading in a different environment may fail silently or raise errors.
+        """
         if not isinstance(path, str) or not path:
             raise TypeError("Path must be a non-empty string.")
         if not path.endswith(".pkl"):
@@ -324,6 +252,12 @@ class ModelGrid:
             pickle.dump(self.models, f)
 
     def load_models(self, path: str) -> None:
+        """Load a serialized model grid from disk, replacing ``self.models`` in-place.
+
+        Warning: pickle files are tied to the Python and library versions used when
+        saving. Axis labels and values are not stored in the file — verify that the
+        current grid's axes match the file's original grid after loading.
+        """
         if not isinstance(path, str) or not path:
             raise TypeError("Path must be a non-empty string.")
         if not path.endswith(".pkl"):
@@ -384,15 +318,10 @@ class ModelGrid:
         self._validate_vmap()
 
         if self.broadcast_samples:
+            self._validate_generators()
             self._unique_distributions, self._sample_index = (
                 self._build_sample_broadcast()
             )
-
-        # print(
-        #     f"Models loaded from '{path}': "
-        #     f"shape={self.models.shape}, device='{grid_device}', "
-        #     f"models={self.models.size}"
-        # )
 
     # If you change the signature or implementation here, make sure you keep it
     # consistent with ToyModel.fit()
@@ -597,7 +526,7 @@ class ModelGrid:
         if snapshots is not None:
             return self._build_history_grid(snapshots, flattened_models)
 
-        return None
+        return losses
 
     def _build_history_grid(
         self,
@@ -614,7 +543,6 @@ class ModelGrid:
             New ModelGrid with TrainingAxis prepended to axes
         """
         n_snapshots = len(snapshots)
-        n_models = len(flattened_models)
 
         # Create new shape: (n_snapshots, *original_shape)
         history_shape = (n_snapshots,) + self.models.shape
@@ -631,8 +559,6 @@ class ModelGrid:
             for model_idx, original_model in enumerate(flattened_models):
                 # Create a new ToyModel with the same distribution and architecture
                 # but with snapshotted autoencoder weights
-                from copy import deepcopy
-
                 snapshot_model = ToyModel(
                     distribution=original_model.distribution,
                     ae=deepcopy(original_model.ae),
