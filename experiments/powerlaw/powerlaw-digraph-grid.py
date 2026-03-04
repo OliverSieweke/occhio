@@ -8,9 +8,8 @@ activation rates, etc.).
 """
 
 # %%
-from IPython.core.inputtransformer2 import tr
 from occhio import ToyModel
-from occhio.model_grid import ModelGrid, Axis
+from occhio.model_grid import ModelGrid, Axis, TrainingAxis
 from occhio.distributions import PowerLawDigraph
 from occhio.autoencoder import TiedLinearRelu
 import occhio.visualization as ov
@@ -34,7 +33,7 @@ def create_model(params):
         alpha=2,
         p_edge=0.20,
         p_active=params["p_active"],
-        p_child=0.3,
+        p_child=params["p_child"],
         generator=gen,
         device=DEVICE,
     )
@@ -47,12 +46,13 @@ def create_model(params):
 mg = ModelGrid(
     create_model,
     axes=[
-        Axis(label="p_active", values=torch.logspace(-2, -5, steps=24)),
+        Axis(label="p_active", values=torch.logspace(0, -2, steps=24)),
+        TrainingAxis(label="p_child", values=torch.linspace(0, 1, steps=10)),
     ],
 )
 
 # %%
-dist = mg[0].distribution  # ty:ignore
+dist = mg[0, 0].distribution  # ty:ignore
 adj = dist.adjacency.cpu().numpy()  # adj[j, i] = True → edge j → i
 G = nx.from_numpy_array(adj, create_using=nx.DiGraph)
 
@@ -114,7 +114,7 @@ fig = go.Figure(
 fig.show()
 
 # %%
-losses = mg.fit(1_000, track_losses=True)
+losses = mg.fit(5_000, track_losses=True)
 
 # %%
 losses
