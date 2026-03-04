@@ -1,3 +1,8 @@
+"""Defines ToyModel, the core experiment object combining a Distribution and AutoEncoderBase.
+
+Provides fit(), geometric analysis properties (W, feature_norms, interferences, etc.), and sampling utilities.
+"""
+
 from typing import Any, Callable
 
 import torch
@@ -33,14 +38,17 @@ class ToyModel:
         distribution: Distribution,
         ae: AutoEncoderBase,
         device: torch.device | str | None = None,
-        generator: torch.Generator | None = None,
-        importances=None,
+        importances: Tensor | list | None = None,
     ):
 
         self.distribution = distribution
         self.ae = ae
 
-        assert distribution.n_features == ae.n_features
+        if distribution.n_features != ae.n_features:
+            raise ValueError(
+                f"Distribution has {distribution.n_features} features "
+                f"but AutoEncoder has {ae.n_features}."
+            )
         self.n_features: int = ae.n_features
 
         # Resolve the ae/computation device.
@@ -87,7 +95,7 @@ class ToyModel:
         weight_decay: float = 0.05,
         track_losses: bool = True,
         optimizer: Optimizer | None = None,
-        hooks: list[Callable] = [],
+        hooks: list[Callable] | None = None,
         hook_freq: int = 1,
         verbose: bool = False,
     ) -> tuple[list[float], list]:
@@ -96,6 +104,8 @@ class ToyModel:
                 self.ae.parameters(), lr=learning_rate, weight_decay=weight_decay
             )
 
+        if hooks is None:
+            hooks = []
         hook_returns = [[] for _ in hooks]
 
         ae_device = self.ae.device
@@ -116,7 +126,7 @@ class ToyModel:
                 raw = raw.to(ae_device)
                 x = raw
             optimizer.zero_grad()
-            x_hat = self.ae.forward(x)[0]  # Only take x_hat
+            x_hat = self.ae(x)[0]  # Only take x_hat
             loss = self.ae.loss(raw, x_hat, self.importances)  # type: ignore[call-arg]
             loss.backward()
             optimizer.step()
@@ -148,7 +158,7 @@ class ToyModel:
         return f"ToyModel({self.distribution})"
 
     def __getattr__(self, name):
-        if name in ("sample", "n_features"):
+        if name == "sample":
             return getattr(self.distribution, name)
 
         if name in ("encode", "decode", "forward", "resample_weights", "loss"):
@@ -158,18 +168,18 @@ class ToyModel:
 
     @property
     @torch.no_grad()
-    def froebenius_norm_squared(self):
+    def frobenius_norm_squared(self):
         return torch.linalg.norm(self.W, ord="fro") ** 2
 
     @property
     @torch.no_grad()
     def hidden_dimensions_per_embedded_features(self) -> Any:
-        return self.ae.n_hidden / self.froebenius_norm_squared
+        return self.ae.n_hidden / self.frobenius_norm_squared
 
     @property
     @torch.no_grad()
     def embedded_features_per_hidden_dimensions(self) -> Any:
-        return self.froebenius_norm_squared / self.ae.n_hidden
+        return self.frobenius_norm_squared / self.ae.n_hidden
 
     @property
     @torch.no_grad()

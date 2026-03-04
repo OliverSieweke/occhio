@@ -1,5 +1,7 @@
-# ABOUTME: Comprehensive tests for ModelGrid: init, slicing, caching, fitting, validation.
-# ABOUTME: Covers __getitem__ bounds/views, sample dedup, training correctness, save/load, and edge cases.
+"""
+Comprehensive tests for ModelGrid: init, slicing, caching, fitting, validation.
+Covers __getitem__ bounds/views, sample dedup, training correctness, save/load, and edge cases.
+"""
 
 import os
 import pickle

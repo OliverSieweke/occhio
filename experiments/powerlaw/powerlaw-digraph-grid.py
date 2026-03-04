@@ -39,15 +39,20 @@ def create_model(params):
     )
 
     ae = TiedLinearRelu(N_FEATURES, N_HIDDEN, generator=gen, device=DEVICE)
-    return ToyModel(distribution=dist, ae=ae, generator=gen, device=DEVICE)
+    return ToyModel(
+        distribution=dist,
+        ae=ae,
+        importances=0.99 ** torch.arange(N_FEATURES),
+        device=DEVICE,
+    )
 
 
 # %%
 mg = ModelGrid(
     create_model,
     axes=[
-        Axis(label="p_active", values=torch.logspace(0, -2, steps=24)),
-        TrainingAxis(label="p_child", values=torch.linspace(0, 1, steps=10)),
+        Axis(label="p_active", values=torch.logspace(0, -3, steps=24)),
+        TrainingAxis(label="p_child", values=torch.linspace(0, 1, steps=11)),
     ],
 )
 
@@ -114,7 +119,7 @@ fig = go.Figure(
 fig.show()
 
 # %%
-losses = mg.fit(5_000, track_losses=True)
+losses = mg.fit(25_000, track_losses=True, sample_every=50)
 
 
 # %%
@@ -123,17 +128,17 @@ fig.update_layout(height=600)
 fig.show()
 
 # %%
-fig = ov.plot_representation(mg[:4])
+fig = ov.plot_representation(mg[:4, 0])
 fig.update_layout(height=600)
 fig.show()
 
-fig = ov.plot_representation(mg[-4:])
+fig = ov.plot_representation(mg[-4:, 0])
 fig.update_layout(height=600)
 fig.show()
 # %%
-ov.plot_feature_geometry(mg[:4])
+ov.plot_feature_geometry(mg[:4, 0])
 
 # %%
-ov.plot_feature_geometry_3d(mg[-1])
+ov.plot_feature_geometry_3d(mg[0])
 
 # %%
