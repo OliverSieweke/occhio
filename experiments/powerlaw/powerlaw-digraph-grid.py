@@ -42,7 +42,6 @@ def create_model(params):
     return ToyModel(
         distribution=dist,
         ae=ae,
-        generator=gen,
         importances=0.99 ** torch.arange(N_FEATURES),
         device=DEVICE,
     )
@@ -129,17 +128,17 @@ fig.update_layout(height=600)
 fig.show()
 
 # %%
-fig = ov.plot_representation(mg[:4])
+fig = ov.plot_representation(mg[:4, 0])
 fig.update_layout(height=600)
 fig.show()
 
-fig = ov.plot_representation(mg[-4:])
+fig = ov.plot_representation(mg[-4:, 0])
 fig.update_layout(height=600)
 fig.show()
 # %%
-ov.plot_feature_geometry(mg[:4])
+ov.plot_feature_geometry(mg[:4, 0])
 
 # %%
-ov.plot_feature_geometry_3d(mg[-1])
+ov.plot_feature_geometry_3d(mg[0])
 
 # %%

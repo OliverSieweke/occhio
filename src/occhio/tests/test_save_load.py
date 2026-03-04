@@ -1,5 +1,7 @@
-# ABOUTME: Tests for ModelGrid.save_models and ModelGrid.load_models.
-# ABOUTME: Covers round-trip, shape validation, type checks, device handling, warnings, and edge cases.
+"""Tests for ModelGrid.save_models and ModelGrid.load_models.
+
+Covers round-trip, shape validation, type checks, device handling, warnings, and edge cases.
+"""
 
 import os
 import pickle

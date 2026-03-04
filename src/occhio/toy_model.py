@@ -1,5 +1,8 @@
-# ABOUTME: Defines ToyModel, the core experiment object combining a Distribution and AutoEncoderBase.
-# ABOUTME: Provides fit(), geometric analysis properties (W, feature_norms, interferences, etc.), and sampling utilities.
+"""Defines ToyModel, the core experiment object combining a Distribution and AutoEncoderBase.
+
+Provides fit(), geometric analysis properties (W, feature_norms, interferences, etc.), and sampling utilities.
+"""
+
 from typing import Any, Callable
 
 import torch

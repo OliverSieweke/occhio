@@ -1,5 +1,8 @@
-# ABOUTME: Defines ModelGrid, a vectorized multi-dimensional grid of ToyModels.
-# ABOUTME: Uses torch.vmap + torch.compile for fast parallel training across grid points.
+"""Defines ModelGrid, a vectorized multi-dimensional grid of ToyModels.
+
+Uses torch.vmap + torch.compile for fast parallel training across grid points.
+"""
+
 from __future__ import annotations
 
 import pickle

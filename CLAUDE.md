@@ -63,5 +63,5 @@ uv run ruff format .
 - **`Distribution` contract**: `sample(batch_size)` returns `Tensor` of shape `(batch_size, n_features)`, or a tuple where the first element is the input tensor. Pass `generator=` for reproducible sampling; required when using `ModelGrid` with `broadcast_samples=True`.
 - **`ModelGrid` factory**: The `create_model` function must accept a `params: dict[str, Any]` keyword argument. All AEs in a grid must share the same architecture (shape-compatible state dicts).
 - **Linting**: `ruff` is configured with docstring code formatting (`ruff.toml`). Type checking uses `ty` (not mypy).
-- **`# ABOUTME:` comments**: Module-level files use two `# ABOUTME:` lines describing the file's purpose.
+- **Module docstrings**: Each module file should have a module-level docstring describing its purpose.
 - **Notebook hygiene**: `nbstripout` is in dev deps — notebooks should have outputs stripped before commit.
