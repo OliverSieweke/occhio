@@ -49,7 +49,7 @@ def _make_grid(
             Axis(label="density", values=torch.linspace(0.1, 1.0, n_density)),
             Axis(label="importance", values=torch.linspace(0.5, 2.0, n_importance)),
         ],
-        cache_samples=cache,
+        broadcast_samples=cache,
     )
 
 
@@ -69,7 +69,7 @@ def _make_1d_grid(n: int = 4, cache: bool = True, seed: int = 42) -> ModelGrid:
     return ModelGrid(
         create_model,
         axes=[Axis(label="density", values=torch.linspace(0.1, 1.0, n))],
-        cache_samples=cache,
+        broadcast_samples=cache,
     )
 
 

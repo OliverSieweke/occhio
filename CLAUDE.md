@@ -60,7 +60,7 @@ uv run ruff format .
 
 - **Device handling**: `ToyModel` resolves device from the `ae`, `distribution`, or explicit `device` argument. Distribution and AE can live on different devices (e.g. CPU distribution, MPS AE) — samples are moved automatically. Don't create tensors on hardcoded devices; let the model/distribution handle it.
 - **`AutoEncoderBase` contract**: Every subclass `__init__` must set `self.n_features` and `self.n_hidden`. This is enforced at construction via `__init_subclass__`. Custom loss functions can be passed at construction time.
-- **`Distribution` contract**: `sample(batch_size)` returns `Tensor` of shape `(batch_size, n_features)`, or a tuple where the first element is the input tensor. Pass `generator=` for reproducible sampling; required when using `ModelGrid` with `cache_samples=True`.
+- **`Distribution` contract**: `sample(batch_size)` returns `Tensor` of shape `(batch_size, n_features)`, or a tuple where the first element is the input tensor. Pass `generator=` for reproducible sampling; required when using `ModelGrid` with `broadcast_samples=True`.
 - **`ModelGrid` factory**: The `create_model` function must accept a `params: dict[str, Any]` keyword argument. All AEs in a grid must share the same architecture (shape-compatible state dicts).
 - **Linting**: `ruff` is configured with docstring code formatting (`ruff.toml`). Type checking uses `ty` (not mypy).
 - **`# ABOUTME:` comments**: Module-level files use two `# ABOUTME:` lines describing the file's purpose.

@@ -182,7 +182,7 @@ def _plot_phase_change_animated(
         return ModelGrid(
             create_model=sliced.create_model,
             axes=squeezed_axes,
-            cache_samples=sliced.cache_samples,
+            broadcast_samples=sliced.broadcast_samples,
             _models=squeezed_models,
         )
 

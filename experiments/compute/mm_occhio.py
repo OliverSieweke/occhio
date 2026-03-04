@@ -375,7 +375,7 @@ _models[1] = tm_mse
 mg = ModelGrid(
     create_model=lambda params: params,
     axes=[Axis(label="Loss", values=[0, 1])],
-    cache_samples=False,
+    broadcast_samples=False,
     _models=_models,
 )
 plot_embedding(mg).show()

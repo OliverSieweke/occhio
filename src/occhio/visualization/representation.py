@@ -29,7 +29,7 @@ def plot_representation(model_grid: ToyModel | ModelGrid):
         model_grid = ModelGrid(
             create_model=lambda: model_grid,
             axes=[],
-            cache_samples=False,
+            broadcast_samples=False,
             _models=np.array([model_grid]),
         )
 
