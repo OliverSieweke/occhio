@@ -40,7 +40,7 @@ dist = PowerLawDigraph(
 )
 
 ae = TiedLinearRelu(N_FEATURES, N_HIDDEN, generator=gen, device=DEVICE)
-tm = ToyModel(distribution=dist, ae=ae, generator=gen, device=DEVICE)
+tm = ToyModel(distribution=dist, ae=ae, device=DEVICE)
 
 # %%  ── graph structure ──────────────────────────────────────────────────────
 in_deg = dist.in_degrees().cpu().numpy()
@@ -113,7 +113,7 @@ fig.update_layout(
 )
 fig.show()
 
-# %%  ── train ───────────────────────────────────────────────────────────────
+# %%  ── train ─────────────────────────
 in_deg_t = torch.from_numpy(in_deg).float()
 
 # %%
@@ -136,11 +136,11 @@ losses, hook_returns = tm.fit(
     hook_freq=500,
 )
 
-# %%  ── loss curve ───────────────────────────────────────────────────────────
+# %%  ── loss curve ─────────────────────────────
 fig = px.line(y=losses, labels={"x": "epoch", "y": "loss"}, title="Training loss")
 fig.show()
 
-# %%  ── feature geometry ────────────────────────────────────────────────────
+# %%  ── feature geometry ───────────────────────
 with torch.no_grad():
     norms = tm.feature_norms.cpu().numpy()
     interferences = tm.total_feature_interferences.cpu().numpy()
