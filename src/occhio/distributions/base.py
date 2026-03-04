@@ -181,11 +181,7 @@ class DistributionStack(Distribution):
         p_meta: float | None = None,
         **kwargs,
     ):
-        if not distributions:
-            raise ValueError("distributions list cannot be empty")
-
-        if sampling_mode == "sparse" and p_meta is None:
-            raise ValueError("p_meta must be provided when sampling_mode='sparse'")
+        self._validate_stack()
 
         if "generator" in kwargs and sampling_mode == "independent":
             import warnings
@@ -245,3 +241,55 @@ class DistributionStack(Distribution):
     def __repr__(self):
         dist_reprs = ", ".join(repr(d) for d in self.distributions)
         return f"DistributionStack([{dist_reprs}])"
+
+
+@cached_property
+def _sampling_equivalence_hash(self) -> str:
+    equivalence_dict = vars(self).copy()
+    generator = equivalence_dict.pop("generator")
+    equivalence_dict["distribution_type"] = type(self).__name__
+
+    if generator:
+        state = generator.get_state()
+        state_hash = hash_tensor(state, mode=0)
+        equivalence_dict["generator"] = state_hash
+
+    equivalence_dict["distributions"] = [
+        dist._sampling_equivalence_hash for dist in self.distributions
+    ]
+
+    for k, v in equivalence_dict.items():
+        if isinstance(v, Tensor):
+            equivalence_dict[k] = v.tolist()
+
+    equivalence_dict = dict(sorted(equivalence_dict.items(), key=lambda x: x[0]))
+    equivalence_string = str(equivalence_dict)
+    return sha256(equivalence_string.encode("utf-8")).hexdigest()
+
+
+def _validate_stack(self, distributions, sampling_mode, p_meta) -> None:
+    if not distributions:
+        raise ValueError("distributions list cannot be empty")
+
+    if sampling_mode == "sparse" and p_meta is None:
+        raise ValueError("p_meta must be provided when sampling_mode='sparse'")
+
+    reference_device = distributions[0].device
+    for dist in distributions:
+        if dist.device != reference_device:
+            raise ValueError(
+                f"All distributions must have the same device"
+                f"reference device: {reference_device}"
+                f"received device: {dist.device} for {dist}"
+            )
+
+    if any(dist.generator is None for dist in distributions):
+        raise ValueError("All distributions must have a generator")
+    if any(dist.generator != reference_generator for dist in distributions):
+        raise ValueError("All distributions must have the same generator")
+    if any(dist.device != reference_device for dist in distributions):
+        raise ValueError(
+            f"All distributions must have the same device"
+            f"reference device: {reference_device}"
+            f"received device: {dist.device} for {dist}"
+        )
