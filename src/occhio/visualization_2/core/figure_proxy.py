@@ -35,9 +35,9 @@ class FigureProxy:
 
         for key in self._AXIS_REF_KEYS & kwargs.keys():
             if kwargs[key] in ("x", "y"):
-                trace_kwargs = self._fig._grid_ref[self.row - 1][self.col - 1][
+                trace_kwargs = self._fig._grid_ref[self.row - 1][self.col - 1][  # ty:ignore[not-subscriptable]
                     0
-                ].trace_kwargs  # ty:ignore[not-subscriptable]
+                ].trace_kwargs
                 remapped_kwargs[key] = trace_kwargs[f"{kwargs[key]}axis"]
             else:
                 raise ValueError(

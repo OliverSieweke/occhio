@@ -8,6 +8,7 @@ from __future__ import annotations
 import pickle
 from collections.abc import Sequence
 from copy import deepcopy
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from functools import cached_property
 from inspect import signature
@@ -87,6 +88,132 @@ class ModelGrid:
     """
 
     models: NDArray[np.object_]
+
+    @staticmethod
+    def from_iterable(models: Iterable[ToyModel]) -> ModelGrid:
+        """Create a ModelGrid from a (possibly nested) iterable of ToyModels.
+
+        Args:
+            models: An iterable of ToyModels, or nested iterables forming a
+                multi-dimensional structure (e.g., list of lists of ToyModels).
+
+        Returns:
+            A ModelGrid with axes named "Axis 1", "Axis 2", etc., with integer indices.
+
+        Raises:
+            ValueError: If the iterable is empty or has inconsistent dimensions.
+            TypeError: If leaf elements are not ToyModels.
+
+        Example::
+            # 1D grid from a list
+            grid = ModelGrid.from_iterable([model1, model2, model3])
+
+            # 2D grid from nested lists
+            grid = ModelGrid.from_iterable(
+                [
+                    [model_a1, model_a2],
+                    [model_b1, model_b2],
+                ]
+            )
+        """
+
+        def _to_nested_list(obj: Any) -> list | ToyModel:
+            """Recursively convert iterables to nested lists, stopping at ToyModels."""
+            if isinstance(obj, ToyModel):
+                return obj
+            if isinstance(obj, Iterable) and not isinstance(obj, (str, bytes)):
+                return [_to_nested_list(item) for item in obj]
+            raise TypeError(f"Expected ToyModel or iterable, got {type(obj).__name__}")
+
+        def _get_shape_and_validate(nested: list, depth: int = 0) -> tuple[int, ...]:
+            """Recursively determine shape and validate consistency."""
+            if not nested:
+                raise ValueError(
+                    f"Empty iterable at depth {depth}. All dimensions must be non-empty."
+                )
+
+            # Check if we're at leaf level (ToyModels)
+            if isinstance(nested[0], ToyModel):
+                for i, item in enumerate(nested):
+                    if not isinstance(item, ToyModel):
+                        raise TypeError(
+                            f"Inconsistent structure: expected ToyModel at index {i}, "
+                            f"got {type(item).__name__}"
+                        )
+                return (len(nested),)
+
+            # We have nested lists - recurse
+            if not isinstance(nested[0], list):
+                raise TypeError(
+                    f"Expected list or ToyModel at depth {depth}, "
+                    f"got {type(nested[0]).__name__}"
+                )
+
+            child_shapes = []
+            for i, child in enumerate(nested):
+                if not isinstance(child, list):
+                    raise TypeError(
+                        f"Inconsistent structure at depth {depth}, index {i}: "
+                        f"expected list, got {type(child).__name__}"
+                    )
+                child_shapes.append(_get_shape_and_validate(child, depth + 1))
+
+            # Validate all children have the same shape
+            first_shape = child_shapes[0]
+            for i, shape in enumerate(child_shapes[1:], start=1):
+                if shape != first_shape:
+                    raise ValueError(
+                        f"Inconsistent dimensions at depth {depth}: "
+                        f"index 0 has shape {first_shape}, "
+                        f"index {i} has shape {shape}"
+                    )
+
+            return (len(nested),) + first_shape
+
+        def _flatten_to_array(
+            nested: list, shape: tuple[int, ...]
+        ) -> NDArray[np.object_]:
+            """Flatten nested list structure into a numpy array with given shape."""
+            models_array: NDArray[np.object_] = np.empty(shape, dtype=object)
+
+            def _fill(current: list, indices: tuple[int, ...]) -> None:
+                if len(indices) == len(shape) - 1:
+                    for i, item in enumerate(current):
+                        models_array[indices + (i,)] = item
+                else:
+                    for i, child in enumerate(current):
+                        _fill(child, indices + (i,))
+
+            _fill(nested, ())
+            return models_array
+
+        # Convert to nested lists
+        nested_list = _to_nested_list(models)
+
+        if isinstance(nested_list, ToyModel):
+            raise ValueError(
+                "Cannot convert a single ToyModel to ModelGrid. "
+                "Wrap it in a list: ModelGrid.from_iterable([model])"
+            )
+
+        # Get shape and validate
+        shape = _get_shape_and_validate(nested_list)
+
+        # Create axes with integer indices
+        axes = [
+            Axis(label=f"Axis {i + 1}", values=list(range(dim_size)))
+            for i, dim_size in enumerate(shape)
+        ]
+
+        # Flatten to numpy array
+        models_array = _flatten_to_array(nested_list, shape)
+
+        return ModelGrid(
+            create_model=lambda params: None,  # type: ignore[arg-type, return-value]
+            axes=axes,
+            cache_samples=False,
+            _models=models_array,
+        )
 
     def __init__(
         self,

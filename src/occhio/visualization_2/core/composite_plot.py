@@ -227,8 +227,6 @@ class CompositePlot:
             add_grid_headers(
                 fig,
                 models,
-                n_model_rows,
-                n_model_cols,
                 self._inner_rows,
                 self._inner_cols,
             )
