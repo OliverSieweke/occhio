@@ -406,7 +406,7 @@ class ModelGrid:
         compile: bool = False,
         track_losses: bool = False,
         snapshot_interval: int | None = None,
-        sample_every: int = 10,
+        sample_every: int = 25,
     ) -> ModelGrid | list[float] | None:
         # Validate sample_every
         if sample_every < 1:
