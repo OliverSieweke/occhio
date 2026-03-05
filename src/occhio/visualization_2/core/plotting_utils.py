@@ -1,13 +1,14 @@
 import itertools
 
 import plotly.graph_objects as go
+import torch
 
 from occhio import ModelGrid
 
 
-def _format_axis_value(val) -> str:
+def _format_axis_value(val: int | float | torch.Tensor) -> str:
     """Format axis values for display in subplot headers."""
-    if hasattr(val, "item"):
+    if isinstance(val, torch.Tensor):
         val = val.item()
     if isinstance(val, (int, float)):
         return f"{val:.4g}"
@@ -21,6 +22,18 @@ def model_domain_center(
     inner_rows: int,
     inner_cols: int,
 ) -> tuple[float, float]:
+    """Compute the paper-coordinate center of a model's subplot block.
+
+    Args:
+        fig: Plotly figure with subplots already created.
+        model_row: 0-indexed model row in the outer grid.
+        model_col: 0-indexed model column in the outer grid.
+        inner_rows: Number of subplot rows per model.
+        inner_cols: Number of subplot columns per model.
+
+    Returns:
+        (x_center, y_center) in paper coordinates (0–1).
+    """
     left, right = 1.0, 0.0
     bottom, top = 1.0, 0.0
 
@@ -59,34 +72,50 @@ def add_grid_headers(
     grid: ModelGrid,
     inner_rows: int = 1,
     inner_cols: int = 1,
+    facet_axes: list[int] | None = None,
 ) -> None:
-    n_axes = len(grid.shape)
+    """Add column and row header annotations to a faceted figure.
 
-    # Column headers
-    col_axis = grid.axes[0]
-    for model_col in range(grid.shape[0]):
-        fig.add_annotation(
-            text=f"{col_axis.label}: {_format_axis_value(col_axis.values[model_col])}",
-            x=model_domain_center(
-                fig,
-                model_row=0,
-                model_col=model_col,
-                inner_rows=inner_rows,
-                inner_cols=inner_cols,
-            )[0],
-            y=1.02,
-            xref="paper",
-            yref="paper",
-            showarrow=False,
-            font=dict(size=11),
-            xanchor="center",
-            yanchor="bottom",
-        )
+    Args:
+        fig: Plotly figure to annotate.
+        grid: The ModelGrid whose axis labels/values are used.
+        inner_rows: Subplot rows per model (for composite layouts).
+        inner_cols: Subplot columns per model (for composite layouts).
+        facet_axes: Which grid axes map to columns (index 0) and rows (index 1).
+            Defaults to the first two axes.
+    """
+    # Default to legacy behavior if facet_indices not provided
+    if facet_axes is None:
+        facet_axes = list(range(min(len(grid.shape), 2)))
 
-    # Row headers
-    if n_axes >= 2:
-        row_axis = grid.axes[1]
-        for model_row in range(grid.shape[1]):
+    # Column headers (first facet axis)
+    if len(facet_axes) >= 1:
+        col_axis_idx = facet_axes[0]
+        col_axis = grid.axes[col_axis_idx]
+        for model_col in range(grid.shape[col_axis_idx]):
+            fig.add_annotation(
+                text=f"{col_axis.label}: {_format_axis_value(col_axis.values[model_col])}",
+                x=model_domain_center(
+                    fig,
+                    model_row=0,
+                    model_col=model_col,
+                    inner_rows=inner_rows,
+                    inner_cols=inner_cols,
+                )[0],
+                y=1.02,
+                xref="paper",
+                yref="paper",
+                showarrow=False,
+                font=dict(size=11),
+                xanchor="center",
+                yanchor="bottom",
+            )
+
+    # Row headers (second facet axis)
+    if len(facet_axes) >= 2:
+        row_axis_idx = facet_axes[1]
+        row_axis = grid.axes[row_axis_idx]
+        for model_row in range(grid.shape[row_axis_idx]):
             fig.add_annotation(
                 text=f"{row_axis.label}: {_format_axis_value(row_axis.values[model_row])}",
                 x=-0.02,

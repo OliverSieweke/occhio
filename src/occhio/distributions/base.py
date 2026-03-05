@@ -77,8 +77,8 @@ class Distribution(ABC):
         """Random generator respecting the self.generator"""
         if p is None:
             return torch.randint(
-                low=low,
-                high=high,
+                low=int(low),
+                high=int(high),
                 size=shape,
                 device=self.device,
                 generator=self.generator,

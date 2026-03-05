@@ -9,7 +9,7 @@ from plotly.subplots import make_subplots
 from occhio.model_grid import ModelGrid
 from occhio.toy_model import ToyModel
 from occhio.visualization_2.core.base_plot import PlotRenderer
-from occhio.visualization_2.core.figure_proxy import FigureProxy
+from occhio.visualization_2.core.figure_wrappers import FigureProxy
 from occhio.visualization_2.core.plotting_utils import add_grid_headers
 
 
@@ -36,6 +36,13 @@ PlotlySpecsGrid: TypeAlias = list[list[PlotlySubplotSpec]]
 # [03.03.26 | OliverSieweke] TODO:span never 0 or lower
 @dataclass
 class Span:
+    """Wrap a PlotRenderer to span multiple rows/columns in a composite layout.
+
+    Example::
+
+        Span(MyPlot(), colspan=2)  # plot spans two columns
+    """
+
     plot: PlotRenderer
     colspan: int = 1
     rowspan: int = 1
@@ -97,6 +104,13 @@ class CompositePlot:
         column_widths: list[float] | None = None,
         row_heights: list[float] | None = None,
     ):
+        """Create a composite plot from a 2D layout of renderers.
+
+        Args:
+            layout: 2D list of ``PlotRenderer``, ``Span``, or ``None`` cells.
+            column_widths: Relative column widths (length must match column count).
+            row_heights: Relative row heights (length must match row count).
+        """
         if not layout or not any(cell is not None for row in layout for cell in row):
             raise ValueError("Layout must contain at least one plot.")
 
@@ -149,11 +163,10 @@ class CompositePlot:
         n_models_cols: int,
         n_models_rows: int,
     ) -> PlotlySpecsGrid:
-        """Tile the inner specs grid so that `make_subplots` receives one
-        physical cell per (model × inner) position.
+        """Tile the inner specs grid across all model positions.
 
-        Inner specs of shape (R, C) become (R * n_models_rows, C * n_models_cols).
-        e.g. a 2×3 inner grid tiled over 4×2 models → 8×6 physical grid.
+        Inner specs of shape ``(R, C)`` become
+        ``(R * n_models_rows, C * n_models_cols)``.
         """
 
         return [
@@ -163,6 +176,15 @@ class CompositePlot:
         ]
 
     def __call__(self, models: ToyModel | ModelGrid, **kwargs) -> go.Figure:
+        """Render the composite layout for a single model or a 1D/2D grid.
+
+        Args:
+            models: A single ``ToyModel`` or a 1D/2D ``ModelGrid``.
+            **kwargs: Forwarded to each subplot's ``render()``.
+
+        Returns:
+            A Plotly ``Figure`` with all subplots populated.
+        """
         if isinstance(models, ToyModel):
             fig = make_subplots(
                 rows=self._inner_rows,

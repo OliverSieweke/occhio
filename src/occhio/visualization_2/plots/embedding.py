@@ -3,7 +3,7 @@ import plotly.graph_objects as go
 
 from occhio.toy_model import ToyModel
 from occhio.visualization_2.core.base_plot import BasePlot
-from occhio.visualization_2.core.figure_proxy import FigureProxy
+from occhio.visualization_2.core.figure_wrappers import FigureProxy
 
 
 class EmbeddingPlot(BasePlot):
