@@ -316,6 +316,29 @@ def fit_simple_excess_model(evals: list[dict], target_loss: float):
     return coeffs, n_boundary
 
 
+def fit_linear_m_model(evals: list[dict], target_loss: float):
+    """Fit log(loss) = a·m + b·log(N) + c on compression-regime points.
+
+    m enters linearly (not log-transformed).
+    Returns the coefficient array [a, b, c] and a callable n_boundary(m)
+    that gives the predicted max N at target_loss for a given m.
+    """
+    pts = [e for e in evals if e["n"] > e["m"] and e["loss"] > 0]
+    n = np.array([e["n"] for e in pts], dtype=float)
+    m = np.array([e["m"] for e in pts], dtype=float)
+    loss = np.array([e["loss"] for e in pts], dtype=float)
+    X = np.column_stack([m, np.log(n), np.ones(len(pts))])
+    coeffs, *_ = np.linalg.lstsq(X, np.log(loss), rcond=None)
+    a, b, c = coeffs
+    r2 = _r2(np.log(loss), X @ coeffs)
+    print(
+        f"linear-m model: log(loss) = {a:.3f}·m + {b:.3f}·log(N) + {c:.3f}   R²={r2:.4f}"
+    )
+    print(f"  => N_boundary(m) = exp((log(L) - {a:.3f}·m - {c:.3f}) / {b:.3f})")
+    log_target = np.log(target_loss)
+    return coeffs, lambda m_arr: np.exp((log_target - a * np.asarray(m_arr) - c) / b)
+
+
 def fit_excess_model(evals: list[dict], target_loss: float):
     """Fit log(loss) = b1·log(m) + b2·log(N-m) + b3·log(N) + b0 on compression-regime points.
 
@@ -368,6 +391,8 @@ simple_excess_coeffs, n_bnd_simple_excess = fit_simple_excess_model(
     all_evals, target_loss
 )
 print()
+linear_m_coeffs, n_bnd_linear_m = fit_linear_m_model(all_evals, target_loss)
+print()
 
 # Overlay all three fits on Plot 2
 m_range = np.geomspace(min(M_VALUES), max(M_VALUES), 200)
@@ -407,6 +432,15 @@ fig2.add_trace(
         mode="lines",
         line=dict(dash="longdash", color="purple"),
         name="simple excess: no log(N) term",
+    )
+)
+fig2.add_trace(
+    go.Scatter(
+        x=m_range,
+        y=n_bnd_linear_m(m_range),
+        mode="lines",
+        line=dict(dash="dash", color="green"),
+        name="linear-m model: log(loss) = a·m + b·log(N) + c",
     )
 )
 fig2.show()
