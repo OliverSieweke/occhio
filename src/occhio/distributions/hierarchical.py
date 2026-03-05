@@ -112,7 +112,13 @@ class HierarchicalSparse(Distribution):
 
     def _build_auxiliary_structures(self) -> None:
         """Build tensors and indices for efficient sampling."""
-        self.max_depth = max(node.depth for node in self.nodes)
+        max_depth_val = max(node.depth for node in self.nodes)
+        # Ensure max_depth is always a Python int, not a tensor
+        self.max_depth = (
+            int(max_depth_val.item())
+            if isinstance(max_depth_val, Tensor)
+            else max_depth_val
+        )
 
         # Group nodes by depth
         self.depth_indices = [[] for _ in range(self.max_depth + 1)]
@@ -126,14 +132,34 @@ class HierarchicalSparse(Distribution):
 
     def _get_p_fire(self, depth: int) -> float:
         """Get firing probability at given depth."""
+        # Convert tensor to int if needed (happens during vmap)
+        if isinstance(depth, Tensor):
+            depth = int(depth.item())
+
         if depth == 0:
             return 1.0  # Root always fires
 
         if self.p_by_depth is not None:
-            if depth < len(self.p_by_depth):
-                return self.p_by_depth[depth]
+            # Handle p_by_depth as tensor or list
+            if isinstance(self.p_by_depth, Tensor):
+                p_by_depth_len = self.p_by_depth.numel()
+                if depth < p_by_depth_len:
+                    return float(
+                        self.p_by_depth[depth].item()
+                        if self.p_by_depth.dim() > 0
+                        else self.p_by_depth.item()
+                    )
+                else:
+                    return float(
+                        self.p_by_depth[-1].item()
+                        if self.p_by_depth.dim() > 0
+                        else self.p_by_depth.item()
+                    )
             else:
-                return self.p_by_depth[-1]
+                if depth < len(self.p_by_depth):
+                    return self.p_by_depth[depth]
+                else:
+                    return self.p_by_depth[-1]
 
         return self.p_base * (self.depth_decay ** (depth - 1))
 
