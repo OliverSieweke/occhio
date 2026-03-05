@@ -52,6 +52,10 @@ class BasePlot(PlotRenderer, ABC):
 
 
         MyPlot()(grid, facet_axes=("Sparsity",), slider_axes=("Correlation",))
+
+    Note:
+        If you are using ToyModel attributes which might live on a different device
+        then remember to use `.detach().cpu().numpy()`!
     """
 
     @staticmethod
