@@ -12,10 +12,21 @@ We want to find the smallest N which doesn't go across the loss threshold.
 """
 
 # %%
+import importlib, reg_utils
+
+importlib.reload(reg_utils)
+
+
+# %%
 import numpy as np
-import scipy.optimize
 import torch
 import plotly.graph_objects as go
+from reg_utils import (
+    fit_boundary_model,
+    fit_excess_model,
+    fit_simple_excess_model,
+    fit_power_excess_model,
+)
 from occhio.distributions import SparseUniform
 from occhio.autoencoder import TiedLinearRelu
 from occhio.toy_model import ToyModel
@@ -217,172 +228,7 @@ fig2.update_layout(
 )
 fig2.show()
 
-# %% --- Regression helpers ---
-"""
-Three models (compression regime N > m, loss > 0 unless noted):
-
-  loss_model:     log(loss) = α·log(N) + γ·log(m) + β
-                  => N_boundary(m) = (L/exp(β))^(1/α) · m^(-γ/α)
-
-  boundary_model: log(N_best) = δ·log(m) + ε   (boundary points only)
-                  => N_best = exp(ε) · m^δ
-
-  excess_model:   log(loss) = b1·log(m) + b2·log(N-m) + b3·log(N) + b0
-                  => N_boundary(m) solved numerically via brentq
-
-  simple_excess_model: log(loss) = b1·log(m) + b2·log(N-m) + b0
-                  => N_boundary(m) solved numerically via brentq  [no log(N) term]
-"""
-
-
-def _r2(y: np.ndarray, y_pred: np.ndarray) -> float:
-    ss_res = np.sum((y - y_pred) ** 2)
-    ss_tot = np.sum((y - y.mean()) ** 2)
-    return 1 - ss_res / ss_tot
-
-
-def fit_loss_model(evals: list[dict], target_loss: float):
-    """Fit log(loss) = α·log(N) + γ·log(m) + β on compression-regime points.
-
-    Returns the coefficient array [α, γ, β] and a callable n_boundary(m)
-    that gives the predicted max N at target_loss for a given m.
-    """
-    pts = [e for e in evals if e["n"] > e["m"] and e["loss"] > 0]
-    n = np.array([e["n"] for e in pts], dtype=float)
-    m = np.array([e["m"] for e in pts], dtype=float)
-    loss = np.array([e["loss"] for e in pts], dtype=float)
-    X = np.column_stack([np.log(n), np.log(m), np.ones(len(pts))])
-    coeffs, *_ = np.linalg.lstsq(X, np.log(loss), rcond=None)
-    alpha, gamma, beta = coeffs
-    r2 = _r2(np.log(loss), X @ coeffs)
-    print(
-        f"loss model:     log(loss) = {alpha:.3f}·log(N) + {gamma:.3f}·log(m) + {beta:.3f}   R²={r2:.4f}"
-    )
-    print(f"  => loss = {np.exp(beta):.4f} · N^{alpha:.3f} · m^{gamma:.3f}")
-    n_bnd_exp = -gamma / alpha
-    n_bnd_coef = (target_loss / np.exp(beta)) ** (1 / alpha)
-    print(f"  => N_boundary(m) = {n_bnd_coef:.3f} · m^{n_bnd_exp:.3f}")
-    return coeffs, lambda m_arr: n_bnd_coef * np.asarray(m_arr) ** n_bnd_exp
-
-
-def fit_boundary_model(results: dict[int, int | None]):
-    """Fit log(N_best) = δ·log(m) + ε on boundary points only.
-
-    Returns the coefficient array [δ, ε] and a callable n_boundary(m).
-    """
-    m = np.array(list(results.keys()), dtype=float)
-    n = np.array(list(results.values()), dtype=float)
-    X = np.column_stack([np.log(m), np.ones(len(m))])
-    coeffs, *_ = np.linalg.lstsq(X, np.log(n), rcond=None)
-    delta, eps = coeffs
-    r2 = _r2(np.log(n), X @ coeffs)
-    print(f"boundary model: log(N) = {delta:.3f}·log(m) + {eps:.3f}")
-    print(f"  => N_best = {np.exp(eps):.3f} · m^{delta:.3f}   R²={r2:.4f}")
-    return coeffs, lambda m_arr: np.exp(eps) * np.asarray(m_arr) ** delta
-
-
-def fit_simple_excess_model(evals: list[dict], target_loss: float):
-    """Fit log(loss) = b1·log(m) + b2·log(N-m) + b0 on compression-regime points.
-
-    Like excess_model but without the log(N) term.
-    Returns the coefficient array [b1, b2, b0] and a callable n_boundary(m)
-    that gives the predicted max N at target_loss (solved numerically).
-    """
-    pts = [e for e in evals if e["n"] > e["m"] and e["loss"] > 0]
-    n = np.array([e["n"] for e in pts], dtype=float)
-    m = np.array([e["m"] for e in pts], dtype=float)
-    loss = np.array([e["loss"] for e in pts], dtype=float)
-    X = np.column_stack([np.log(m), np.log(n - m), np.ones(len(pts))])
-    coeffs, *_ = np.linalg.lstsq(X, np.log(loss), rcond=None)
-    b1, b2, b0 = coeffs
-    r2 = _r2(np.log(loss), X @ coeffs)
-    print(
-        f"simple excess:  log(loss) = {b1:.3f}·log(m) + {b2:.3f}·log(N-m) + {b0:.3f}   R²={r2:.4f}"
-    )
-    print(f"  => loss = {np.exp(b0):.4f} · m^{b1:.3f} · (N-m)^{b2:.3f}")
-
-    def n_boundary(m_arr: np.ndarray) -> np.ndarray:
-        m_arr = np.asarray(m_arr, dtype=float)
-        result = np.empty_like(m_arr)
-        log_target = np.log(target_loss)
-        for i, mi in enumerate(m_arr.flat):
-
-            def residual(n_val):
-                return b1 * np.log(mi) + b2 * np.log(n_val - mi) + b0 - log_target
-
-            result.flat[i] = scipy.optimize.brentq(residual, mi + 1e-6, mi * 1e4)
-        return result
-
-    return coeffs, n_boundary
-
-
-def fit_linear_m_model(evals: list[dict], target_loss: float):
-    """Fit log(loss) = a·m + b·log(N) + c on compression-regime points.
-
-    m enters linearly (not log-transformed).
-    Returns the coefficient array [a, b, c] and a callable n_boundary(m)
-    that gives the predicted max N at target_loss for a given m.
-    """
-    pts = [e for e in evals if e["n"] > e["m"] and e["loss"] > 0]
-    n = np.array([e["n"] for e in pts], dtype=float)
-    m = np.array([e["m"] for e in pts], dtype=float)
-    loss = np.array([e["loss"] for e in pts], dtype=float)
-    X = np.column_stack([m, np.log(n), np.ones(len(pts))])
-    coeffs, *_ = np.linalg.lstsq(X, np.log(loss), rcond=None)
-    a, b, c = coeffs
-    r2 = _r2(np.log(loss), X @ coeffs)
-    print(
-        f"linear-m model: log(loss) = {a:.3f}·m + {b:.3f}·log(N) + {c:.3f}   R²={r2:.4f}"
-    )
-    print(f"  => N_boundary(m) = exp((log(L) - {a:.3f}·m - {c:.3f}) / {b:.3f})")
-    log_target = np.log(target_loss)
-    return coeffs, lambda m_arr: np.exp((log_target - a * np.asarray(m_arr) - c) / b)
-
-
-def fit_excess_model(evals: list[dict], target_loss: float):
-    """Fit log(loss) = b1·log(m) + b2·log(N-m) + b3·log(N) + b0 on compression-regime points.
-
-    N-m is the number of "excess" features beyond perfect reconstruction capacity.
-    Returns the coefficient array [b1, b2, b3, b0] and a callable n_boundary(m)
-    that gives the predicted max N at target_loss for a given m (solved numerically).
-    """
-    pts = [e for e in evals if e["n"] > e["m"] and e["loss"] > 0]
-    n = np.array([e["n"] for e in pts], dtype=float)
-    m = np.array([e["m"] for e in pts], dtype=float)
-    loss = np.array([e["loss"] for e in pts], dtype=float)
-    X = np.column_stack([np.log(m), np.log(n - m), np.log(n), np.ones(len(pts))])
-    coeffs, *_ = np.linalg.lstsq(X, np.log(loss), rcond=None)
-    b1, b2, b3, b0 = coeffs
-    r2 = _r2(np.log(loss), X @ coeffs)
-    print(
-        f"excess model:   log(loss) = {b1:.3f}·log(m) + {b2:.3f}·log(N-m) + {b3:.3f}·log(N) + {b0:.3f}   R²={r2:.4f}"
-    )
-    print(f"  => loss = {np.exp(b0):.4f} · m^{b1:.3f} · (N-m)^{b2:.3f} · N^{b3:.3f}")
-
-    def n_boundary(m_arr: np.ndarray) -> np.ndarray:
-        m_arr = np.asarray(m_arr, dtype=float)
-        result = np.empty_like(m_arr)
-        log_target = np.log(target_loss)
-        for i, mi in enumerate(m_arr.flat):
-
-            def residual(n_val):
-                return (
-                    b1 * np.log(mi)
-                    + b2 * np.log(n_val - mi)
-                    + b3 * np.log(n_val)
-                    + b0
-                    - log_target
-                )
-
-            result.flat[i] = scipy.optimize.brentq(residual, mi + 1e-6, mi * 1e4)
-        return result
-
-    return coeffs, n_boundary
-
-
 # %%
-loss_coeffs, n_bnd_loss = fit_loss_model(all_evals, target_loss)
-print()
 bnd_coeffs, n_bnd_boundary = fit_boundary_model(results)
 print()
 excess_coeffs, n_bnd_excess = fit_excess_model(all_evals, target_loss)
@@ -391,29 +237,25 @@ simple_excess_coeffs, n_bnd_simple_excess = fit_simple_excess_model(
     all_evals, target_loss
 )
 print()
-linear_m_coeffs, n_bnd_linear_m = fit_linear_m_model(all_evals, target_loss)
+power_excess_fitted, n_bnd_power_excess = fit_power_excess_model(all_evals, target_loss)
+_bnd_m = np.array(list(results.keys()), dtype=float)
+_bnd_n = np.array(list(results.values()), dtype=float)
+_bnd_n_pred = n_bnd_power_excess(_bnd_m)
+_ss_res = np.sum((_bnd_n - _bnd_n_pred) ** 2)
+_ss_tot = np.sum((_bnd_n - _bnd_n.mean()) ** 2)
+print(f"  boundary R² (predicted vs actual best-N): {1 - _ss_res / _ss_tot:.4f}")
 print()
 
-# Overlay all three fits on Plot 2
+# Overlay all fits on Plot 2
 m_range = np.geomspace(min(M_VALUES), max(M_VALUES), 200)
-alpha, gamma, _ = loss_coeffs
 delta, _ = bnd_coeffs
-fig2.add_trace(
-    go.Scatter(
-        x=m_range,
-        y=n_bnd_loss(m_range),
-        mode="lines",
-        line=dict(dash="dash", color="black"),
-        name=f"loss model: N ∝ m^{-gamma / alpha:.2f}",
-    )
-)
 fig2.add_trace(
     go.Scatter(
         x=m_range,
         y=n_bnd_boundary(m_range),
         mode="lines",
         line=dict(dash="dot", color="gray"),
-        name=f"boundary model: N ∝ m^{delta:.2f}",
+        name=f"boundary model",
     )
 )
 fig2.add_trace(
@@ -422,7 +264,7 @@ fig2.add_trace(
         y=n_bnd_excess(m_range),
         mode="lines",
         line=dict(dash="dashdot", color="blue"),
-        name="excess model: N = m + f(m)",
+        name="excess model",
     )
 )
 fig2.add_trace(
@@ -431,16 +273,16 @@ fig2.add_trace(
         y=n_bnd_simple_excess(m_range),
         mode="lines",
         line=dict(dash="longdash", color="purple"),
-        name="simple excess: no log(N) term",
+        name="simple excess",
     )
 )
 fig2.add_trace(
     go.Scatter(
         x=m_range,
-        y=n_bnd_linear_m(m_range),
+        y=n_bnd_power_excess(m_range),
         mode="lines",
-        line=dict(dash="dash", color="green"),
-        name="linear-m model: log(loss) = a·m + b·log(N) + c",
+        line=dict(dash="dashdot", color="teal"),
+        name=f"power-excess model",
     )
 )
 fig2.show()
