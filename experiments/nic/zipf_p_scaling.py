@@ -249,39 +249,39 @@ print()
 # Overlay all fits on Plot 2
 m_range = np.geomspace(min(M_VALUES), max(M_VALUES), 200)
 delta, _ = bnd_coeffs
-fig2.add_trace(
-    go.Scatter(
-        x=m_range,
-        y=n_bnd_boundary(m_range),
-        mode="lines",
-        line=dict(dash="dot", color="gray"),
-        name=f"boundary model",
-    )
-)
-fig2.add_trace(
-    go.Scatter(
-        x=m_range,
-        y=n_bnd_excess(m_range),
-        mode="lines",
-        line=dict(dash="dashdot", color="blue"),
-        name="excess model",
-    )
-)
-fig2.add_trace(
-    go.Scatter(
-        x=m_range,
-        y=n_bnd_simple_excess(m_range),
-        mode="lines",
-        line=dict(dash="longdash", color="purple"),
-        name="simple excess",
-    )
-)
+# fig2.add_trace(
+#     go.Scatter(
+#         x=m_range,
+#         y=n_bnd_boundary(m_range),
+#         mode="lines",
+#         line=dict(dash="dot", color="gray"),
+#         name=f"boundary model",
+#     )
+# )
+# fig2.add_trace(
+#     go.Scatter(
+#         x=m_range,
+#         y=n_bnd_excess(m_range),
+#         mode="lines",
+#         line=dict(dash="dashdot", color="blue"),
+#         name="excess model",
+#     )
+# )
+# fig2.add_trace(
+#     go.Scatter(
+#         x=m_range,
+#         y=n_bnd_simple_excess(m_range),
+#         mode="lines",
+#         line=dict(dash="longdash", color="purple"),
+#         name="simple excess",
+#     )
+# )
 fig2.add_trace(
     go.Scatter(
         x=m_range,
         y=n_bnd_power_excess(m_range),
         mode="lines",
-        line=dict(dash="dashdot", color="teal"),
+        line=dict(dash="dash", color="teal"),
         name=f"power-excess model",
     )
 )
