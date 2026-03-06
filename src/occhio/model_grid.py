@@ -297,10 +297,12 @@ class ModelGrid:
         flattened_models: NDArray[np.object_] = self.models.ravel()
 
         for i, model in enumerate(flattened_models, start=1):
-            if not model.distribution.generator:
-                raise ValueError(
-                    f"All distributions should have a fixed generator. "
-                    f"Distribution at index {i} does not have a fixed generator."
+            if self.broadcast_samples and not (model.distribution.generator):
+                warn(
+                    f"Sample broadcasting requires every ToyModel.distribution to define a 'generator'. "
+                    f"Distribution at position {i} is missing a 'generator' and will not participate in sample broadcasting. "
+                    f"This may lead to unnecessary re-sampling or loss of determinism for this model.",
+                    stacklevel=2,
                 )
 
     def _build_sample_broadcast(self) -> tuple[list[Distribution], Tensor]:
