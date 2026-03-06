@@ -122,19 +122,19 @@ class TestInitialization:
 
 
 class TestGetitemDimensionPreservation:
-    def test_int_index_preserves_ndim(self):
+    def test_int_index_collapses_axis(self):
         grid = _make_grid(n_density=6, n_importance=5)
         sub = grid[2]
         assert isinstance(sub, ModelGrid)
-        assert len(sub.axes) == len(grid.axes)
-        assert sub.shape == (1, 5)
+        assert len(sub.axes) == 1
+        assert sub.shape == (5,)
 
-    def test_int_partial_preserves_ndim(self):
+    def test_int_partial_collapses_one_axis(self):
         grid = _make_grid(n_density=6, n_importance=5)
         sub = grid[2]
         assert isinstance(sub, ModelGrid)
-        assert len(sub.axes) == len(grid.axes)
-        assert sub.shape == (1, 5)
+        assert sub.axes[0].label == "importance"
+        assert sub.shape == (5,)
 
     def test_1d_int_index_returns_toymodel(self):
         """1D grid + single int = all axes specified → returns ToyModel."""
@@ -143,18 +143,23 @@ class TestGetitemDimensionPreservation:
         assert isinstance(result, ToyModel)
         assert result is grid.models[4]
 
-    def test_subgrid_always_has_same_axes_count(self):
+    def test_subgrid_axes_count(self):
         grid = _make_grid(n_density=6, n_importance=5)
-        for key in [
-            (0,),
-            (5,),
-            (slice(0, 3),),
-            (slice(1, 4), 2),
-            (0, slice(None)),
-        ]:
+        # int collapses → 1 axis; slice preserves → 2 axes
+        cases = {
+            (0,): 1,
+            (5,): 1,
+            (slice(0, 3),): 2,
+            (slice(1, 4), 2): 1,
+            (0, slice(None)): 1,
+            (slice(None), slice(None)): 2,
+        }
+        for key, expected_axes in cases.items():
             sub = grid[key]
             assert isinstance(sub, ModelGrid), f"Failed for key={key}"
-            assert len(sub.axes) == len(grid.axes), f"Failed for key={key}"
+            assert len(sub.axes) == expected_axes, (
+                f"Failed for key={key}: expected {expected_axes} axes, got {len(sub.axes)}"
+            )
 
 
 # ── __getitem__: Single Model Indexing ────────────────────────────────────────
@@ -218,14 +223,15 @@ class TestGetitemSlicing:
     def test_mixed_slice_and_int(self):
         grid = _make_grid(n_density=6, n_importance=5)
         sub = grid[1:4, 2]
-        assert sub.shape == (3, 1)
-        assert len(sub.axes) == 2
+        assert sub.shape == (3,)
+        assert len(sub.axes) == 1
+        assert sub.axes[0].label == "density"
 
     def test_axis_labels_preserved(self):
         grid = _make_grid(n_density=6, n_importance=5)
         sub = grid[2, 1:3]
-        assert sub.axes[0].label == "density"
-        assert sub.axes[1].label == "importance"
+        assert len(sub.axes) == 1
+        assert sub.axes[0].label == "importance"
 
     def test_axis_values_are_tensors(self):
         grid = _make_grid(n_density=6, n_importance=5)
@@ -233,11 +239,13 @@ class TestGetitemSlicing:
         for ax in sub.axes:
             assert isinstance(ax.values, Tensor)
 
-    def test_int_index_axis_value_correct(self):
+    def test_int_index_collapses_axis_leaves_remaining(self):
         grid = _make_grid(n_density=6, n_importance=5)
         sub = grid[3]
-        expected_val = grid.axes[0].values[3]
-        assert torch.allclose(sub.axes[0].values, expected_val.unsqueeze(0))
+        # Int on density collapses it; remaining axis is importance
+        assert len(sub.axes) == 1
+        assert sub.axes[0].label == "importance"
+        assert torch.allclose(sub.axes[0].values, grid.axes[1].values)
 
     def test_slice_axis_values_correct(self):
         grid = _make_grid(n_density=6, n_importance=5)
@@ -253,14 +261,16 @@ class TestGetitemNegativeIndexing:
     def test_negative_int(self):
         grid = _make_grid(n_density=6, n_importance=5)
         sub = grid[-1]
-        assert sub.shape == (1, 5)
-        last_density = grid.axes[0].values[-1:]
-        assert torch.allclose(sub.axes[0].values, last_density)
+        assert isinstance(sub, ModelGrid)
+        assert sub.shape == (5,)
+        # Density axis collapsed; remaining is importance
+        assert sub.axes[0].label == "importance"
 
     def test_negative_int_second_dim(self):
         grid = _make_grid(n_density=6, n_importance=5)
         sub = grid[:, -2]
-        assert sub.shape == (6, 1)
+        assert sub.shape == (6,)
+        assert sub.axes[0].label == "density"
 
     def test_negative_slice_start(self):
         grid = _make_grid(n_density=6, n_importance=5)
@@ -369,8 +379,9 @@ class TestGetitemView:
     def test_int_index_shares_model_objects(self):
         grid = _make_grid(n_density=6, n_importance=5)
         sub = grid[2]
+        # Int collapses density → sub.models is 1D with 5 elements
         for j in range(5):
-            assert sub.models[0, j] is grid.models[2, j]
+            assert sub.models[j] is grid.models[2, j]
 
     def test_subgrid_models_is_numpy_view(self):
         grid = _make_grid(n_density=6, n_importance=5)
