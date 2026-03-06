@@ -294,14 +294,12 @@ class ModelGrid:
         if self.models.size <= 1:
             return
 
-        for i in np.ndindex(self.models.shape):
-            model = self.models[i]
-            if self.broadcast_samples and not (
-                model.distribution._has_defined_generator
-            ):
+        for index in np.ndindex(self.models.shape):
+            distribution = self.models[index].distribution
+            if self.broadcast_samples and not distribution._has_defined_generator:
                 warn(
                     f"\nSample broadcasting requires every ToyModel.distribution to have defined generators for sample reproducibility. "
-                    f"Distribution at position {i} does not have defined generators and will not participate in sample broadcasting. "
+                    f"Distribution at position {index} does not have defined generators and will not participate in sample broadcasting. "
                     f"This may lead to unnecessary re-sampling or loss of determinism for this model.",
                     stacklevel=2,
                 )
