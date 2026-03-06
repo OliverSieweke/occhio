@@ -98,7 +98,11 @@ class ToyModel:
         hooks: list[Callable] | None = None,
         hook_freq: int = 1,
         verbose: bool = False,
+        sample_every: int = 25,
     ) -> tuple[list[float], list]:
+        if sample_every < 1:
+            raise ValueError(f"sample_every must be positive, got {sample_every}")
+
         if optimizer is None:
             optimizer = AdamW(
                 self.ae.parameters(), lr=learning_rate, weight_decay=weight_decay
@@ -114,17 +118,38 @@ class ToyModel:
         # at the end.
         loss_buffer = torch.empty(n_epochs, device=ae_device) if track_losses else None
 
+        # Pre-allocated sample buffer: sample once every `sample_every` epochs
+        # with sample_every × batch_size samples, then slice per epoch.
+        raw_buffer: Tensor | tuple | None = None
+
         for ep in range(n_epochs):
-            raw = self.distribution.sample(batch_size)
-            # Move samples to the ae device; distribution may be on a different device.
-            if isinstance(raw, tuple):
+            buf_offset = ep % sample_every
+            if buf_offset == 0:
+                # Determine how many epochs remain to avoid over-sampling
+                epochs_left = min(sample_every, n_epochs - ep)
+                total_samples = epochs_left * batch_size
+
+                raw_buffer = self.distribution.sample(total_samples)
+                # Move samples to the ae device; distribution may be on a different device.
+                if isinstance(raw_buffer, tuple):
+                    raw_buffer = tuple(
+                        t.to(ae_device) if isinstance(t, Tensor) else t
+                        for t in raw_buffer
+                    )
+                else:
+                    raw_buffer = raw_buffer.to(ae_device)
+
+            start = buf_offset * batch_size
+            end = start + batch_size
+            if isinstance(raw_buffer, tuple):
                 raw = tuple(
-                    t.to(ae_device) if isinstance(t, Tensor) else t for t in raw
+                    t[start:end] if isinstance(t, Tensor) else t for t in raw_buffer
                 )
                 x = raw[0]
             else:
-                raw = raw.to(ae_device)
+                raw = raw_buffer[start:end]
                 x = raw
+
             optimizer.zero_grad()
             x_hat = self.ae(x)[0]  # Only take x_hat
             loss = self.ae.loss(raw, x_hat, self.importances)  # type: ignore[call-arg]
