@@ -212,7 +212,7 @@ class ModelGrid:
         return ModelGrid(
             create_model=lambda params: None,  # type: ignore[arg-type, return-value]
             axes=axes,
-            cache_samples=False,
+            broadcast_samples=False,
             _models=models_array,
         )
 
@@ -237,9 +237,6 @@ class ModelGrid:
 
             if self.broadcast_samples:
                 self._validate_generators()
-                self._unique_distributions, self._sample_index = (
-                    self._build_sample_broadcast()
-                )
 
     def _initialize_models(self) -> NDArray[np.object_]:
         shape: tuple[int, ...] = tuple(len(axis.values) for axis in self.axes)
@@ -296,7 +293,7 @@ class ModelGrid:
 
         for index in np.ndindex(self.models.shape):
             distribution = self.models[index].distribution
-            if self.broadcast_samples and not distribution._has_defined_generator:
+            if self.broadcast_samples and not distribution._defines_generators:
                 warn(
                     f"\nSample broadcasting requires every ToyModel.distribution to have defined generators for sample reproducibility."
                     f"Distribution at position {index} does not have defined generators and will not participate in sample broadcasting."
@@ -304,40 +301,54 @@ class ModelGrid:
                     stacklevel=2,
                 )
 
-    def _build_sample_broadcast(self) -> tuple[list[Distribution], Tensor]:
-        """Precompute which models share a distribution so the training loop
-        only needs to sample once per unique distribution and broadcast the
-        results — without dict lookups at training time."""
+    def _build_broadcast(self) -> tuple[list[Distribution], Tensor]:
+        """
+        Groups models by which unique distribution instance they use, so that sample
+        broadcasting (i.e., generating samples only once per set of equivalent distributions)
+        is efficient during training.
+
+        Returns:
+            (broadcasters, broadcast_map):
+                broadcasters: a list of unique Distribution objects used by the models.
+                broadcast_map: a tensor that, for each model (flattened), gives the index
+                                  into broadcasters for its distribution.
+
+        hash_to_idx maps each unique distribution to its equivalent broadcaster without comparing distribution objects directly.
+        """
         flattened_models: NDArray[np.object_] = self.models.ravel()
+        # Maps each unique distribution hash to its assigned broadcaster index
         hash_to_idx: dict[str, int] = {}
-        unique_distributions: list[Distribution] = []
-        sample_index: list[int] = []
+        broadcasters: list[Distribution] = []
+        broadcast_map: list[int] = []
 
         for model in flattened_models:
-            dist: Distribution = model.distribution
-            dist_hash: str = dist._sampling_equivalence_hash
-            if dist_hash not in hash_to_idx:
-                hash_to_idx[dist_hash] = len(unique_distributions)
-                unique_distributions.append(dist)
-            sample_index.append(hash_to_idx[dist_hash])
+            distribution: Distribution = model.distribution
+            distribution_hash: str = distribution._equivalence_hash
+            if distribution_hash not in hash_to_idx:
+                hash_to_idx[distribution_hash] = len(broadcasters)
+                broadcasters.append(distribution)
+            # hash_to_idx gives the broadcaster index for this model's distribution
+            broadcast_map.append(hash_to_idx[distribution_hash])
 
         device: torch.device | str = flattened_models[0].ae.device
-        return unique_distributions, torch.tensor(
-            sample_index, dtype=torch.long, device=device
+        return broadcasters, torch.tensor(
+            broadcast_map, dtype=torch.long, device=device
         )
 
-    def _sync_generators(self) -> None:
-        """Copy each lead distribution's generator state to its followers
-        so that all equivalent distributions stay synchronized."""
+    def _sync_generators(
+        self, broadcasters: list[Distribution], broadcast_map: Tensor
+    ) -> None:
+        """Copy each broadcaster distribution's generator state to all
+        equivalent distributions so they stay synchronized."""
         flattened_models: NDArray[np.object_] = self.models.ravel()
-        lead_states: list[Tensor] = [
-            dist.generator.get_state() for dist in self._unique_distributions
+        broadcaster_states: list[Tensor] = [
+            dist.generator.get_state() for dist in broadcasters
         ]
 
-        for model_idx, unique_idx in enumerate(self._sample_index.tolist()):
-            follower_dist: Distribution = flattened_models[model_idx].distribution
-            if follower_dist is not self._unique_distributions[unique_idx]:
-                follower_dist.generator.set_state(lead_states[unique_idx])
+        for model_idx, broadcaster_idx in enumerate(broadcast_map.tolist()):
+            dist: Distribution = flattened_models[model_idx].distribution
+            if dist is not broadcasters[broadcaster_idx]:
+                dist.generator.set_state(broadcaster_states[broadcaster_idx])
 
     def _can_vectorize_loss(self) -> bool:
         flattened_models = self.models.ravel()
@@ -454,9 +465,6 @@ class ModelGrid:
 
         if self.broadcast_samples:
             self._validate_generators()
-            self._unique_distributions, self._sample_index = (
-                self._build_sample_broadcast()
-            )
 
     # If you change the signature or implementation here, make sure you keep it
     # consistent with ToyModel.fit()
@@ -499,6 +507,9 @@ class ModelGrid:
                     ResourceWarning,
                     stacklevel=2,
                 )
+
+        if self.broadcast_samples:
+            broadcasters, broadcast_map = self._build_broadcast()
 
         flattened_models: NDArray[np.object_] = self.models.ravel()
 
@@ -577,13 +588,10 @@ class ModelGrid:
                 total_samples = epochs_left * batch_size
 
                 if self.broadcast_samples:
-                    unique_samples = torch.stack(
-                        [
-                            dist.sample(total_samples)
-                            for dist in self._unique_distributions
-                        ]
+                    broadcasted_samples = torch.stack(
+                        [dist.sample(total_samples) for dist in broadcasters]
                     )
-                    sample_buffer = unique_samples[self._sample_index]
+                    sample_buffer = broadcasted_samples[listener_indices]
                 else:
                     sample_buffer = torch.stack(
                         [
@@ -650,12 +658,7 @@ class ModelGrid:
                 )
 
         if self.broadcast_samples:
-            self._sync_generators()
-            for model in flattened_models:
-                model.distribution.__dict__.pop("_sampling_equivalence_hash", None)
-            self._unique_distributions, self._sample_index = (
-                self._build_sample_broadcast()
-            )
+            self._sync_generators(broadcasters, broadcast_map)
 
         # Build history grid if snapshots were captured
         if snapshots is not None:

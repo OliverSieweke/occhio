@@ -58,7 +58,7 @@ class Distribution(ABC):
         """Returns (batch_size, n_features)"""
 
     @property
-    def _has_defined_generator(self) -> bool:
+    def _defines_generators(self) -> bool:
         return self.generator is not None
 
     def _rand(self, *shape) -> Tensor:
@@ -125,8 +125,8 @@ class Distribution(ABC):
     def __str__(self):
         return f"{type(self).__name__}({self.n_features}, {self.device})"
 
-    @cached_property
-    def _sampling_equivalence_hash(self) -> str:
+    @property
+    def _equivalence_hash(self) -> str:
         """This hash is used to determine if two distributions are equivalent at initialization.
         This is useful for caching samples. It's not recommended to modify this hash.
         """
@@ -193,8 +193,8 @@ class DistributionStack(Distribution):
         super().__init__(total_features, **kwargs)
 
     @property
-    def _has_defined_generator(self) -> bool:
-        return all(dist._has_defined_generator for dist in self.distributions)
+    def _defines_generators(self) -> bool:
+        return all(dist._defines_generators for dist in self.distributions)
 
     def sample(self, batch_size):
         if self.sampling_mode == "independent":
@@ -239,8 +239,8 @@ class DistributionStack(Distribution):
         dist_reprs = ", ".join(repr(d) for d in self.distributions)
         return f"DistributionStack([{dist_reprs}])"
 
-    @cached_property
-    def _sampling_equivalence_hash(self) -> str:
+    @property
+    def _equivalence_hash(self) -> str:
         equivalence_dict = vars(self).copy()
         generator = equivalence_dict.pop("generator")
         equivalence_dict["distribution_type"] = type(self).__name__
@@ -251,7 +251,7 @@ class DistributionStack(Distribution):
             equivalence_dict["generator"] = state_hash
 
         equivalence_dict["distributions"] = [
-            dist._sampling_equivalence_hash for dist in self.distributions
+            dist._equivalence_hash for dist in self.distributions
         ]
 
         for k, v in equivalence_dict.items():
