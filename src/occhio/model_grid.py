@@ -265,27 +265,26 @@ class ModelGrid:
         if self.models.size <= 1:
             return
 
-        flattened_models: NDArray[np.object_] = self.models.ravel()
-
-        reference: AutoEncoderBase = flattened_models[0].ae
+        first_index = next(np.ndindex(self.models.shape))
+        reference: AutoEncoderBase = self.models[first_index].ae
         reference_signature: tuple = (
             type(reference),
             {k: v.shape for k, v in reference.state_dict().items()},
             reference.device,
         )
 
-        for i, model in enumerate(flattened_models, start=1):
-            ae: AutoEncoderBase = model.ae
+        for index in np.ndindex(self.models.shape):
+            ae: AutoEncoderBase = self.models[index].ae
             ae_signature = (
                 type(ae),
                 {k: v.shape for k, v in ae.state_dict().items()},
                 ae.device,
             )
+
             if ae_signature != reference_signature:
-                # [17.02.26 | OliverSieweke] TODO: unstack the index here
                 raise ValueError(
                     f"\nAll Autoencoders should share the same architecture. "
-                    f"Autoencoder at index {i} has incompatible architecture with the first Autoencoder. "
+                    f"Autoencoder at index {index} has incompatible architecture with the first Autoencoder. "
                     f"received: {ae_signature}, "
                     f"expected: {reference_signature}"
                 )
@@ -298,8 +297,8 @@ class ModelGrid:
             distribution = self.models[index].distribution
             if self.broadcast_samples and not distribution._has_defined_generator:
                 warn(
-                    f"\nSample broadcasting requires every ToyModel.distribution to have defined generators for sample reproducibility. "
-                    f"Distribution at position {index} does not have defined generators and will not participate in sample broadcasting. "
+                    f"\nSample broadcasting requires every ToyModel.distribution to have defined generators for sample reproducibility."
+                    f"Distribution at position {index} does not have defined generators and will not participate in sample broadcasting."
                     f"This may lead to unnecessary re-sampling or loss of determinism for this model.",
                     stacklevel=2,
                 )
