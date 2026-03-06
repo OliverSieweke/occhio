@@ -37,7 +37,7 @@ N_EPOCHS = 20_000
 BATCH_SIZE = 512
 EVAL_SAMPLES = 2**13
 
-M_VALUES = [3, 4, 6, 9, 13, 19, 28, 42, 63, 90, 100, 130]
+M_VALUES = [3, 4, 6, 9, 13, 19, 28, 42, 63, 90, 100]
 
 
 def create_model(

@@ -65,12 +65,34 @@ def fit_boundary_model(results: dict[int, int | None]):
     return coeffs, lambda m_arr: np.exp(eps) * np.asarray(m_arr) ** delta
 
 
+def fit_excess_only_model(evals: list[dict], target_loss: float):
+    """Fit log(loss) = b2·log(N-m) + b0 on compression-regime points.
+
+    Only the excess (N-m) enters; m does not appear.
+    Inversion is analytic: N_boundary(m) = m + exp((log(target_loss) - b0) / b2).
+    The boundary excess N-m is constant across m under this model.
+    """
+    pts = [e for e in evals if e["n"] > e["m"] and e["loss"] > 0]
+    excess = np.array([e["n"] - e["m"] for e in pts], dtype=float)
+    loss = np.array([e["loss"] for e in pts], dtype=float)
+    X = np.column_stack([np.log(excess), np.ones(len(pts))])
+    coeffs, *_ = np.linalg.lstsq(X, np.log(loss), rcond=None)
+    b2, b0 = coeffs
+    r2 = _r2(np.log(loss), X @ coeffs)
+    n_bnd_excess = np.exp((np.log(target_loss) - b0) / b2)
+    print(f"excess-only:    log(loss) = {b2:.3f}·log(N-m) + {b0:.3f}   R²={r2:.4f}")
+    print(f"  => loss = {np.exp(b0):.4f} · (N-m)^{b2:.3f}")
+    print(f"  => N_boundary(m) = m + {n_bnd_excess:.3f}  [constant excess]")
+    return coeffs, lambda m_arr: np.asarray(m_arr, dtype=float) + n_bnd_excess
+
+
 def fit_simple_excess_model(evals: list[dict], target_loss: float):
     """Fit log(loss) = b1·log(m) + b2·log(N-m) + b0 on compression-regime points.
 
     Like excess_model but without the log(N) term.
-    Returns the coefficient array [b1, b2, b0] and a callable n_boundary(m)
-    that gives the predicted max N at target_loss (solved numerically).
+    Inversion is analytic: N_boundary(m) = m + C · m^k where
+    C = exp((log(L) - b0) / b2) and k = -b1/b2.
+    Returns the coefficient array [b1, b2, b0] and a callable n_boundary(m).
     """
     pts = [e for e in evals if e["n"] > e["m"] and e["loss"] > 0]
     n = np.array([e["n"] for e in pts], dtype=float)
@@ -80,22 +102,18 @@ def fit_simple_excess_model(evals: list[dict], target_loss: float):
     coeffs, *_ = np.linalg.lstsq(X, np.log(loss), rcond=None)
     b1, b2, b0 = coeffs
     r2 = _r2(np.log(loss), X @ coeffs)
+    log_target = np.log(target_loss)
+    C = np.exp((log_target - b0) / b2)
+    k = -b1 / b2
     print(
         f"simple excess:  log(loss) = {b1:.3f}·log(m) + {b2:.3f}·log(N-m) + {b0:.3f}   R²={r2:.4f}"
     )
     print(f"  => loss = {np.exp(b0):.4f} · m^{b1:.3f} · (N-m)^{b2:.3f}")
+    print(f"  => N_boundary(m) = m + {C:.3f} · m^{k:.3f}")
 
-    def n_boundary(m_arr: np.ndarray) -> np.ndarray:
+    def n_boundary(m_arr):
         m_arr = np.asarray(m_arr, dtype=float)
-        result = np.empty_like(m_arr)
-        log_target = np.log(target_loss)
-        for i, mi in enumerate(m_arr.flat):
-
-            def residual(n_val):
-                return b1 * np.log(mi) + b2 * np.log(n_val - mi) + b0 - log_target
-
-            result.flat[i] = scipy.optimize.brentq(residual, mi + 1e-6, mi * 1e4)
-        return result
+        return m_arr + C * m_arr**k
 
     return coeffs, n_boundary
 
