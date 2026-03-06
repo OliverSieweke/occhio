@@ -284,7 +284,7 @@ class ModelGrid:
             if ae_signature != reference_signature:
                 # [17.02.26 | OliverSieweke] TODO: unstack the index here
                 raise ValueError(
-                    f"All Autoencoders should share the same architecture. "
+                    f"\nAll Autoencoders should share the same architecture. "
                     f"Autoencoder at index {i} has incompatible architecture with the first Autoencoder. "
                     f"received: {ae_signature}, "
                     f"expected: {reference_signature}"
@@ -294,13 +294,14 @@ class ModelGrid:
         if self.models.size <= 1:
             return
 
-        flattened_models: NDArray[np.object_] = self.models.ravel()
-
-        for i, model in enumerate(flattened_models, start=1):
-            if self.broadcast_samples and not (model.distribution.generator):
+        for i in np.ndindex(self.models.shape):
+            model = self.models[i]
+            if self.broadcast_samples and not (
+                model.distribution._has_defined_generator
+            ):
                 warn(
-                    f"Sample broadcasting requires every ToyModel.distribution to define a 'generator'. "
-                    f"Distribution at position {i} is missing a 'generator' and will not participate in sample broadcasting. "
+                    f"\nSample broadcasting requires every ToyModel.distribution to have defined generators for sample reproducibility. "
+                    f"Distribution at position {i} does not have defined generators and will not participate in sample broadcasting. "
                     f"This may lead to unnecessary re-sampling or loss of determinism for this model.",
                     stacklevel=2,
                 )
@@ -425,7 +426,7 @@ class ModelGrid:
         grid_device = self.models.ravel()[0].ae.device
         if str(loaded_device) != str(grid_device):
             warn(
-                f"Device mismatch: loaded models are on '{loaded_device}', "
+                f"\nDevice mismatch: loaded models are on '{loaded_device}', "
                 f"but the current grid is on '{grid_device}'. "
                 f"Moving loaded models to '{grid_device}'.",
                 stacklevel=2,
@@ -439,7 +440,7 @@ class ModelGrid:
             f"'{a.label}' ({len(a.values)} values)" for a in self.axes
         )
         warn(
-            f"Loading models from '{path}'. The current axes [{axes_summary}] "
+            f"\nLoading models from '{path}'. The current axes [{axes_summary}] "
             f"may not match the axes used to generate the saved models. "
             f"Verify that axes labels, values, and ordering are consistent "
             f"with the file's original grid.",
@@ -477,11 +478,11 @@ class ModelGrid:
         if snapshot_interval is not None:
             if snapshot_interval <= 0:
                 raise ValueError(
-                    f"snapshot_interval must be positive, got {snapshot_interval}"
+                    f"\nsnapshot_interval must be positive, got {snapshot_interval}"
                 )
             if snapshot_interval > n_epochs:
                 raise ValueError(
-                    f"snapshot_interval ({snapshot_interval}) cannot exceed n_epochs ({n_epochs})"
+                    f"\nsnapshot_interval ({snapshot_interval}) cannot exceed n_epochs ({n_epochs})"
                 )
 
             # Memory warning
@@ -491,7 +492,7 @@ class ModelGrid:
                 import warnings
 
                 warnings.warn(
-                    f"Large memory allocation: {self.models.size} models × {n_snapshots} snapshots "
+                    f"\nLarge memory allocation: {self.models.size} models × {n_snapshots} snapshots "
                     f"= {total_snapshots} total model copies. This may consume significant memory.",
                     ResourceWarning,
                     stacklevel=2,
@@ -747,8 +748,7 @@ class ModelGrid:
                 idx: int = k + dim_size if k < 0 else k
                 if idx < 0 or idx >= dim_size:
                     raise IndexError(
-                        f"Index {k} out of bounds for axis '{axis.label}' "
-                        f"with size {dim_size}"
+                        f"\nIndex {k} out of bounds for axis '{axis.label}' with size {dim_size}"
                     )
                 # Integer index collapses the axis (NumPy convention)
                 numpy_key.append(idx)
@@ -762,13 +762,11 @@ class ModelGrid:
 
                 if start is not None and (start < 0 or start >= dim_size):
                     raise IndexError(
-                        f"Slice start {k.start} out of bounds for axis "
-                        f"'{axis.label}' with size {dim_size}"
+                        f"\nSlice start {k.start} out of bounds for axis '{axis.label}' with size {dim_size}"
                     )
                 if stop is not None and (stop < 0 or stop > dim_size):
                     raise IndexError(
-                        f"Slice stop {k.stop} out of bounds for axis "
-                        f"'{axis.label}' with size {dim_size}"
+                        f"\nSlice stop {k.stop} out of bounds for axis '{axis.label}' with size {dim_size}"
                     )
 
                 if (
@@ -795,7 +793,7 @@ class ModelGrid:
                 else:
                     new_axes.append(Axis(label=axis.label, values=values))
             else:
-                raise IndexError(f"Unsupported index type: {type(k)}")
+                raise IndexError(f"\nUnsupported index type: {type(k)}")
 
         for dim in range(len(key), len(self.axes)):
             new_axes.append(self.axes[dim])
