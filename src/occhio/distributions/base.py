@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from functools import cached_property
 from hashlib import sha256
 from math import prod
+from warnings import warn
 from typing import Literal
 
 import torch
@@ -41,8 +42,7 @@ class Distribution(ABC):
             dev = torch.device(device)
             if not _same_device(gen_device, dev):
                 raise ValueError(
-                    f"Generator lives on {gen_device}, but device is {dev}. "
-                    f"These must match."
+                    f"\nGenerator lives on {gen_device}, but device is {dev}. These must match."
                 )
         if device is not None:
             self._init_device = torch.device(device)
@@ -56,6 +56,10 @@ class Distribution(ABC):
     @abstractmethod
     def sample(self, batch_size: int) -> Tensor:
         """Returns (batch_size, n_features)"""
+
+    @property
+    def _has_defined_generator(self) -> bool:
+        return self.generator is not None
 
     def _rand(self, *shape) -> Tensor:
         """Random uniform generator respecting the self.generator"""
@@ -123,8 +127,8 @@ class Distribution(ABC):
 
     @cached_property
     def _sampling_equivalence_hash(self) -> str:
-        """
-        We use this hash to determine if two distributions are equivalent at initialization. This is useful for caching samples. It's not reccomended to modify this hash.
+        """This hash is used to determine if two distributions are equivalent at initialization.
+        This is useful for caching samples. It's not recommended to modify this hash.
         """
         equivalence_dict = vars(self).copy()
         generator = equivalence_dict.pop("generator")
@@ -181,23 +185,16 @@ class DistributionStack(Distribution):
         p_meta: float | None = None,
         **kwargs,
     ):
-        self._validate_stack()
-
-        if "generator" in kwargs and sampling_mode == "independent":
-            import warnings
-
-            warnings.warn(
-                "DistributionStack does not use the generator parameter in 'independent' mode. "
-                "Set the generator on each sub-distribution individually for reproducible sampling.",
-                UserWarning,
-                stacklevel=2,
-            )
-
+        self._validate_stack(distributions, sampling_mode, p_meta, **kwargs)
         total_features = sum(dist.n_features for dist in distributions)
         self.distributions = distributions
         self.sampling_mode = sampling_mode
         self.p_meta = p_meta
         super().__init__(total_features, **kwargs)
+
+    @property
+    def _has_defined_generator(self) -> bool:
+        return all(dist._has_defined_generator for dist in self.distributions)
 
     def sample(self, batch_size):
         if self.sampling_mode == "independent":
@@ -242,54 +239,51 @@ class DistributionStack(Distribution):
         dist_reprs = ", ".join(repr(d) for d in self.distributions)
         return f"DistributionStack([{dist_reprs}])"
 
+    @cached_property
+    def _sampling_equivalence_hash(self) -> str:
+        equivalence_dict = vars(self).copy()
+        generator = equivalence_dict.pop("generator")
+        equivalence_dict["distribution_type"] = type(self).__name__
 
-@cached_property
-def _sampling_equivalence_hash(self) -> str:
-    equivalence_dict = vars(self).copy()
-    generator = equivalence_dict.pop("generator")
-    equivalence_dict["distribution_type"] = type(self).__name__
+        if generator:
+            state = generator.get_state()
+            state_hash = hash_tensor(state, mode=0)
+            equivalence_dict["generator"] = state_hash
 
-    if generator:
-        state = generator.get_state()
-        state_hash = hash_tensor(state, mode=0)
-        equivalence_dict["generator"] = state_hash
+        equivalence_dict["distributions"] = [
+            dist._sampling_equivalence_hash for dist in self.distributions
+        ]
 
-    equivalence_dict["distributions"] = [
-        dist._sampling_equivalence_hash for dist in self.distributions
-    ]
+        for k, v in equivalence_dict.items():
+            if isinstance(v, Tensor):
+                equivalence_dict[k] = v.tolist()
 
-    for k, v in equivalence_dict.items():
-        if isinstance(v, Tensor):
-            equivalence_dict[k] = v.tolist()
+        equivalence_dict = dict(sorted(equivalence_dict.items(), key=lambda x: x[0]))
+        equivalence_string = str(equivalence_dict)
+        return sha256(equivalence_string.encode("utf-8")).hexdigest()
 
-    equivalence_dict = dict(sorted(equivalence_dict.items(), key=lambda x: x[0]))
-    equivalence_string = str(equivalence_dict)
-    return sha256(equivalence_string.encode("utf-8")).hexdigest()
+    def _validate_stack(self, distributions, sampling_mode, p_meta, **kwargs) -> None:
+        if not distributions:
+            raise ValueError("\ndistributions list cannot be empty")
 
+        if sampling_mode == "sparse" and p_meta is None:
+            raise ValueError("\np_meta must be provided when sampling_mode='sparse'")
 
-def _validate_stack(self, distributions, sampling_mode, p_meta) -> None:
-    if not distributions:
-        raise ValueError("distributions list cannot be empty")
+        reference_device = distributions[0].device
+        for dist in distributions:
+            if dist.device != reference_device:
+                warn(
+                    f"\nDetected device mismatch in DistributionStack."
+                    f"reference device: {reference_device}"
+                    f"received device: {dist.device} for {dist}"
+                    f"All distributions in a DistributionStack should be located on the same device for reproducibility and efficiency."
+                    f"Use the `.to(device)` to move all distributions to the same device.",
+                    stacklevel=2,
+                )
 
-    if sampling_mode == "sparse" and p_meta is None:
-        raise ValueError("p_meta must be provided when sampling_mode='sparse'")
-
-    reference_device = distributions[0].device
-    for dist in distributions:
-        if dist.device != reference_device:
-            raise ValueError(
-                f"All distributions must have the same device"
-                f"reference device: {reference_device}"
-                f"received device: {dist.device} for {dist}"
+        if "generator" in kwargs and sampling_mode == "independent":
+            warn(
+                "\nDistributionStack does not use the generator parameter in 'independent' mode. "
+                "Set the generator on each sub-distribution individually for reproducible sampling.",
+                stacklevel=2,
             )
-
-    if any(dist.generator is None for dist in distributions):
-        raise ValueError("All distributions must have a generator")
-    if any(dist.generator != reference_generator for dist in distributions):
-        raise ValueError("All distributions must have the same generator")
-    if any(dist.device != reference_device for dist in distributions):
-        raise ValueError(
-            f"All distributions must have the same device"
-            f"reference device: {reference_device}"
-            f"received device: {dist.device} for {dist}"
-        )
