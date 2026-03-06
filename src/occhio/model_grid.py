@@ -18,6 +18,7 @@ from warnings import warn
 
 import numpy as np
 import torch
+import datetime
 from numpy.typing import NDArray
 from torch import Tensor, meshgrid
 from torch.func import functional_call, stack_module_state
@@ -240,6 +241,16 @@ class ModelGrid:
                     self._build_sample_broadcast()
                 )
 
+    def _initialize_models(self) -> NDArray[np.object_]:
+        shape: tuple[int, ...] = tuple(len(axis.values) for axis in self.axes)
+        models: NDArray[np.object_] = np.empty(shape, dtype=object)
+        for indices in product(*[range(s) for s in shape]):
+            params: dict[str, Any] = {
+                axis.label: axis.values[i] for axis, i in zip(self.axes, indices)
+            }
+            models[indices] = self.create_model(params)
+        return models
+
     def _validate_args(
         self, create_model: Callable[..., ToyModel], axes: list[Axis]
     ) -> None:
@@ -250,16 +261,6 @@ class ModelGrid:
             raise TypeError(
                 "create_model must accept a 'params' parameter (dict[str, Any])."
             )
-
-    def _initialize_models(self) -> NDArray[np.object_]:
-        shape: tuple[int, ...] = tuple(len(axis.values) for axis in self.axes)
-        models: NDArray[np.object_] = np.empty(shape, dtype=object)
-        for indices in product(*[range(s) for s in shape]):
-            params: dict[str, Any] = {
-                axis.label: axis.values[i] for axis, i in zip(self.axes, indices)
-            }
-            models[indices] = self.create_model(params)
-        return models
 
     def _validate_vmap(self) -> None:
         if self.models.size <= 1:
@@ -368,14 +369,18 @@ class ModelGrid:
         """Returns a dictionary of the axis labels and their lengths."""
         return {axis.label: len(axis.values) for axis in self.axes}
 
-    def save_models(self, path: str) -> None:
+    def save_models(self, path: str | None = None) -> None:
         """Serialize the model grid to disk using pickle.
 
-        Warning: pickle files are tied to the current Python and library versions.
+        Warning: pickle files are tied to the current Python and occhio versions.
         Loading in a different environment may fail silently or raise errors.
         """
-        if not isinstance(path, str) or not path:
-            raise TypeError("Path must be a non-empty string.")
+        if not path:
+            path = (
+                "model_grid"
+                + datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                + ".pkl"
+            )
         if not path.endswith(".pkl"):
             path += ".pkl"
         with open(path, "wb") as f:
@@ -384,9 +389,9 @@ class ModelGrid:
     def load_models(self, path: str) -> None:
         """Load a serialized model grid from disk, replacing ``self.models`` in-place.
 
-        Warning: pickle files are tied to the Python and library versions used when
-        saving. Axis labels and values are not stored in the file — verify that the
-        current grid's axes match the file's original grid after loading.
+        Warning: pickle files are tied to the Python and occhio versions used when
+        saving. Other attributes of ModelGrid (such as Axis labels and values) are not stored in the file.
+        Ensure that the current ModelGrid's axes match the file's original ModelGrid after loading.
         """
         if not isinstance(path, str) or not path:
             raise TypeError("Path must be a non-empty string.")
