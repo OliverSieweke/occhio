@@ -245,9 +245,9 @@ class TestLoadModelsCaching:
             warnings.simplefilter("ignore")
             grid2.load_models(path)
 
-        assert hasattr(grid2, "_unique_distributions")
-        assert hasattr(grid2, "_sample_index")
-        assert len(grid2._sample_index) == grid2.models.size
+        broadcasters, broadcast_map = grid2._build_broadcast()
+        assert len(broadcasters) > 0
+        assert len(broadcast_map) == grid2.models.size
 
     def test_no_cache_skips_rebuild(self, tmp_path):
         grid = _make_grid(cache=False)
