@@ -591,7 +591,7 @@ class ModelGrid:
                     broadcasted_samples = torch.stack(
                         [dist.sample(total_samples) for dist in broadcasters]
                     )
-                    sample_buffer = broadcasted_samples[listener_indices]
+                    sample_buffer = broadcasted_samples[broadcast_map]
                 else:
                     sample_buffer = torch.stack(
                         [
