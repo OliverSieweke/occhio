@@ -6,9 +6,8 @@ Uses torch.vmap + torch.compile for fast parallel training across grid points.
 from __future__ import annotations
 
 import pickle
-from collections.abc import Sequence
-from copy import deepcopy
 from collections.abc import Iterable, Sequence
+from copy import deepcopy
 from dataclasses import dataclass
 from functools import cached_property
 from inspect import signature
@@ -295,8 +294,8 @@ class ModelGrid:
             distribution = self.models[index].distribution
             if self.broadcast_samples and not distribution._defines_generators:
                 warn(
-                    f"\nSample broadcasting requires every ToyModel.distribution to have defined generators for sample reproducibility."
-                    f"Distribution at position {index} does not have defined generators and will not participate in sample broadcasting."
+                    f"\nSample broadcasting requires every ToyModel.distribution to have defined generators for sample reproducibility. "
+                    f"Distribution at position {index} does not have defined generators and will not participate in sample broadcasting. "
                     f"This may lead to unnecessary re-sampling or loss of determinism for this model.",
                     stacklevel=2,
                 )
@@ -357,7 +356,7 @@ class ModelGrid:
             dist: Distribution = flattened_models[model_idx].distribution
             gens = broadcaster_gens[broadcaster_idx]
             if dist is not broadcasters[broadcaster_idx]:
-                dist.sync_generators(gens if len(gens) > 1 else gens[0])
+                dist.sync_generators(gens)
 
     def _can_vectorize_loss(self) -> bool:
         flattened_models = self.models.ravel()
