@@ -6,9 +6,8 @@ Uses torch.vmap + torch.compile for fast parallel training across grid points.
 from __future__ import annotations
 
 import pickle
-from collections.abc import Sequence
-from copy import deepcopy
 from collections.abc import Iterable, Sequence
+from copy import deepcopy
 from dataclasses import dataclass
 from functools import cached_property
 from inspect import signature
@@ -18,6 +17,7 @@ from warnings import warn
 
 import numpy as np
 import torch
+import datetime
 from numpy.typing import NDArray
 from torch import Tensor, meshgrid
 from torch.func import functional_call, stack_module_state
@@ -211,7 +211,7 @@ class ModelGrid:
         return ModelGrid(
             create_model=lambda params: None,  # type: ignore[arg-type, return-value]
             axes=axes,
-            cache_samples=False,
+            broadcast_samples=False,
             _models=models_array,
         )
 
@@ -236,9 +236,16 @@ class ModelGrid:
 
             if self.broadcast_samples:
                 self._validate_generators()
-                self._unique_distributions, self._sample_index = (
-                    self._build_sample_broadcast()
-                )
+
+    def _initialize_models(self) -> NDArray[np.object_]:
+        shape: tuple[int, ...] = tuple(len(axis.values) for axis in self.axes)
+        models: NDArray[np.object_] = np.empty(shape, dtype=object)
+        for indices in product(*[range(s) for s in shape]):
+            params: dict[str, Any] = {
+                axis.label: axis.values[i] for axis, i in zip(self.axes, indices)
+            }
+            models[indices] = self.create_model(params)
+        return models
 
     def _validate_args(
         self, create_model: Callable[..., ToyModel], axes: list[Axis]
@@ -251,41 +258,30 @@ class ModelGrid:
                 "create_model must accept a 'params' parameter (dict[str, Any])."
             )
 
-    def _initialize_models(self) -> NDArray[np.object_]:
-        shape: tuple[int, ...] = tuple(len(axis.values) for axis in self.axes)
-        models: NDArray[np.object_] = np.empty(shape, dtype=object)
-        for indices in product(*[range(s) for s in shape]):
-            params: dict[str, Any] = {
-                axis.label: axis.values[i] for axis, i in zip(self.axes, indices)
-            }
-            models[indices] = self.create_model(params)
-        return models
-
     def _validate_vmap(self) -> None:
         if self.models.size <= 1:
             return
 
-        flattened_models: NDArray[np.object_] = self.models.ravel()
-
-        reference: AutoEncoderBase = flattened_models[0].ae
+        first_index = next(np.ndindex(self.models.shape))
+        reference: AutoEncoderBase = self.models[first_index].ae
         reference_signature: tuple = (
             type(reference),
             {k: v.shape for k, v in reference.state_dict().items()},
             reference.device,
         )
 
-        for i, model in enumerate(flattened_models, start=1):
-            ae: AutoEncoderBase = model.ae
+        for index in np.ndindex(self.models.shape):
+            ae: AutoEncoderBase = self.models[index].ae
             ae_signature = (
                 type(ae),
                 {k: v.shape for k, v in ae.state_dict().items()},
                 ae.device,
             )
+
             if ae_signature != reference_signature:
-                # [17.02.26 | OliverSieweke] TODO: unstack the index here
                 raise ValueError(
-                    f"All Autoencoders should share the same architecture. "
-                    f"Autoencoder at index {i} has incompatible architecture with the first Autoencoder. "
+                    f"\nAll Autoencoders should share the same architecture. "
+                    f"Autoencoder at index {index} has incompatible architecture with the first Autoencoder. "
                     f"received: {ae_signature}, "
                     f"expected: {reference_signature}"
                 )
@@ -294,49 +290,73 @@ class ModelGrid:
         if self.models.size <= 1:
             return
 
-        flattened_models: NDArray[np.object_] = self.models.ravel()
-
-        for i, model in enumerate(flattened_models, start=1):
-            if not model.distribution.generator:
-                raise ValueError(
-                    f"All distributions should have a fixed generator. "
-                    f"Distribution at index {i} does not have a fixed generator."
+        for index in np.ndindex(self.models.shape):
+            distribution = self.models[index].distribution
+            if self.broadcast_samples and not distribution._defines_generators:
+                warn(
+                    f"\nSample broadcasting requires every ToyModel.distribution to have defined generators for sample reproducibility. "
+                    f"Distribution at position {index} does not have defined generators and will not participate in sample broadcasting. "
+                    f"This may lead to unnecessary re-sampling or loss of determinism for this model.",
+                    stacklevel=2,
                 )
 
-    def _build_sample_broadcast(self) -> tuple[list[Distribution], Tensor]:
-        """Precompute which models share a distribution so the training loop
-        only needs to sample once per unique distribution and broadcast the
-        results — without dict lookups at training time."""
+    def _build_broadcast(self) -> tuple[list[Distribution], Tensor]:
+        """
+        Groups models by which unique distribution instance they use, so that sample
+        broadcasting (i.e., generating samples only once per set of equivalent distributions)
+        is efficient during training.
+
+        Returns:
+            (broadcasters, broadcast_map):
+                broadcasters: a list of unique Distribution objects used by the models.
+                broadcast_map: a tensor that, for each model (flattened), gives the index
+                                  into broadcasters for its distribution.
+
+        Generator-less distributions are never grouped together because their
+        sampling state cannot be synchronized — each gets its own broadcaster slot.
+        """
         flattened_models: NDArray[np.object_] = self.models.ravel()
+        # Maps each unique distribution hash to its assigned broadcaster index
         hash_to_idx: dict[str, int] = {}
-        unique_distributions: list[Distribution] = []
-        sample_index: list[int] = []
+        broadcasters: list[Distribution] = []
+        broadcast_map: list[int] = []
 
         for model in flattened_models:
-            dist: Distribution = model.distribution
-            dist_hash: str = dist._sampling_equivalence_hash
-            if dist_hash not in hash_to_idx:
-                hash_to_idx[dist_hash] = len(unique_distributions)
-                unique_distributions.append(dist)
-            sample_index.append(hash_to_idx[dist_hash])
+            distribution: Distribution = model.distribution
+            # Generator-less distributions can't be synced, so each gets its
+            # own broadcaster slot regardless of hash equivalence.
+            if distribution._defines_generators:
+                distribution_hash: str = distribution._equivalence_hash
+                if distribution_hash not in hash_to_idx:
+                    hash_to_idx[distribution_hash] = len(broadcasters)
+                    broadcasters.append(distribution)
+                broadcast_map.append(hash_to_idx[distribution_hash])
+            else:
+                broadcast_map.append(len(broadcasters))
+                broadcasters.append(distribution)
 
         device: torch.device | str = flattened_models[0].ae.device
-        return unique_distributions, torch.tensor(
-            sample_index, dtype=torch.long, device=device
+        return broadcasters, torch.tensor(
+            broadcast_map, dtype=torch.long, device=device
         )
 
-    def _sync_generators(self) -> None:
-        """Copy each lead distribution's generator state to its followers
-        so that all equivalent distributions stay synchronized."""
+    def _sync_generators(
+        self, broadcasters: list[Distribution], broadcast_map: Tensor
+    ) -> None:
+        """Copy each broadcaster distribution's generator state to all
+        equivalent distributions so they stay synchronized."""
         flattened_models: NDArray[np.object_] = self.models.ravel()
-        lead_states: list[Tensor] = [
-            dist.generator.get_state() for dist in self._unique_distributions
+
+        # Pre-collect generators from each broadcaster
+        broadcaster_gens: list[list[torch.Generator | None]] = [
+            dist.collect_generators() for dist in broadcasters
         ]
 
-        for model_idx, unique_idx in enumerate(self._sample_index.tolist()):
-            follower_dist: Distribution = flattened_models[model_idx].distribution
-            if follower_dist is not self._unique_distributions[unique_idx]:
-                follower_dist.generator.set_state(lead_states[unique_idx])
+        for model_idx, broadcaster_idx in enumerate(broadcast_map.tolist()):
+            dist: Distribution = flattened_models[model_idx].distribution
+            gens = broadcaster_gens[broadcaster_idx]
+            if dist is not broadcasters[broadcaster_idx]:
+                dist.sync_generators(gens)
 
     def _can_vectorize_loss(self) -> bool:
         flattened_models = self.models.ravel()
@@ -368,14 +388,18 @@ class ModelGrid:
         """Returns a dictionary of the axis labels and their lengths."""
         return {axis.label: len(axis.values) for axis in self.axes}
 
-    def save_models(self, path: str) -> None:
+    def save_models(self, path: str | None = None) -> None:
         """Serialize the model grid to disk using pickle.
 
-        Warning: pickle files are tied to the current Python and library versions.
+        Warning: pickle files are tied to the current Python and occhio versions.
         Loading in a different environment may fail silently or raise errors.
         """
-        if not isinstance(path, str) or not path:
-            raise TypeError("Path must be a non-empty string.")
+        if not path:
+            path = (
+                "model_grid"
+                + datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                + ".pkl"
+            )
         if not path.endswith(".pkl"):
             path += ".pkl"
         with open(path, "wb") as f:
@@ -384,9 +408,9 @@ class ModelGrid:
     def load_models(self, path: str) -> None:
         """Load a serialized model grid from disk, replacing ``self.models`` in-place.
 
-        Warning: pickle files are tied to the Python and library versions used when
-        saving. Axis labels and values are not stored in the file — verify that the
-        current grid's axes match the file's original grid after loading.
+        Warning: pickle files are tied to the Python and occhio versions used when
+        saving. Other attributes of ModelGrid (such as Axis labels and values) are not stored in the file.
+        Ensure that the current ModelGrid's axes match the file's original ModelGrid after loading.
         """
         if not isinstance(path, str) or not path:
             raise TypeError("Path must be a non-empty string.")
@@ -423,7 +447,7 @@ class ModelGrid:
         grid_device = self.models.ravel()[0].ae.device
         if str(loaded_device) != str(grid_device):
             warn(
-                f"Device mismatch: loaded models are on '{loaded_device}', "
+                f"\nDevice mismatch: loaded models are on '{loaded_device}', "
                 f"but the current grid is on '{grid_device}'. "
                 f"Moving loaded models to '{grid_device}'.",
                 stacklevel=2,
@@ -437,7 +461,7 @@ class ModelGrid:
             f"'{a.label}' ({len(a.values)} values)" for a in self.axes
         )
         warn(
-            f"Loading models from '{path}'. The current axes [{axes_summary}] "
+            f"\nLoading models from '{path}'. The current axes [{axes_summary}] "
             f"may not match the axes used to generate the saved models. "
             f"Verify that axes labels, values, and ordering are consistent "
             f"with the file's original grid.",
@@ -449,9 +473,6 @@ class ModelGrid:
 
         if self.broadcast_samples:
             self._validate_generators()
-            self._unique_distributions, self._sample_index = (
-                self._build_sample_broadcast()
-            )
 
     # If you change the signature or implementation here, make sure you keep it
     # consistent with ToyModel.fit()
@@ -475,11 +496,11 @@ class ModelGrid:
         if snapshot_interval is not None:
             if snapshot_interval <= 0:
                 raise ValueError(
-                    f"snapshot_interval must be positive, got {snapshot_interval}"
+                    f"\nsnapshot_interval must be positive, got {snapshot_interval}"
                 )
             if snapshot_interval > n_epochs:
                 raise ValueError(
-                    f"snapshot_interval ({snapshot_interval}) cannot exceed n_epochs ({n_epochs})"
+                    f"\nsnapshot_interval ({snapshot_interval}) cannot exceed n_epochs ({n_epochs})"
                 )
 
             # Memory warning
@@ -489,11 +510,14 @@ class ModelGrid:
                 import warnings
 
                 warnings.warn(
-                    f"Large memory allocation: {self.models.size} models × {n_snapshots} snapshots "
+                    f"\nLarge memory allocation: {self.models.size} models × {n_snapshots} snapshots "
                     f"= {total_snapshots} total model copies. This may consume significant memory.",
                     ResourceWarning,
                     stacklevel=2,
                 )
+
+        if self.broadcast_samples:
+            broadcasters, broadcast_map = self._build_broadcast()
 
         flattened_models: NDArray[np.object_] = self.models.ravel()
 
@@ -572,13 +596,10 @@ class ModelGrid:
                 total_samples = epochs_left * batch_size
 
                 if self.broadcast_samples:
-                    unique_samples = torch.stack(
-                        [
-                            dist.sample(total_samples)
-                            for dist in self._unique_distributions
-                        ]
+                    broadcasted_samples = torch.stack(
+                        [dist.sample(total_samples) for dist in broadcasters]
                     )
-                    sample_buffer = unique_samples[self._sample_index]
+                    sample_buffer = broadcasted_samples[broadcast_map]
                 else:
                     sample_buffer = torch.stack(
                         [
@@ -645,12 +666,7 @@ class ModelGrid:
                 )
 
         if self.broadcast_samples:
-            self._sync_generators()
-            for model in flattened_models:
-                model.distribution.__dict__.pop("_sampling_equivalence_hash", None)
-            self._unique_distributions, self._sample_index = (
-                self._build_sample_broadcast()
-            )
+            self._sync_generators(broadcasters, broadcast_map)
 
         # Build history grid if snapshots were captured
         if snapshots is not None:
@@ -745,8 +761,7 @@ class ModelGrid:
                 idx: int = k + dim_size if k < 0 else k
                 if idx < 0 or idx >= dim_size:
                     raise IndexError(
-                        f"Index {k} out of bounds for axis '{axis.label}' "
-                        f"with size {dim_size}"
+                        f"\nIndex {k} out of bounds for axis '{axis.label}' with size {dim_size}"
                     )
                 # Integer index collapses the axis (NumPy convention)
                 numpy_key.append(idx)
@@ -760,13 +775,11 @@ class ModelGrid:
 
                 if start is not None and (start < 0 or start >= dim_size):
                     raise IndexError(
-                        f"Slice start {k.start} out of bounds for axis "
-                        f"'{axis.label}' with size {dim_size}"
+                        f"\nSlice start {k.start} out of bounds for axis '{axis.label}' with size {dim_size}"
                     )
                 if stop is not None and (stop < 0 or stop > dim_size):
                     raise IndexError(
-                        f"Slice stop {k.stop} out of bounds for axis "
-                        f"'{axis.label}' with size {dim_size}"
+                        f"\nSlice stop {k.stop} out of bounds for axis '{axis.label}' with size {dim_size}"
                     )
 
                 if (
@@ -793,7 +806,7 @@ class ModelGrid:
                 else:
                     new_axes.append(Axis(label=axis.label, values=values))
             else:
-                raise IndexError(f"Unsupported index type: {type(k)}")
+                raise IndexError(f"\nUnsupported index type: {type(k)}")
 
         for dim in range(len(key), len(self.axes)):
             new_axes.append(self.axes[dim])

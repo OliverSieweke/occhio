@@ -97,9 +97,9 @@ class TestInitialization:
         for m in grid.models.ravel():
             assert isinstance(m, ToyModel)
 
-    def test_describe(self):
+    def test_description(self):
         grid = _make_grid(n_density=4, n_importance=3)
-        assert grid.describe == {"density": 4, "importance": 3}
+        assert grid.description == {"density": 4, "importance": 3}
 
     def test_flattened_models_count(self):
         grid = _make_grid(n_density=4, n_importance=3)
@@ -122,19 +122,19 @@ class TestInitialization:
 
 
 class TestGetitemDimensionPreservation:
-    def test_int_index_preserves_ndim(self):
+    def test_int_index_collapses_axis(self):
         grid = _make_grid(n_density=6, n_importance=5)
         sub = grid[2]
         assert isinstance(sub, ModelGrid)
-        assert len(sub.axes) == len(grid.axes)
-        assert sub.shape == (1, 5)
+        assert len(sub.axes) == 1
+        assert sub.shape == (5,)
 
-    def test_int_partial_preserves_ndim(self):
+    def test_int_partial_collapses_one_axis(self):
         grid = _make_grid(n_density=6, n_importance=5)
         sub = grid[2]
         assert isinstance(sub, ModelGrid)
-        assert len(sub.axes) == len(grid.axes)
-        assert sub.shape == (1, 5)
+        assert sub.axes[0].label == "importance"
+        assert sub.shape == (5,)
 
     def test_1d_int_index_returns_toymodel(self):
         """1D grid + single int = all axes specified → returns ToyModel."""
@@ -143,18 +143,23 @@ class TestGetitemDimensionPreservation:
         assert isinstance(result, ToyModel)
         assert result is grid.models[4]
 
-    def test_subgrid_always_has_same_axes_count(self):
+    def test_subgrid_axes_count(self):
         grid = _make_grid(n_density=6, n_importance=5)
-        for key in [
-            (0,),
-            (5,),
-            (slice(0, 3),),
-            (slice(1, 4), 2),
-            (0, slice(None)),
-        ]:
+        # int collapses → 1 axis; slice preserves → 2 axes
+        cases = {
+            (0,): 1,
+            (5,): 1,
+            (slice(0, 3),): 2,
+            (slice(1, 4), 2): 1,
+            (0, slice(None)): 1,
+            (slice(None), slice(None)): 2,
+        }
+        for key, expected_axes in cases.items():
             sub = grid[key]
             assert isinstance(sub, ModelGrid), f"Failed for key={key}"
-            assert len(sub.axes) == len(grid.axes), f"Failed for key={key}"
+            assert len(sub.axes) == expected_axes, (
+                f"Failed for key={key}: expected {expected_axes} axes, got {len(sub.axes)}"
+            )
 
 
 # ── __getitem__: Single Model Indexing ────────────────────────────────────────
@@ -218,14 +223,15 @@ class TestGetitemSlicing:
     def test_mixed_slice_and_int(self):
         grid = _make_grid(n_density=6, n_importance=5)
         sub = grid[1:4, 2]
-        assert sub.shape == (3, 1)
-        assert len(sub.axes) == 2
+        assert sub.shape == (3,)
+        assert len(sub.axes) == 1
+        assert sub.axes[0].label == "density"
 
     def test_axis_labels_preserved(self):
         grid = _make_grid(n_density=6, n_importance=5)
         sub = grid[2, 1:3]
-        assert sub.axes[0].label == "density"
-        assert sub.axes[1].label == "importance"
+        assert len(sub.axes) == 1
+        assert sub.axes[0].label == "importance"
 
     def test_axis_values_are_tensors(self):
         grid = _make_grid(n_density=6, n_importance=5)
@@ -233,11 +239,13 @@ class TestGetitemSlicing:
         for ax in sub.axes:
             assert isinstance(ax.values, Tensor)
 
-    def test_int_index_axis_value_correct(self):
+    def test_int_index_collapses_axis_leaves_remaining(self):
         grid = _make_grid(n_density=6, n_importance=5)
         sub = grid[3]
-        expected_val = grid.axes[0].values[3]
-        assert torch.allclose(sub.axes[0].values, expected_val.unsqueeze(0))
+        # Int on density collapses it; remaining axis is importance
+        assert len(sub.axes) == 1
+        assert sub.axes[0].label == "importance"
+        assert torch.allclose(sub.axes[0].values, grid.axes[1].values)
 
     def test_slice_axis_values_correct(self):
         grid = _make_grid(n_density=6, n_importance=5)
@@ -253,14 +261,16 @@ class TestGetitemNegativeIndexing:
     def test_negative_int(self):
         grid = _make_grid(n_density=6, n_importance=5)
         sub = grid[-1]
-        assert sub.shape == (1, 5)
-        last_density = grid.axes[0].values[-1:]
-        assert torch.allclose(sub.axes[0].values, last_density)
+        assert isinstance(sub, ModelGrid)
+        assert sub.shape == (5,)
+        # Density axis collapsed; remaining is importance
+        assert sub.axes[0].label == "importance"
 
     def test_negative_int_second_dim(self):
         grid = _make_grid(n_density=6, n_importance=5)
         sub = grid[:, -2]
-        assert sub.shape == (6, 1)
+        assert sub.shape == (6,)
+        assert sub.axes[0].label == "density"
 
     def test_negative_slice_start(self):
         grid = _make_grid(n_density=6, n_importance=5)
@@ -369,8 +379,9 @@ class TestGetitemView:
     def test_int_index_shares_model_objects(self):
         grid = _make_grid(n_density=6, n_importance=5)
         sub = grid[2]
+        # Int collapses density → sub.models is 1D with 5 elements
         for j in range(5):
-            assert sub.models[0, j] is grid.models[2, j]
+            assert sub.models[j] is grid.models[2, j]
 
     def test_subgrid_models_is_numpy_view(self):
         grid = _make_grid(n_density=6, n_importance=5)
@@ -384,15 +395,15 @@ class TestGetitemView:
 
 
 class TestSampleCaching:
-    def test_cache_builds_sample_index(self):
+    def test_build_broadcast_returns_correct_types(self):
         grid = _make_grid(cache=True)
-        assert hasattr(grid, "_unique_distributions")
-        assert hasattr(grid, "_sample_index")
+        broadcasters, broadcast_map = grid._build_broadcast()
+        assert isinstance(broadcasters, list)
+        assert isinstance(broadcast_map, Tensor)
 
-    def test_no_cache_skips_sample_index(self):
+    def test_no_cache_flag(self):
         grid = _make_grid(cache=False)
-        assert not hasattr(grid, "_unique_distributions")
-        assert not hasattr(grid, "_sample_index")
+        assert grid.broadcast_samples is False
 
     def test_all_same_seed_collapses_to_one(self):
         """All models use seed=42 and same density→same distribution hash→one unique."""
@@ -413,17 +424,19 @@ class TestSampleCaching:
             axes=[Axis(label="dummy", values=torch.arange(5, dtype=torch.float32))],
             broadcast_samples=True,
         )
-        assert len(grid._unique_distributions) == 1
-        assert (grid._sample_index == 0).all()
+        broadcasters, broadcast_map = grid._build_broadcast()
+        assert len(broadcasters) == 1
+        assert (broadcast_map == 0).all()
 
     def test_different_densities_different_groups(self):
         grid = _make_1d_grid(n=4, cache=True)
-        n_unique = len(grid._unique_distributions)
-        assert n_unique == 4
+        broadcasters, _ = grid._build_broadcast()
+        assert len(broadcasters) == 4
 
-    def test_sample_index_length_matches_flat_models(self):
+    def test_broadcast_map_length_matches_flat_models(self):
         grid = _make_grid(cache=True)
-        assert len(grid._sample_index) == len(grid.models.ravel())
+        _, broadcast_map = grid._build_broadcast()
+        assert len(broadcast_map) == len(grid.models.ravel())
 
 
 # ── Fitting ──────────────────────────────────────────────────────────────────
@@ -461,11 +474,12 @@ class TestFitting:
             after = m.ae.state_dict()["W"]
             assert not torch.equal(before[i], after), f"Model {i} weights unchanged"
 
-    def test_sample_index_rebuilt_after_fit(self):
+    def test_broadcast_map_stable_after_fit(self):
         grid = _make_grid(n_density=3, n_importance=2, cache=True)
-        idx_before = grid._sample_index.clone()
+        _, map_before = grid._build_broadcast()
         grid.fit(n_epochs=10, batch_size=64)
-        assert grid._sample_index.shape == idx_before.shape
+        _, map_after = grid._build_broadcast()
+        assert map_after.shape == map_before.shape
 
     def test_fit_twice_works(self):
         grid = _make_grid(n_density=3, n_importance=2, cache=True)
@@ -618,7 +632,7 @@ class TestValidation:
                 broadcast_samples=False,
             )
 
-    def test_no_generator_with_cache_raises(self):
+    def test_no_generator_with_cache_warns(self):
         def create_model_no_gen(params: dict, **kwargs) -> ToyModel:
             return ToyModel(
                 distribution=SparseUniform(
@@ -629,7 +643,8 @@ class TestValidation:
                 device=DEVICE,
             )
 
-        with pytest.raises(ValueError, match="generator"):
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
             ModelGrid(
                 create_model_no_gen,
                 axes=[
@@ -637,6 +652,7 @@ class TestValidation:
                 ],
                 broadcast_samples=True,
             )
+            assert any("generator" in str(warning.message).lower() for warning in w)
 
 
 # ── Edge Cases ───────────────────────────────────────────────────────────────
@@ -710,7 +726,8 @@ class TestSampleEveryAndCacheSamplesInteraction:
         the same input batches. Starting from the same weights they must
         converge to identical final weights."""
         grid = _make_shared_dist_grid(n_models=3, cache=True)
-        assert len(grid._unique_distributions) == 1
+        broadcasters, _ = grid._build_broadcast()
+        assert len(broadcasters) == 1
 
         grid.fit(n_epochs=30, batch_size=64, sample_every=5)
 
@@ -729,8 +746,8 @@ class TestSampleEveryAndCacheSamplesInteraction:
         grid_no_cache = _make_shared_dist_grid(n_models=3, cache=False)
         grid_no_cache.fit(n_epochs=20, batch_size=64, sample_every=5)
 
-        # Without cache, no _sync_generators call → no _unique_distributions attr
-        assert not hasattr(grid_no_cache, "_unique_distributions")
+        # Without cache, no _sync_generators call → broadcast_samples is False
+        assert grid_no_cache.broadcast_samples is False
 
         grid_cache = _make_shared_dist_grid(n_models=3, cache=True)
         grid_cache.fit(n_epochs=20, batch_size=64, sample_every=5)
@@ -748,7 +765,8 @@ class TestSampleEveryAndCacheSamplesInteraction:
         different final weights even with broadcast_samples=True."""
         grid = _make_1d_grid(n=3, cache=True)
         # Different densities → different unique distributions
-        assert len(grid._unique_distributions) == 3
+        broadcasters, _ = grid._build_broadcast()
+        assert len(broadcasters) == 3
 
         grid.fit(n_epochs=40, batch_size=64, sample_every=5)
 
@@ -875,7 +893,8 @@ class TestSampleEveryAndCacheSamplesInteraction:
         # so all 12 models have the same p_active for a given density row.
         # With _make_create_model, all models use seed=42, but p_active differs
         # per density → n_density unique distributions.
-        n_unique = len(grid._unique_distributions)
+        broadcasters, _ = grid._build_broadcast()
+        n_unique = len(broadcasters)
         n_total = grid.models.size
         assert n_unique <= n_total, (
             f"Dedup should not create MORE distributions than models "
@@ -920,27 +939,28 @@ class TestSampleEveryAndCacheSamplesInteraction:
 
     # ── broadcast_samples with 2D grid + sample_every ────────────────────────
 
-    def test_2d_grid_cache_sample_index_preserved(self):
-        """In a 2D grid, the sample index must cover all flattened models
-        after training with sample_every."""
+    def test_2d_grid_broadcast_map_covers_all_models(self):
+        """In a 2D grid, the broadcast map must cover all flattened models
+        before and after training."""
         grid = _make_grid(n_density=3, n_importance=2, cache=True)
         n_flat = grid.models.size
-        assert len(grid._sample_index) == n_flat
+        _, broadcast_map = grid._build_broadcast()
+        assert len(broadcast_map) == n_flat
 
         grid.fit(n_epochs=10, batch_size=64, sample_every=3)
 
-        # After fit, sample index rebuilt and still covers all models
-        assert len(grid._sample_index) == n_flat
+        _, broadcast_map_after = grid._build_broadcast()
+        assert len(broadcast_map_after) == n_flat
 
     def test_2d_grid_unique_distributions_count_stable(self):
         """The number of unique distributions should not change after fit."""
         grid = _make_grid(n_density=3, n_importance=2, cache=True)
-        n_unique_before = len(grid._unique_distributions)
+        broadcasters_before, _ = grid._build_broadcast()
 
         grid.fit(n_epochs=10, batch_size=64, sample_every=3)
 
-        n_unique_after = len(grid._unique_distributions)
-        assert n_unique_after == n_unique_before, (
-            f"Unique distribution count changed from {n_unique_before} "
-            f"to {n_unique_after} after fit"
+        broadcasters_after, _ = grid._build_broadcast()
+        assert len(broadcasters_after) == len(broadcasters_before), (
+            f"Unique distribution count changed from {len(broadcasters_before)} "
+            f"to {len(broadcasters_after)} after fit"
         )

@@ -122,15 +122,13 @@ class TestSaveModels:
         for m in data.ravel():
             assert isinstance(m, ToyModel)
 
-    def test_empty_path_raises(self):
+    def test_empty_path_generates_default(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
         grid = _make_grid()
-        with pytest.raises(TypeError, match="non-empty string"):
-            grid.save_models("")
-
-    def test_non_string_path_raises(self):
-        grid = _make_grid()
-        with pytest.raises(TypeError, match="non-empty string"):
-            grid.save_models(123)
+        grid.save_models("")
+        # Should create a file with default naming in cwd
+        pkl_files = list(tmp_path.glob("model_grid*.pkl"))
+        assert len(pkl_files) == 1
 
     def test_overwrite_existing_file(self, tmp_path):
         grid = _make_grid()
@@ -245,9 +243,9 @@ class TestLoadModelsCaching:
             warnings.simplefilter("ignore")
             grid2.load_models(path)
 
-        assert hasattr(grid2, "_unique_distributions")
-        assert hasattr(grid2, "_sample_index")
-        assert len(grid2._sample_index) == grid2.models.size
+        broadcasters, broadcast_map = grid2._build_broadcast()
+        assert len(broadcasters) > 0
+        assert len(broadcast_map) == grid2.models.size
 
     def test_no_cache_skips_rebuild(self, tmp_path):
         grid = _make_grid(cache=False)
@@ -327,34 +325,28 @@ class TestLoadModelsWarnings:
 # ── load_models: print output ────────────────────────────────────────────────
 
 
-class TestLoadModelsPrintOutput:
-    def test_prints_confirmation(self, tmp_path, capsys):
+class TestLoadModelsWarnings:
+    def test_warns_about_axes(self, tmp_path):
         grid = _make_grid(n_density=4, n_importance=3)
         path = str(tmp_path / "grid.pkl")
         grid.save_models(path)
 
         grid2 = _make_grid(n_density=4, n_importance=3)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
             grid2.load_models(path)
+        assert any(str(path) in str(warning.message) for warning in w)
 
-        output = capsys.readouterr().out
-        assert "Models loaded" in output
-        assert "(4, 3)" in output
-        assert "12" in output
-
-    def test_print_includes_path(self, tmp_path, capsys):
+    def test_warn_includes_path(self, tmp_path):
         grid = _make_grid()
         path = str(tmp_path / "my_grid.pkl")
         grid.save_models(path)
 
         grid2 = _make_grid()
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
             grid2.load_models(path)
-
-        output = capsys.readouterr().out
-        assert "my_grid.pkl" in output
+        assert any("my_grid.pkl" in str(warning.message) for warning in w)
 
 
 # ── load_models: type validation ─────────────────────────────────────────────
