@@ -61,6 +61,28 @@ class Distribution(ABC):
     def _defines_generators(self) -> bool:
         return self.generator is not None
 
+    def sync_generators(
+        self, generators: torch.Generator | list[torch.Generator]
+    ) -> None:
+        """Set this distribution's generator state from a source generator.
+
+        Used by ModelGrid to keep equivalent distributions synchronized
+        after sample broadcasting.
+
+        Args:
+            generators: A single generator whose state is copied into
+                ``self.generator``. A list is not accepted for base
+                Distribution (only DistributionStack supports lists).
+        """
+        if isinstance(generators, list):
+            if len(generators) != 1:
+                raise ValueError(
+                    f"Base Distribution expects a single generator, got {len(generators)}"
+                )
+            generators = generators[0]
+        if self.generator is not None:
+            self.generator.set_state(generators.get_state())
+
     def _rand(self, *shape) -> Tensor:
         """Random uniform generator respecting the self.generator"""
         return torch.rand(*shape, device=self.device, generator=self.generator)
@@ -195,6 +217,27 @@ class DistributionStack(Distribution):
     @property
     def _defines_generators(self) -> bool:
         return all(dist._defines_generators for dist in self.distributions)
+
+    def sync_generators(
+        self, generators: torch.Generator | list[torch.Generator]
+    ) -> None:
+        """Sync generators into each child distribution.
+
+        Args:
+            generators: If a single generator, every child distribution
+                receives the same state. If a list, must have one generator
+                per child distribution.
+        """
+        if isinstance(generators, list):
+            if len(generators) != len(self.distributions):
+                raise ValueError(
+                    f"Expected {len(self.distributions)} generators, got {len(generators)}"
+                )
+            for child, gen in zip(self.distributions, generators):
+                child.sync_generators(gen)
+        else:
+            for child in self.distributions:
+                child.sync_generators(generators)
 
     def sample(self, batch_size):
         if self.sampling_mode == "independent":

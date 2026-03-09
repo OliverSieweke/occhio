@@ -313,7 +313,8 @@ class ModelGrid:
                 broadcast_map: a tensor that, for each model (flattened), gives the index
                                   into broadcasters for its distribution.
 
-        hash_to_idx maps each unique distribution to its equivalent broadcaster without comparing distribution objects directly.
+        Generator-less distributions are never grouped together because their
+        sampling state cannot be synchronized — each gets its own broadcaster slot.
         """
         flattened_models: NDArray[np.object_] = self.models.ravel()
         # Maps each unique distribution hash to its assigned broadcaster index
@@ -323,17 +324,36 @@ class ModelGrid:
 
         for model in flattened_models:
             distribution: Distribution = model.distribution
-            distribution_hash: str = distribution._equivalence_hash
-            if distribution_hash not in hash_to_idx:
-                hash_to_idx[distribution_hash] = len(broadcasters)
+            # Generator-less distributions can't be synced, so each gets its
+            # own broadcaster slot regardless of hash equivalence.
+            if distribution._defines_generators:
+                distribution_hash: str = distribution._equivalence_hash
+                if distribution_hash not in hash_to_idx:
+                    hash_to_idx[distribution_hash] = len(broadcasters)
+                    broadcasters.append(distribution)
+                broadcast_map.append(hash_to_idx[distribution_hash])
+            else:
+                broadcast_map.append(len(broadcasters))
                 broadcasters.append(distribution)
-            # hash_to_idx gives the broadcaster index for this model's distribution
-            broadcast_map.append(hash_to_idx[distribution_hash])
 
         device: torch.device | str = flattened_models[0].ae.device
         return broadcasters, torch.tensor(
             broadcast_map, dtype=torch.long, device=device
         )
+
+    @staticmethod
+    def _collect_generators(dist: Distribution) -> list[torch.Generator]:
+        """Collect all generators from a distribution (recursing into DistributionStack)."""
+        from occhio.distributions.base import DistributionStack
+
+        if isinstance(dist, DistributionStack):
+            gens: list[torch.Generator] = []
+            for child in dist.distributions:
+                gens.extend(ModelGrid._collect_generators(child))
+            return gens
+        if dist.generator is not None:
+            return [dist.generator]
+        return []
 
     def _sync_generators(
         self, broadcasters: list[Distribution], broadcast_map: Tensor
@@ -341,14 +361,17 @@ class ModelGrid:
         """Copy each broadcaster distribution's generator state to all
         equivalent distributions so they stay synchronized."""
         flattened_models: NDArray[np.object_] = self.models.ravel()
-        broadcaster_states: list[Tensor] = [
-            dist.generator.get_state() for dist in broadcasters
+
+        # Pre-collect generators from each broadcaster
+        broadcaster_gens: list[list[torch.Generator]] = [
+            self._collect_generators(dist) for dist in broadcasters
         ]
 
         for model_idx, broadcaster_idx in enumerate(broadcast_map.tolist()):
             dist: Distribution = flattened_models[model_idx].distribution
-            if dist is not broadcasters[broadcaster_idx]:
-                dist.generator.set_state(broadcaster_states[broadcaster_idx])
+            gens = broadcaster_gens[broadcaster_idx]
+            if dist is not broadcasters[broadcaster_idx] and gens:
+                dist.sync_generators(gens if len(gens) > 1 else gens[0])
 
     def _can_vectorize_loss(self) -> bool:
         flattened_models = self.models.ravel()
