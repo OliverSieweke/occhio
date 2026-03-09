@@ -61,8 +61,16 @@ class Distribution(ABC):
     def _defines_generators(self) -> bool:
         return self.generator is not None
 
+    def collect_generators(self) -> list[torch.Generator | None]:
+        """Return this distribution's generators as a list.
+
+        Returns:
+            Single-element list containing ``self.generator`` (which may be ``None``).
+        """
+        return [self.generator]
+
     def sync_generators(
-        self, generators: torch.Generator | list[torch.Generator]
+        self, generators: torch.Generator | None | list[torch.Generator | None]
     ) -> None:
         """Set this distribution's generator state from a source generator.
 
@@ -71,8 +79,9 @@ class Distribution(ABC):
 
         Args:
             generators: A single generator whose state is copied into
-                ``self.generator``. A list is not accepted for base
-                Distribution (only DistributionStack supports lists).
+                ``self.generator``, or ``None`` (no-op). A list is not
+                accepted for base Distribution (only DistributionStack
+                supports lists).
         """
         if isinstance(generators, list):
             if len(generators) != 1:
@@ -80,8 +89,9 @@ class Distribution(ABC):
                     f"Base Distribution expects a single generator, got {len(generators)}"
                 )
             generators = generators[0]
-        if self.generator is not None:
-            self.generator.set_state(generators.get_state())
+        if generators is None or self.generator is None:
+            return
+        self.generator.set_state(generators.get_state())
 
     def _rand(self, *shape) -> Tensor:
         """Random uniform generator respecting the self.generator"""
@@ -218,26 +228,35 @@ class DistributionStack(Distribution):
     def _defines_generators(self) -> bool:
         return all(dist._defines_generators for dist in self.distributions)
 
+    def collect_generators(self) -> list[torch.Generator | None]:
+        """Return one generator per child distribution.
+
+        Returns:
+            List of length ``len(self.distributions)``, where each element is
+            the child's generator (or ``None`` if that child has no generator).
+        """
+        return [dist.generator for dist in self.distributions]
+
     def sync_generators(
-        self, generators: torch.Generator | list[torch.Generator]
+        self, generators: torch.Generator | None | list[torch.Generator | None]
     ) -> None:
         """Sync generators into each child distribution.
 
         Args:
-            generators: If a single generator, every child distribution
-                receives the same state. If a list, must have one generator
-                per child distribution.
+            generators: If a single generator (or ``None``), every child
+                receives the same value. If a list, must have one entry per
+                child distribution; ``None`` entries are skipped.
         """
         if isinstance(generators, list):
             if len(generators) != len(self.distributions):
                 raise ValueError(
                     f"Expected {len(self.distributions)} generators, got {len(generators)}"
                 )
-            for child, gen in zip(self.distributions, generators):
-                child.sync_generators(gen)
+            for dist, gen in zip(self.distributions, generators):
+                dist.sync_generators(gen)
         else:
-            for child in self.distributions:
-                child.sync_generators(generators)
+            for dist in self.distributions:
+                dist.sync_generators(generators)
 
     def sample(self, batch_size):
         if self.sampling_mode == "independent":

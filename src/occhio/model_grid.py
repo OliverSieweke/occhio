@@ -26,7 +26,7 @@ from torch.optim import AdamW
 from tqdm import tqdm
 
 from occhio.autoencoder import AutoEncoderBase
-from occhio.distributions.base import Distribution, DistributionStack
+from occhio.distributions.base import Distribution
 from occhio.toy_model import ToyModel
 
 
@@ -341,27 +341,6 @@ class ModelGrid:
             broadcast_map, dtype=torch.long, device=device
         )
 
-    @staticmethod
-    def _collect_generators(dist: Distribution) -> list[torch.Generator]:
-        """Collect generators from a distribution's direct children.
-
-        For a base Distribution, returns a single-element list with its generator.
-        For a DistributionStack, returns one generator per direct child (not
-        recursively flattened), matching the contract of
-        ``DistributionStack.sync_generators`` which expects one generator per
-        child distribution.
-        """
-
-        if isinstance(dist, DistributionStack):
-            gens: list[torch.Generator] = []
-            for child in dist.distributions:
-                if child.generator is not None:
-                    gens.append(child.generator)
-            return gens
-        if dist.generator is not None:
-            return [dist.generator]
-        return []
-
     def _sync_generators(
         self, broadcasters: list[Distribution], broadcast_map: Tensor
     ) -> None:
@@ -370,14 +349,14 @@ class ModelGrid:
         flattened_models: NDArray[np.object_] = self.models.ravel()
 
         # Pre-collect generators from each broadcaster
-        broadcaster_gens: list[list[torch.Generator]] = [
-            self._collect_generators(dist) for dist in broadcasters
+        broadcaster_gens: list[list[torch.Generator | None]] = [
+            dist.collect_generators() for dist in broadcasters
         ]
 
         for model_idx, broadcaster_idx in enumerate(broadcast_map.tolist()):
             dist: Distribution = flattened_models[model_idx].distribution
             gens = broadcaster_gens[broadcaster_idx]
-            if dist is not broadcasters[broadcaster_idx] and gens:
+            if dist is not broadcasters[broadcaster_idx]:
                 dist.sync_generators(gens if len(gens) > 1 else gens[0])
 
     def _can_vectorize_loss(self) -> bool:
