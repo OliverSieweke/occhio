@@ -33,11 +33,11 @@ from occhio.toy_model import ToyModel
 
 # %%
 DEVICE = "mps"
-N_EPOCHS = 20_000
+N_EPOCHS = 25_000
 BATCH_SIZE = 512
 EVAL_SAMPLES = 2**13
 
-M_VALUES = [3, 4, 6, 9, 13, 19, 28, 42, 63, 90, 100]
+M_VALUES = [3, 4, 6, 9, 13, 19, 28, 42, 63, 90, 100, 130]
 
 
 def create_model(
@@ -65,6 +65,33 @@ def estimate_loss(tm: ToyModel) -> float:
         return torch.mean(torch.sum((x - x_hat) ** 2, dim=-1)).item()
 
 
+def estimate_metrics(tm: ToyModel) -> dict:
+    """Return full loss, reconstruction loss (unit vectors), interference loss, and frobenius norm squared."""
+    with torch.no_grad():
+        # Full loss on samples
+        x = tm.distribution.sample(EVAL_SAMPLES).to(tm.device)
+        x_hat = tm.ae(x)[0]
+        full_loss = tm.ae.loss(x, x_hat, tm.importances).item()
+
+        # Reconstruction loss: pass unit vectors through the model
+        eye = torch.eye(tm.n_features, device=tm.device)
+        eye_hat = tm.ae(eye)[0]
+        recon_loss = tm.ae.loss(eye, eye_hat, tm.importances).item()
+
+        # Interference = full - reconstruction
+        interference_loss = full_loss - recon_loss
+
+        # Frobenius norm squared ~ number of features represented
+        frob_sq = tm.frobenius_norm_squared.item()
+
+    return {
+        "full_loss": full_loss,
+        "recon_loss": recon_loss,
+        "interference_loss": interference_loss,
+        "frobenius_norm_sq": frob_sq,
+    }
+
+
 # %% --- Step 1: Baseline (m=2, N=5) ---
 print("Training baseline: m=2, N=5")
 baseline = create_model(n_features=5, n_hidden=2)
@@ -77,16 +104,21 @@ print(f"Target loss: {target_loss:.6f}")
 # to bracket the answer, then binary search within that bracket.
 
 
-def train_and_eval(n: int, m: int) -> float:
+def train_and_eval(n: int, m: int) -> tuple[float, dict]:
     tm = create_model(n_features=n, n_hidden=m)
     tm.fit(N_EPOCHS, batch_size=BATCH_SIZE, track_losses=False)
     loss = estimate_loss(tm)
-    print(f"  N={n:3d}  loss={loss:.6f}  {'OK' if loss <= target_loss else 'EXCEEDED'}")
-    return loss
+    metrics = estimate_metrics(tm)
+    print(
+        f"  N={n:3d}  loss={loss:.6f}  frob²={metrics['frobenius_norm_sq']:.2f}  "
+        f"recon={metrics['recon_loss']:.6f}  interf={metrics['interference_loss']:.6f}  "
+        f"{'OK' if loss <= target_loss else 'EXCEEDED'}"
+    )
+    return loss, metrics
 
 
 results: dict[int, int | None] = {}
-all_evals: list[dict] = []  # records every (m, n, loss) evaluated
+all_evals: list[dict] = []  # records every (m, n, loss, metrics) evaluated
 prev_best_n = 5  # baseline N; larger m can only do at least as well
 
 # %%
@@ -94,12 +126,12 @@ for m in M_VALUES:
     print(f"\nm={m}: searching N...")
 
     def train_and_eval_recording(n: int, m: int = m) -> float:
-        loss = train_and_eval(n, m)
-        all_evals.append({"m": m, "n": n, "loss": loss})
+        loss, metrics = train_and_eval(n, m)
+        all_evals.append({"m": m, "n": n, "loss": loss, **metrics})
         return loss
 
     # Phase 1: exponential expansion to find an upper bound
-    lo = max(prev_best_n, m + 1)
+    lo = max(prev_best_n + 1, m + 1)
     hi = lo
     while train_and_eval_recording(hi) <= target_loss:
         lo = hi
@@ -120,9 +152,13 @@ for m in M_VALUES:
 # %%
 print("\n=== Results ===")
 print(f"Target loss (m=2, N=5): {target_loss:.6f}")
-print(f"{'m':>4}  {'max N':>6}")
+print(f"{'m':>4}  {'max N':>6}  {'frob²':>8}  {'recon':>10}  {'interf':>10}")
 for m, max_n in results.items():
-    print(f"{m:>4}  {str(max_n):>6}")
+    best = next((e for e in all_evals if e["m"] == m and e["n"] == max_n), None)
+    frob = f"{best['frobenius_norm_sq']:.2f}" if best else "N/A"
+    recon = f"{best['recon_loss']:.6f}" if best else "N/A"
+    interf = f"{best['interference_loss']:.6f}" if best else "N/A"
+    print(f"{m:>4}  {str(max_n):>6}  {frob:>8}  {recon:>10}  {interf:>10}")
 
 # %% --- Plot: loss landscape across m and N ---
 fig = go.Figure()
@@ -150,8 +186,8 @@ fig.add_hline(
     y=target_loss,
     line_dash="dash",
     line_color="black",
-    annotation_text="target loss",
-    annotation_position="bottom right",
+    # annotation_text="target loss",
+    # annotation_position="bottom right",
 )
 
 # Mark the best N per m
