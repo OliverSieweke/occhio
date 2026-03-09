@@ -26,7 +26,7 @@ from torch.optim import AdamW
 from tqdm import tqdm
 
 from occhio.autoencoder import AutoEncoderBase
-from occhio.distributions.base import Distribution
+from occhio.distributions.base import Distribution, DistributionStack
 from occhio.toy_model import ToyModel
 
 
@@ -343,13 +343,20 @@ class ModelGrid:
 
     @staticmethod
     def _collect_generators(dist: Distribution) -> list[torch.Generator]:
-        """Collect all generators from a distribution (recursing into DistributionStack)."""
-        from occhio.distributions.base import DistributionStack
+        """Collect generators from a distribution's direct children.
+
+        For a base Distribution, returns a single-element list with its generator.
+        For a DistributionStack, returns one generator per direct child (not
+        recursively flattened), matching the contract of
+        ``DistributionStack.sync_generators`` which expects one generator per
+        child distribution.
+        """
 
         if isinstance(dist, DistributionStack):
             gens: list[torch.Generator] = []
             for child in dist.distributions:
-                gens.extend(ModelGrid._collect_generators(child))
+                if child.generator is not None:
+                    gens.append(child.generator)
             return gens
         if dist.generator is not None:
             return [dist.generator]

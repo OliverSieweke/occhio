@@ -309,6 +309,13 @@ class DistributionStack(Distribution):
         if not distributions:
             raise ValueError("\ndistributions list cannot be empty")
 
+        for dist in distributions:
+            if isinstance(dist, DistributionStack):
+                raise TypeError(
+                    "Nesting DistributionStack inside another DistributionStack is not "
+                    "supported. Flatten all sub-distributions into a single stack."
+                )
+
         if sampling_mode == "sparse" and p_meta is None:
             raise ValueError("\np_meta must be provided when sampling_mode='sparse'")
 
