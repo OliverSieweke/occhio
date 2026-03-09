@@ -1,603 +1,909 @@
-# ABOUTME: Law 1 experiment: correlation-interference relationship in CorrelatedPairs
-# ABOUTME: Trains ModelGrids to extract Gram metrics and validate monotonic increase with correlation
-
+# ABOUTME: Law 1 experiment: correlation drives within-pair interference
+# ABOUTME: Trains ModelGrids over (correlation, density, seed) and generates 8 diagnostic figures
 # %%
-# Cell 1: Imports
-
 import os
 import torch
+from torch.distributions import Beta
+from torch import Tensor
 import numpy as np
 import plotly.graph_objects as go
-import plotly.express as px
 from typing import Any
 
-from occhio import ToyModel, ModelGrid
-from occhio.model_grid import Axis
+from occhio.toy_model import ToyModel
+from occhio.model_grid import ModelGrid, Axis
 from occhio.autoencoder import TiedLinearRelu
-from occhio.distributions import CorrelatedPairs, AnticorrelatedPairs
-
-print("✓ Imports successful")
-
-# %%
-# Cell 2: Model factories
-
-
-def create_model_experiment_a(params: dict[str, Any]) -> ToyModel:
-    """Factory for Experiment A models (n_features=6, n_hidden=2)."""
-    n_features = 6
-    correlation = params["Correlation"]
-    density = params["Density"]
-
-    dist = CorrelatedPairs(
-        n_features=n_features,
-        correlation=correlation,
-        density=density,
-        generator=torch.Generator().manual_seed(0),
-    )
-
-    ae = TiedLinearRelu(
-        n_features=n_features,
-        n_hidden=2,
-        generator=torch.Generator().manual_seed(7),
-    )
-
-    device = "mps" if torch.backends.mps.is_available() else "cpu"
-    return ToyModel(distribution=dist, ae=ae, device=device)
-
-
-def create_model_experiment_b(params: dict[str, Any]) -> ToyModel:
-    """Factory for Experiment B models (n_features=10, n_hidden=3)."""
-    n_features = 10
-    correlation = params["Correlation"]
-    density = params["Density"]
-
-    dist = CorrelatedPairs(
-        n_features=n_features,
-        correlation=correlation,
-        density=density,
-        generator=torch.Generator().manual_seed(0),
-    )
-
-    ae = TiedLinearRelu(
-        n_features=n_features,
-        n_hidden=3,
-        generator=torch.Generator().manual_seed(7),
-    )
-
-    device = "mps" if torch.backends.mps.is_available() else "cpu"
-    return ToyModel(distribution=dist, ae=ae, device=device)
-
-
-def create_model_experiment_c(params: dict[str, Any]) -> ToyModel:
-    """Factory for Experiment C models (anticorrelated control)."""
-    n_features = 6
-    density = params["Density"]
-
-    dist = AnticorrelatedPairs(
-        n_features=n_features,
-        p_active=density,
-        generator=torch.Generator().manual_seed(0),
-    )
-
-    ae = TiedLinearRelu(
-        n_features=n_features,
-        n_hidden=2,
-        generator=torch.Generator().manual_seed(7),
-    )
-
-    device = "mps" if torch.backends.mps.is_available() else "cpu"
-    return ToyModel(distribution=dist, ae=ae, device=device)
-
-
-print("✓ Model factories defined")
+from occhio.distributions import (
+    Distribution,
+    CorrelatedPairs,
+    AnticorrelatedPairs,
+    SparseUniform,
+    DistributionStack,
+)
 
 # %%
-# Cell 3: Metric extraction functions
+# ── Constants ────────────────────────────────────────────────────────────────
+DEVICE = "mps"
+N_HIDDEN = 3
+N_FEATURES = 9
+N_EPOCHS = 20_000
+BATCH_SIZE = 256
+LEARNING_RATE = 3e-4
+WEIGHT_DECAY = 0.05
+DIST_SEED = 7
+
+CORR_VALUES = torch.tensor(
+    [0.01, 0.05, 0.1, 0.2, 0.35, 0.5, 0.65, 0.8, 0.9, 0.95, 0.99, 1.0]
+)
+DENS_VALUES: Tensor = torch.cat(
+    [
+        torch.logspace(np.log10(0.01), np.log10(0.5), 12),
+        torch.tensor([0.6, 0.7, 0.8, 0.9]),
+    ]
+)
+RANDOM_SEEDS = torch.arange(start=0, end=80, step=8)
+LOSS_EVAL_BATCH = 1024
+FIGURES_DIR = "figures"
 
 
-def extract_metrics(grid: ModelGrid, n_features: int) -> dict[str, np.ndarray]:
-    """Extract within-pair and cross-pair cosines from trained grid."""
-    n_pairs = n_features // 2
+# %%
+# ── Model factories ──────────────────────────────────────────────────────────
+def create_correlated(params: dict[str, Any]) -> ToyModel:
+    """Features 0-1 are CorrelatedPairs, rest SparseUniform."""
+    c = params["Correlation"]
+    d = params["Density"]
+    seed = int(params["Seed"])
+    dists: list[Distribution] = [
+        CorrelatedPairs(
+            2,
+            correlation=c,
+            density=d,
+            generator=torch.Generator(device=DEVICE).manual_seed(DIST_SEED),
+        ),
+    ]
+    if N_FEATURES > 2:
+        dists.append(
+            SparseUniform(
+                N_FEATURES - 2,
+                p_active=d,
+                generator=torch.Generator(device=DEVICE).manual_seed(DIST_SEED),
+            )
+        )
+    return ToyModel(
+        distribution=DistributionStack(dists),
+        ae=TiedLinearRelu(
+            n_features=N_FEATURES,
+            n_hidden=N_HIDDEN,
+            device=DEVICE,
+            generator=torch.Generator(device=DEVICE).manual_seed(seed),
+        ),
+        importances=0.996 ** torch.arange(N_FEATURES),
+    )
+
+
+def create_anticorrelated(params: dict[str, Any]) -> ToyModel:
+    """Features 0-1 are AnticorrelatedPairs, rest SparseUniform."""
+    d = params["Density"]
+    seed = int(params["Seed"])
+    # p_active=2*d so each individual feature fires with prob d
+    dists: list[Distribution] = [
+        AnticorrelatedPairs(
+            2,
+            p_active=2 * d,
+            generator=torch.Generator(device=DEVICE).manual_seed(DIST_SEED),
+        ),
+    ]
+    if N_FEATURES > 2:
+        dists.append(
+            SparseUniform(
+                N_FEATURES - 2,
+                p_active=d,
+                generator=torch.Generator(device=DEVICE).manual_seed(DIST_SEED),
+            )
+        )
+
+    return ToyModel(
+        distribution=DistributionStack(dists),
+        ae=TiedLinearRelu(
+            n_features=N_FEATURES,
+            n_hidden=N_HIDDEN,
+            device=DEVICE,
+            generator=torch.Generator(device=DEVICE).manual_seed(seed),
+        ),
+        importances=0.996 ** torch.arange(N_FEATURES),
+    )
+
+
+def create_baseline(params: dict[str, Any]) -> ToyModel:
+    """All features are independent SparseUniform."""
+    d = params["Density"]
+    seed = int(params["Seed"])
+    return ToyModel(
+        distribution=SparseUniform(
+            N_FEATURES,
+            p_active=d,
+            generator=torch.Generator(device=DEVICE).manual_seed(DIST_SEED),
+        ),
+        ae=TiedLinearRelu(
+            n_features=N_FEATURES,
+            n_hidden=N_HIDDEN,
+            device=DEVICE,
+            generator=torch.Generator(device=DEVICE).manual_seed(seed),
+        ),
+        importances=0.996 ** torch.arange(N_FEATURES),
+    )
+
+
+Model1 = create_correlated(params={"Correlation": 0.0, "Density": 0.1, "Seed": 0})
+print(Model1.distribution.sample(10))
+print(Model1.distribution.device)
+print(Model1.distribution.generator)
+print(vars(Model1.distribution))
+
+
+# %%
+# ── Metric extraction ────────────────────────────────────────────────────────
+def _eval_loss(model: ToyModel) -> float:
+    """Evaluate loss on a fresh batch without gradients."""
+    with torch.no_grad():
+        raw = model.distribution.sample(LOSS_EVAL_BATCH)
+        if isinstance(raw, tuple):
+            x = raw[0].to(model.ae.device)
+        else:
+            raw = raw.to(model.ae.device)
+            x = raw
+        x_hat = model.ae(x)[0]
+        return model.ae.loss(raw, x_hat, model.importances).item()
+
+
+def extract_metrics(grid: ModelGrid) -> dict[str, np.ndarray]:
+    """Extract within-pair cos(W0,W1), cross-pair mean |cos|, feature norms, and losses."""
     shape = grid.shape
-
     within_pair_cos = np.zeros(shape)
     cross_pair_cos_mean = np.zeros(shape)
     feature_norms_mean = np.zeros(shape)
-    feature_dims_mean = np.zeros(shape)
+    losses = np.zeros(shape)
 
     for idx in np.ndindex(shape):
         model = grid.models[idx]
         interf = model.interferences.cpu().numpy()
 
-        # Within-pair cosines (extract diagonal elements for each pair)
-        within_pair_vals = []
-        for pair_idx in range(n_pairs):
-            i, j = 2 * pair_idx, 2 * pair_idx + 1
-            within_pair_vals.append(interf[i, j])
-        within_pair_cos[idx] = np.mean(within_pair_vals)
+        within_pair_cos[idx] = interf[0, 1]
 
-        # Cross-pair cosines (all inter-pair interactions)
-        cross_pair_vals = []
-        for i in range(n_features):
-            for j in range(n_features):
-                pair_i, pair_j = i // 2, j // 2
-                if pair_i != pair_j and i != j:
-                    cross_pair_vals.append(abs(interf[i, j]))
-        cross_pair_cos_mean[idx] = np.mean(cross_pair_vals) if cross_pair_vals else 0.0
-
-        # Feature norms and dimensionalities
+        cross_vals = []
+        for i in range(N_FEATURES):
+            for j in range(i + 1, N_FEATURES):
+                if i == 0 and j == 1:
+                    continue
+                cross_vals.append(abs(interf[i, j]))
+        cross_pair_cos_mean[idx] = np.mean(cross_vals) if cross_vals else 0.0
         feature_norms_mean[idx] = model.feature_norms.mean().item()
-        feature_dims_mean[idx] = model.feature_dimensionalities.mean().item()
+        losses[idx] = _eval_loss(model)
 
     return {
         "within_pair_cos": within_pair_cos,
         "cross_pair_cos_mean": cross_pair_cos_mean,
         "feature_norms_mean": feature_norms_mean,
-        "feature_dims_mean": feature_dims_mean,
+        "losses": losses,
     }
 
 
-def extract_metrics_anticorr(grid: ModelGrid, n_features: int) -> dict[str, np.ndarray]:
-    """Extract metrics for anticorrelated control (1D grid)."""
-    n_pairs = n_features // 2
+def compute_losses(grid: ModelGrid) -> np.ndarray:
+    """Compute per-model eval loss for a 2D grid (density, seed)."""
     shape = grid.shape
+    losses = np.zeros(shape)
+    for idx in np.ndindex(shape):
+        losses[idx] = _eval_loss(grid.models[idx])
+    return losses
 
-    within_pair_cos = np.zeros(shape)
-    cross_pair_cos_mean = np.zeros(shape)
 
+def exclude_highest_loss_heatmap(metric: np.ndarray, losses: np.ndarray) -> np.ndarray:
+    """Average metric over seeds, excluding the seed with highest loss per (corr, density).
+
+    Args:
+        metric: shape (n_corr, n_dens, n_seeds)
+        losses: shape (n_corr, n_dens, n_seeds)
+    Returns:
+        shape (n_corr, n_dens) — mean over remaining seeds
+    """
+    worst = losses.argmax(axis=2)  # (n_corr, n_dens)
+    n_corr, n_dens, n_seeds = metric.shape
+    result = np.zeros((n_corr, n_dens))
+    for i in range(n_corr):
+        for j in range(n_dens):
+            mask = np.ones(n_seeds, dtype=bool)
+            mask[worst[i, j]] = False
+            result[i, j] = metric[i, j, mask].mean()
+    return result
+
+
+def exclude_highest_loss_linegraph_3d(
+    metric_3d: np.ndarray, losses_3d: np.ndarray
+) -> np.ndarray:
+    """Exclude worst seed per density from a 3D metric array.
+
+    For each density, sum losses across all correlations per seed, find the
+    worst seed, and remove it from all correlation points.
+
+    Args:
+        metric_3d: shape (n_corr, n_dens, n_seeds)
+        losses_3d: shape (n_corr, n_dens, n_seeds)
+    Returns:
+        shape (n_corr, n_dens, n_seeds-1)
+    """
+    n_corr, n_dens, n_seeds = metric_3d.shape
+    seed_loss_by_density = losses_3d.sum(axis=0)  # (n_dens, n_seeds)
+    worst_per_density = seed_loss_by_density.argmax(axis=1)  # (n_dens,)
+    result = np.zeros((n_corr, n_dens, n_seeds - 1))
+    for d in range(n_dens):
+        mask = np.ones(n_seeds, dtype=bool)
+        mask[worst_per_density[d]] = False
+        result[:, d, :] = metric_3d[:, d, mask]
+    return result
+
+
+def exclude_highest_loss_linegraph_2d(
+    metric_2d: np.ndarray, losses_2d: np.ndarray
+) -> np.ndarray:
+    """Exclude worst seed per density from a 2D metric array.
+
+    Args:
+        metric_2d: shape (n_dens, n_seeds)
+        losses_2d: shape (n_dens, n_seeds)
+    Returns:
+        shape (n_dens, n_seeds-1)
+    """
+    n_dens, n_seeds = metric_2d.shape
+    worst = losses_2d.argmax(axis=1)  # (n_dens,)
+    result = np.zeros((n_dens, n_seeds - 1))
+    for d in range(n_dens):
+        mask = np.ones(n_seeds, dtype=bool)
+        mask[worst[d]] = False
+        result[d, :] = metric_2d[d, mask]
+    return result
+
+
+def extract_within_pair_cos(grid: ModelGrid) -> np.ndarray:
+    """Extract just within-pair cos(W0,W1)."""
+    shape = grid.shape
+    result = np.zeros(shape)
     for idx in np.ndindex(shape):
         model = grid.models[idx]
         interf = model.interferences.cpu().numpy()
+        result[idx] = interf[0, 1]
+    return result
 
-        # Within-pair cosines
-        within_pair_vals = []
-        for pair_idx in range(n_pairs):
-            i, j = 2 * pair_idx, 2 * pair_idx + 1
-            within_pair_vals.append(interf[i, j])
-        within_pair_cos[idx] = np.mean(within_pair_vals)
-
-        # Cross-pair cosines
-        cross_pair_vals = []
-        for i in range(n_features):
-            for j in range(n_features):
-                pair_i, pair_j = i // 2, j // 2
-                if pair_i != pair_j and i != j:
-                    cross_pair_vals.append(abs(interf[i, j]))
-        cross_pair_cos_mean[idx] = np.mean(cross_pair_vals) if cross_pair_vals else 0.0
-
-    return {
-        "within_pair_cos": within_pair_cos,
-        "cross_pair_cos_mean": cross_pair_cos_mean,
-    }
-
-
-print("✓ Metric extraction functions defined")
 
 # %%
-# Cell 4: Run all three experiments
+# ── Training ─────────────────────────────────────────────────────────────────
+def train_grid(grid: ModelGrid):
+    """Train a ModelGrid with standard hyperparameters."""
+    grid.fit(
+        n_epochs=N_EPOCHS,
+        batch_size=BATCH_SIZE,
+        learning_rate=LEARNING_RATE,
+        weight_decay=WEIGHT_DECAY,
+        verbose=False,
+        sample_every=100,
+    )
 
 
-def run_experiments():
-    """Train all three experiment grids and extract metrics."""
-    print("=" * 80)
-    print("LAW 1: CORRELATION-INTERFERENCE RELATIONSHIP")
-    print("=" * 80)
-
-    # Experiment A: Primary
-    print("\n[Experiment A] Training 20×15=300 models (n_features=6, n_hidden=2)")
-    corr_values = torch.linspace(0, 0.95, 20)
-    dens_values = torch.logspace(np.log10(0.01), np.log10(0.5), 15)
-
-    grid_a = ModelGrid(
-        create_model=create_model_experiment_a,
+def run_correlated_grid() -> tuple[ModelGrid, dict[str, np.ndarray]]:
+    """Train correlated grid: axes = [Correlation, Density, Seed]."""
+    n_models = len(CORR_VALUES) * len(DENS_VALUES) * len(RANDOM_SEEDS)
+    print(
+        f"\n[Correlated] {len(CORR_VALUES)}x{len(DENS_VALUES)}x{len(RANDOM_SEEDS)} = {n_models} models"
+    )
+    grid = ModelGrid(
+        create_model=create_correlated,
         axes=[
-            Axis(label="Correlation", values=corr_values),
-            Axis(label="Density", values=dens_values),
+            Axis(label="Correlation", values=CORR_VALUES),
+            Axis(label="Density", values=DENS_VALUES),
+            Axis(label="Seed", values=RANDOM_SEEDS),
         ],
-        cache_samples=False,
+        broadcast_samples=True,
     )
+    train_grid(grid)
+    return grid, extract_metrics(grid)
 
-    grid_a.fit(
-        n_epochs=10000,
-        batch_size=1024,
-        learning_rate=3e-4,
-        weight_decay=0.05,
-        verbose=True,
+
+def run_anticorrelated_grid() -> tuple[ModelGrid, np.ndarray]:
+    """Train anticorrelated grid: axes = [Density, Seed]."""
+    n_models = len(DENS_VALUES) * len(RANDOM_SEEDS)
+    print(
+        f"\n[Anticorrelated] {len(DENS_VALUES)}x{len(RANDOM_SEEDS)} = {n_models} models"
     )
-
-    # Extract metrics from Experiment A
-    print("\n[Experiment A] Extracting metrics...")
-    metrics_a = extract_metrics(grid_a, n_features=6)
-
-    # Experiment B: Scale validation
-    print("\n[Experiment B] Training 12×10=120 models (n_features=10, n_hidden=3)")
-    corr_values_b = torch.linspace(0, 0.95, 12)
-    dens_values_b = torch.logspace(np.log10(0.01), np.log10(0.5), 10)
-
-    grid_b = ModelGrid(
-        create_model=create_model_experiment_b,
+    grid = ModelGrid(
+        create_model=create_anticorrelated,
         axes=[
-            Axis(label="Correlation", values=corr_values_b),
-            Axis(label="Density", values=dens_values_b),
+            Axis(label="Density", values=DENS_VALUES),
+            Axis(label="Seed", values=RANDOM_SEEDS),
         ],
-        cache_samples=False,
+        broadcast_samples=True,
     )
+    train_grid(grid)
+    return grid, extract_within_pair_cos(grid)
 
-    grid_b.fit(
-        n_epochs=10000,
-        batch_size=1024,
-        learning_rate=3e-4,
-        weight_decay=0.05,
-        verbose=True,
-    )
 
-    print("\n[Experiment B] Extracting metrics...")
-    metrics_b = extract_metrics(grid_b, n_features=10)
-
-    # Experiment C: Anticorrelated control
-    print("\n[Experiment C] Training 1×15=15 anticorrelated models")
-    dens_values_c = torch.logspace(np.log10(0.01), np.log10(0.5), 15)
-
-    grid_c = ModelGrid(
-        create_model=create_model_experiment_c,
+def run_baseline_grid() -> tuple[ModelGrid, np.ndarray]:
+    """Train baseline grid: axes = [Density, Seed]."""
+    n_models = len(DENS_VALUES) * len(RANDOM_SEEDS)
+    print(f"\n[Baseline] {len(DENS_VALUES)}x{len(RANDOM_SEEDS)} = {n_models} models")
+    grid = ModelGrid(
+        create_model=create_baseline,
         axes=[
-            Axis(label="Density", values=dens_values_c),
+            Axis(label="Density", values=DENS_VALUES),
+            Axis(label="Seed", values=RANDOM_SEEDS),
         ],
-        cache_samples=False,
+        broadcast_samples=True,
     )
+    train_grid(grid)
+    return grid, extract_within_pair_cos(grid)
 
-    grid_c.fit(
-        n_epochs=10000,
-        batch_size=1024,
-        learning_rate=3e-4,
-        weight_decay=0.05,
-        verbose=True,
-    )
-
-    print("\n[Experiment C] Extracting metrics...")
-    metrics_c = extract_metrics_anticorr(grid_c, n_features=6)
-
-    return metrics_a, metrics_b, metrics_c, grid_a, grid_b, grid_c
-
-
-print("✓ Experiment runner defined")
 
 # %%
-# Cell 5: Figure generation
+# ── Figure helpers ───────────────────────────────────────────────────────────
+def corr_vals_np():
+    return CORR_VALUES.cpu().numpy()
 
 
-def create_figures(metrics_a, metrics_b, metrics_c, grid_a, grid_b, grid_c):
-    """Generate 8 interactive figures for Law 1 analysis using Plotly."""
-    os.makedirs("figures", exist_ok=True)
+def dens_vals_np():
+    return DENS_VALUES.cpu().numpy()
 
-    # Extract axes from grids
-    corr_ax_a = grid_a.axes[0]
-    dens_ax_a = grid_a.axes[1]
-    corr_vals_a = (
-        corr_ax_a.values.cpu().numpy()
-        if torch.is_tensor(corr_ax_a.values)
-        else corr_ax_a.values
-    )
-    dens_vals_a = (
-        dens_ax_a.values.cpu().numpy()
-        if torch.is_tensor(dens_ax_a.values)
-        else dens_ax_a.values
-    )
 
-    corr_vals_b = (
-        grid_b.axes[0].values.cpu().numpy()
-        if torch.is_tensor(grid_b.axes[0].values)
-        else grid_b.axes[0].values
-    )
-    dens_vals_b = (
-        grid_b.axes[1].values.cpu().numpy()
-        if torch.is_tensor(grid_b.axes[1].values)
-        else grid_b.axes[1].values
-    )
+def save_fig(fig: go.Figure, filename: str):
+    fig.write_html(os.path.join(FIGURES_DIR, filename))
+    print(f"  Saved {filename}")
 
-    dens_vals_c = (
-        grid_c.axes[0].values.cpu().numpy()
-        if torch.is_tensor(grid_c.axes[0].values)
-        else grid_c.axes[0].values
-    )
 
-    # Figure 1: Within-pair cosine heatmap (Correlation × Density)
-    fig = go.Figure(
-        data=go.Heatmap(
-            z=metrics_a["within_pair_cos"].T,
-            x=corr_vals_a,
-            y=dens_vals_a,
-            colorscale="Viridis",
-            colorbar=dict(title="Mean Within-Pair Cosine"),
+def _density_slider_steps(traces_per_density: int) -> list[dict]:
+    """Build Plotly slider steps that toggle trace visibility by density index."""
+    dv = dens_vals_np()
+    n_d = len(dv)
+    total = n_d * traces_per_density
+    steps = []
+    for d_idx in range(n_d):
+        visible = [False] * total
+        for i in range(traces_per_density):
+            visible[d_idx * traces_per_density + i] = True
+        steps.append(
+            dict(
+                method="update",
+                args=[{"visible": visible}],
+                label=f"{dv[d_idx]:.3f}",
+            )
         )
-    )
-    fig.update_layout(
-        title="Figure 1: Within-pair cosine vs (Correlation, Density)<br>[Law 1 Core Observable]",
-        xaxis_title="Correlation",
-        yaxis_title="Density (log scale)",
-        height=600,
-        width=900,
-    )
-    fig.write_html("figures/01_within_pair_heatmap.html")
+    return steps
 
-    # Figure 2: Within-pair cosine vs Correlation at selected densities
-    selected_dens_idx = [
-        0,
-        len(dens_vals_a) // 4,
-        len(dens_vals_a) // 2,
-        3 * len(dens_vals_a) // 4,
-        -1,
-    ]
-    color_list = px.colors.qualitative.Set2
 
-    fig = go.Figure()
-    for i, dens_idx in enumerate(selected_dens_idx):
-        within_pair = metrics_a["within_pair_cos"][:, dens_idx]
+def _add_seed_traces(
+    fig: go.Figure,
+    cv: np.ndarray,
+    data_2d: np.ndarray,
+    d_idx: int,
+    color: str = "black",
+    opacity: float = 0.2,
+    dash: str | None = None,
+    legend_name: str | None = None,
+    legendgroup: str | None = None,
+    width: float = 1.0,
+):
+    """Add per-seed traces (thin, low opacity) for a (n_corr, n_seeds) array.
+
+    If legend_name is provided, the first seed trace gets a legend entry.
+    """
+    n_seeds = data_2d.shape[1]
+    line_kw = dict(color=color, width=width)
+    if dash:
+        line_kw["dash"] = dash
+    for s in range(n_seeds):
         fig.add_trace(
             go.Scatter(
-                x=corr_vals_a,
-                y=within_pair,
-                mode="lines+markers",
-                name=f"Density={dens_vals_a[dens_idx]:.3f}",
-                line=dict(color=color_list[i % len(color_list)], width=2),
-                marker=dict(size=6),
+                x=cv,
+                y=data_2d[:, s],
+                mode="lines",
+                line=line_kw,
+                opacity=opacity,
+                name=legend_name if (s == 0 and legend_name) else "",
+                showlegend=(s == 0 and legend_name is not None),
+                legendgroup=legendgroup,
+                visible=(d_idx == 0),
             )
         )
 
+
+def _add_mean_trace(
+    fig: go.Figure,
+    cv: np.ndarray,
+    data_2d: np.ndarray,
+    d_idx: int,
+    color: str = "red",
+    width: float = 2.5,
+    dash: str | None = None,
+    name: str = "mean",
+    legendgroup: str | None = None,
+):
+    """Add a mean-across-seeds trace with diamond markers at each data point."""
+    line_kw = dict(color=color, width=width)
+    if dash:
+        line_kw["dash"] = dash
+    fig.add_trace(
+        go.Scatter(
+            x=cv,
+            y=data_2d.mean(axis=1),
+            mode="lines+markers",
+            line=line_kw,
+            marker=dict(symbol="diamond", size=5, color=color),
+            name=name,
+            showlegend=True,
+            legendgroup=legendgroup,
+            visible=(d_idx == 0),
+        )
+    )
+
+
+# %%
+# ── Figures ──────────────────────────────────────────────────────────────────
+
+# Heatmaps average across seed axis (axis=-1), excluding highest-loss seed.
+# corr_metrics shapes: (n_corr, n_dens, n_seeds)
+# anticorr/baseline shapes: (n_dens, n_seeds)
+
+
+def _heatmap_layout(fig: go.Figure, title: str, xaxis_title: str = "Correlation"):
+    """Apply shared heatmap layout: category axes for equal tile sizes."""
     fig.update_layout(
-        title="Figure 2: Functional Form: Within-pair Cosine vs Correlation<br>[Test h(c, S) Monotonicity]",
+        title=title,
+        xaxis_title=xaxis_title,
+        yaxis_title="Density",
+        xaxis=dict(type="category"),
+        yaxis=dict(type="category"),
+        height=700,
+        width=900,
+    )
+
+
+def fig1_within_pair_heatmap(corr_metrics: dict[str, np.ndarray]):
+    """Within-pair cosine heatmap, averaged across seeds (excluding highest-loss seed).
+
+    Expected: higher correlation → higher cos(W₀,W₁). At low density, features
+    are easily represented so cosine stays low; at high density superposition is
+    forced and correlation amplifies within-pair alignment.
+    """
+    avg = exclude_highest_loss_heatmap(
+        corr_metrics["within_pair_cos"], corr_metrics["losses"]
+    )
+    cv_str = [f"{v:.2f}" for v in corr_vals_np()]
+    dv_str = [f"{v:.3f}" for v in dens_vals_np()]
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=avg.T,
+            x=cv_str,
+            y=dv_str,
+            colorscale="RdBu",
+            zmid=0,
+            zmin=-1,
+            zmax=1,
+            colorbar=dict(title="cos(W₀, W₁)", dtick=0.25),
+        )
+    )
+    _heatmap_layout(
+        fig,
+        f"Within-pair cos(W₀,W₁) [n={N_FEATURES}, avg {len(RANDOM_SEEDS) - 1}/{len(RANDOM_SEEDS)} seeds]",
+    )
+    save_fig(fig, "01_within_pair_heatmap.html")
+
+
+def fig2_within_pair_vs_correlation(corr_metrics: dict[str, np.ndarray]):
+    """Within-pair cos vs correlation. Black=individual seeds, red=mean. Density slider.
+
+    Tests Law 1 directly: cos(W₀,W₁) should increase monotonically with
+    correlation at each density. Spread across seeds shows sensitivity to
+    initialization — wide spread means the effect is fragile at that density.
+    """
+    cv = corr_vals_np()
+    losses = corr_metrics["losses"]
+    filtered = exclude_highest_loss_linegraph_3d(
+        corr_metrics["within_pair_cos"], losses
+    )
+    n_seeds_kept = filtered.shape[2]
+    traces_per_density = n_seeds_kept + 1
+
+    fig = go.Figure()
+    for d_idx in range(len(DENS_VALUES)):
+        data = filtered[:, d_idx, :]  # (n_corr, n_seeds-1)
+        _add_seed_traces(fig, cv, data, d_idx, legend_name="individual seeds")
+        _add_mean_trace(fig, cv, data, d_idx)
+
+    fig.update_layout(
+        title=f"Within-pair cos(W₀,W₁) vs Correlation [n={N_FEATURES}]",
         xaxis_title="Correlation",
-        yaxis_title="Mean Within-Pair Cosine",
+        yaxis_title="cos(W₀, W₁)",
+        xaxis=dict(range=[0, 1], dtick=0.05),
+        yaxis=dict(range=[-1, 1], dtick=0.1),
         height=600,
         width=900,
         hovermode="x unified",
+        sliders=[
+            dict(
+                active=0,
+                currentvalue={"prefix": "Density: "},
+                steps=_density_slider_steps(traces_per_density),
+                pad={"t": 50},
+            )
+        ],
     )
-    fig.write_html("figures/02_within_pair_vs_correlation.html")
+    save_fig(fig, "02_within_pair_vs_correlation.html")
 
-    # Figure 3: Cross-pair cosine heatmap (should be independent of correlation)
+
+def fig3_cross_pair_heatmap(corr_metrics: dict[str, np.ndarray]):
+    """Cross-pair mean |cos| heatmap, averaged across seeds (excluding highest-loss seed).
+
+    Control: cross-pair cosines should NOT depend on correlation. They measure
+    geometric crowding due to density/n_features, not correlation structure.
+    If this heatmap shows a correlation gradient, the effect in fig1 is not
+    specific to the paired features.
+    """
+    avg = exclude_highest_loss_heatmap(
+        corr_metrics["cross_pair_cos_mean"], corr_metrics["losses"]
+    )
+    cv_str = [f"{v:.2f}" for v in corr_vals_np()]
+    dv_str = [f"{v:.3f}" for v in dens_vals_np()]
     fig = go.Figure(
         data=go.Heatmap(
-            z=metrics_a["cross_pair_cos_mean"].T,
-            x=corr_vals_a,
-            y=dens_vals_a,
-            colorscale="Plasma",
-            colorbar=dict(title="Mean |Cross-Pair Cosine|"),
+            z=avg.T,
+            x=cv_str,
+            y=dv_str,
+            colorscale="Viridis_r",
+            colorbar=dict(title="Mean |cos| (cross-pair)"),
         )
     )
-    fig.update_layout(
-        title="Figure 3: Cross-pair |Cosine| vs (Correlation, Density)<br>[Control: Should NOT depend on correlation]",
-        xaxis_title="Correlation",
-        yaxis_title="Density (log scale)",
-        height=600,
-        width=900,
+    _heatmap_layout(
+        fig,
+        f"Cross-pair mean |cos| [n={N_FEATURES}, avg {len(RANDOM_SEEDS) - 1}/{len(RANDOM_SEEDS)} seeds]",
     )
-    fig.write_html("figures/03_cross_pair_heatmap.html")
+    save_fig(fig, "03_cross_pair_heatmap.html")
 
-    # Figure 4: Structural interference = within_pair - cross_pair
-    structural = metrics_a["within_pair_cos"] - metrics_a["cross_pair_cos_mean"]
+
+def fig4_structural_interference(corr_metrics: dict[str, np.ndarray]):
+    """Structural interference = within-pair − cross-pair, averaged across seeds
+    (excluding highest-loss seed).
+
+    Isolates the correlation-driven component of interference by subtracting
+    the generic crowding baseline (cross-pair). Positive values mean correlated
+    features align MORE than uncorrelated features at the same density.
+    """
+    losses = corr_metrics["losses"]
+    within_avg = exclude_highest_loss_heatmap(corr_metrics["within_pair_cos"], losses)
+    cross_avg = exclude_highest_loss_heatmap(
+        corr_metrics["cross_pair_cos_mean"], losses
+    )
+    structural = within_avg - cross_avg
+    cv_str = [f"{v:.2f}" for v in corr_vals_np()]
+    dv_str = [f"{v:.3f}" for v in dens_vals_np()]
     fig = go.Figure(
         data=go.Heatmap(
             z=structural.T,
-            x=corr_vals_a,
-            y=dens_vals_a,
+            x=cv_str,
+            y=dv_str,
             colorscale="RdBu",
             zmid=0,
-            colorbar=dict(title="Structural Interference"),
+            zmin=-1,
+            zmax=1,
+            colorbar=dict(title="within − cross", dtick=0.25),
         )
     )
-    fig.update_layout(
-        title="Figure 4: Structural Interference = Within-pair - Cross-pair<br>[Isolates Correlation-Driven Component]",
-        xaxis_title="Correlation",
-        yaxis_title="Density (log scale)",
-        height=600,
-        width=900,
+    _heatmap_layout(
+        fig,
+        f"Structural Interference [n={N_FEATURES}, avg {len(RANDOM_SEEDS) - 1}/{len(RANDOM_SEEDS)} seeds]",
     )
-    fig.write_html("figures/04_structural_interference.html")
+    save_fig(fig, "04_structural_interference.html")
 
-    # Figure 5: Mean feature norms (phase diagram)
+
+def fig5_feature_norms_heatmap(corr_metrics: dict[str, np.ndarray]):
+    """Feature norms phase diagram, averaged across seeds (excluding highest-loss seed).
+
+    Norms near 1 = feature is fully represented; near 0 = feature dropped.
+    Correlation should shift the phase boundary: correlated features may be
+    represented or dropped together, changing the effective capacity.
+    """
+    avg = exclude_highest_loss_heatmap(
+        corr_metrics["feature_norms_mean"], corr_metrics["losses"]
+    )
+    cv_str = [f"{v:.2f}" for v in corr_vals_np()]
+    dv_str = [f"{v:.3f}" for v in dens_vals_np()]
     fig = go.Figure(
         data=go.Heatmap(
-            z=metrics_a["feature_norms_mean"].T,
-            x=corr_vals_a,
-            y=dens_vals_a,
-            colorscale="Magma",
+            z=avg.T,
+            x=cv_str,
+            y=dv_str,
+            colorscale="Magma_r",
             colorbar=dict(title="Mean Feature Norm"),
         )
     )
-    fig.update_layout(
-        title="Figure 5: Mean Feature Norms vs (Correlation, Density)<br>[Phase Diagram]",
-        xaxis_title="Correlation",
-        yaxis_title="Density (log scale)",
-        height=600,
-        width=900,
+    _heatmap_layout(
+        fig,
+        f"Mean Feature Norms [n={N_FEATURES}, avg {len(RANDOM_SEEDS) - 1}/{len(RANDOM_SEEDS)} seeds]",
     )
-    fig.write_html("figures/05_feature_norms_heatmap.html")
+    save_fig(fig, "05_feature_norms_heatmap.html")
 
-    # Figure 6: Within-pair cosine vs analytical prediction 1/(1-c) scaling
+
+def fig6_scaling_comparison(corr_metrics: dict[str, np.ndarray]):
+    """1/(1−c) scaling: black=seeds, red=mean, dashed blue=theory. Density slider.
+
+    Theoretical prior: A/(1-c) arises from correlation-proportional interference
+    cost; A is calibrated at the midpoint, absorbing density/architecture factors.
+    Divergence at c→1 is expected. Deviations indicate a different functional form.
+    """
+    cv = corr_vals_np()
+    losses = corr_metrics["losses"]
+    filtered = exclude_highest_loss_linegraph_3d(
+        corr_metrics["within_pair_cos"], losses
+    )
+    n_seeds_kept = filtered.shape[2]
+    traces_per_density = n_seeds_kept + 2  # seeds + mean + theory
+
     fig = go.Figure()
-    for i, dens_idx in enumerate(selected_dens_idx):
-        within_pair = metrics_a["within_pair_cos"][:, dens_idx]
+    for d_idx in range(len(DENS_VALUES)):
+        data = filtered[:, d_idx, :]
+        _add_seed_traces(fig, cv, data, d_idx, legend_name="individual seeds")
+        _add_mean_trace(fig, cv, data, d_idx)
+
+        # Theoretical: cos ~ A/(1-c), calibrated at midpoint
+        mean_vals = data.mean(axis=1)
+        mid = len(cv) // 2
+        if cv[mid] < 0.99 and mean_vals[mid] != 0:
+            A = mean_vals[mid] * (1 - cv[mid])
+            theoretical = A / (1 - cv)
+        else:
+            theoretical = np.zeros_like(cv)
         fig.add_trace(
             go.Scatter(
-                x=corr_vals_a,
-                y=within_pair,
-                mode="lines+markers",
-                name=f"Measured (ρ={dens_vals_a[dens_idx]:.3f})",
-                line=dict(color=color_list[i % len(color_list)], width=2),
-                marker=dict(size=6),
+                x=cv,
+                y=theoretical,
+                mode="lines",
+                line=dict(dash="dash", color="blue", width=1.5),
+                name="A/(1−c) theory",
+                showlegend=True,
+                visible=(d_idx == 0),
             )
         )
 
-    # Add theoretical prediction
-    c_vals = corr_vals_a[corr_vals_a < 0.99]
-    for i, dens_idx in enumerate(selected_dens_idx):
-        within_pair = metrics_a["within_pair_cos"][: len(c_vals), dens_idx]
-        if len(within_pair) > 0 and c_vals[0] > 0:
-            scale = within_pair[len(c_vals) // 2] * (1 - c_vals[len(c_vals) // 2])
-            theoretical = scale / (1 - c_vals)
-            fig.add_trace(
-                go.Scatter(
-                    x=c_vals,
-                    y=theoretical,
-                    mode="lines",
-                    name=f"Theory (ρ={dens_vals_a[dens_idx]:.3f})",
-                    line=dict(dash="dash", width=1),
-                    showlegend=False,
-                )
-            )
-
     fig.update_layout(
-        title="Figure 6: Comparison to 1/(1-c) Scaling<br>[Test Theoretical Cost Model]",
+        title=f"1/(1−c) Scaling Comparison [n={N_FEATURES}]",
         xaxis_title="Correlation",
-        yaxis_title="Within-Pair Cosine",
+        yaxis_title="cos(W₀, W₁)",
+        xaxis=dict(range=[0, 1], dtick=0.05),
+        yaxis=dict(range=[-1, 1], dtick=0.1),
         height=600,
         width=900,
         hovermode="x unified",
+        sliders=[
+            dict(
+                active=0,
+                currentvalue={"prefix": "Density: "},
+                steps=_density_slider_steps(traces_per_density),
+                pad={"t": 50},
+            )
+        ],
     )
-    fig.write_html("figures/06_theoretical_scaling.html")
+    save_fig(fig, "06_theoretical_scaling.html")
 
-    # Figure 7: Scale validation (Experiment B within-pair heatmap)
-    fig = go.Figure(
-        data=go.Heatmap(
-            z=metrics_b["within_pair_cos"].T,
-            x=corr_vals_b,
-            y=dens_vals_b,
-            colorscale="Viridis",
-            colorbar=dict(title="Mean Within-Pair Cosine"),
-        )
-    )
-    fig.update_layout(
-        title="Figure 7: Scale Validation (Exp B: n_features=10, n_hidden=3)<br>[Confirms Generalization]",
-        xaxis_title="Correlation",
-        yaxis_title="Density (log scale)",
-        height=600,
-        width=900,
-    )
-    fig.write_html("figures/07_scale_validation.html")
 
-    # Figure 8: Anticorrelated control (opposite trend)
-    anticorr_within = metrics_c["within_pair_cos"].flatten()
-    correlated_within_mean = metrics_a["within_pair_cos"].mean(axis=0)
+def fig7_scale_validation(corr_metrics: dict[str, np.ndarray]):
+    """Seed variation view: same data as fig2 but titled for seed analysis.
+
+    Use this to assess how robust the correlation→interference relationship is
+    to random initialization. Tight seed bundles = robust effect.
+    Wide spread or crossing seeds = noisy / not converged.
+    """
+    cv = corr_vals_np()
+    losses = corr_metrics["losses"]
+    filtered = exclude_highest_loss_linegraph_3d(
+        corr_metrics["within_pair_cos"], losses
+    )
+    n_seeds_kept = filtered.shape[2]
+    traces_per_density = n_seeds_kept + 1
 
     fig = go.Figure()
-    fig.add_trace(
-        go.Bar(
-            x=dens_vals_c,
-            y=anticorr_within,
-            name="Anticorrelated",
-            marker=dict(color="#e74c3c"),
-        )
-    )
-    fig.add_trace(
-        go.Bar(
-            x=dens_vals_c,
-            y=correlated_within_mean[: len(dens_vals_c)],
-            name="Correlated (avg)",
-            marker=dict(color="#3498db"),
-        )
-    )
+    for d_idx in range(len(DENS_VALUES)):
+        data = filtered[:, d_idx, :]
+        _add_seed_traces(fig, cv, data, d_idx, legend_name="individual seeds")
+        _add_mean_trace(fig, cv, data, d_idx)
 
     fig.update_layout(
-        title="Figure 8: Anticorrelated Control<br>[Opposite Pattern: Features Repel]",
-        xaxis_title="Density (log scale)",
-        yaxis_title="Mean Within-Pair Cosine",
-        barmode="group",
+        title=f"Seed Variation: cos(W₀,W₁) vs Correlation [n={N_FEATURES}]",
+        xaxis_title="Correlation",
+        yaxis_title="cos(W₀, W₁)",
+        xaxis=dict(range=[0, 1], dtick=0.05),
+        yaxis=dict(range=[-1, 1], dtick=0.1),
         height=600,
         width=900,
         hovermode="x unified",
+        sliders=[
+            dict(
+                active=0,
+                currentvalue={"prefix": "Density: "},
+                steps=_density_slider_steps(traces_per_density),
+                pad={"t": 50},
+            )
+        ],
     )
-    fig.write_html("figures/08_anticorrelated_control.html")
-
-    print("\n✓ All 8 figures saved as interactive html in figures/")
+    save_fig(fig, "07_scale_validation.html")
 
 
-print("✓ Figure generation function defined")
+def fig8_anticorrelated_baseline(
+    corr_metrics: dict[str, np.ndarray],
+    anticorr_cos: np.ndarray,
+    baseline_cos: np.ndarray,
+    anticorr_losses: np.ndarray,
+    baseline_losses: np.ndarray,
+):
+    """Correlated vs anticorrelated vs baseline. Density slider.
+
+    Correlated features (blue, solid) should show increasing cos with correlation.
+    Anticorrelated features (red, dashed) should show near-zero or negative cos —
+    mutual exclusivity pushes embedding vectors apart. Baseline (green, dotted) has
+    no pair structure so cos(W₀,W₁) should be near zero regardless of the
+    x-axis position (it's a horizontal reference).
+    """
+    cv = corr_vals_np()
+    losses_3d = corr_metrics["losses"]
+
+    # Exclude worst seed from each dataset
+    corr_filtered = exclude_highest_loss_linegraph_3d(
+        corr_metrics["within_pair_cos"], losses_3d
+    )
+    anti_filtered = exclude_highest_loss_linegraph_2d(anticorr_cos, anticorr_losses)
+    base_filtered = exclude_highest_loss_linegraph_2d(baseline_cos, baseline_losses)
+
+    n_corr_seeds = corr_filtered.shape[2]
+    n_anti_seeds = anti_filtered.shape[1]
+    n_base_seeds = base_filtered.shape[1]
+    # Per density: corr(seeds+mean) + anti(seeds+mean) + base(seeds+mean)
+    traces_per_density = (n_corr_seeds + 1) + (n_anti_seeds + 1) + (n_base_seeds + 1)
+
+    fig = go.Figure()
+    for d_idx in range(len(DENS_VALUES)):
+        # Correlated — varies with correlation
+        corr_data = corr_filtered[:, d_idx, :]  # (n_corr, n_seeds-1)
+        _add_seed_traces(
+            fig,
+            cv,
+            corr_data,
+            d_idx,
+            color="lightskyblue",
+            opacity=0.3,
+            legend_name="correlated (seeds)",
+            legendgroup="corr",
+        )
+        _add_mean_trace(
+            fig,
+            cv,
+            corr_data,
+            d_idx,
+            color="blue",
+            name="correlated (mean)",
+            legendgroup="corr",
+        )
+
+        # Anticorrelated — constant across correlation
+        anti_vals = anti_filtered[d_idx, :]  # (n_seeds-1,)
+        anti_2d = np.tile(anti_vals, (len(cv), 1))  # (n_corr, n_seeds-1)
+        _add_seed_traces(
+            fig,
+            cv,
+            anti_2d,
+            d_idx,
+            color="lightsalmon",
+            opacity=0.5,
+            dash="dash",
+            legend_name="anticorr (seeds)",
+            legendgroup="anti",
+            width=1.5,
+        )
+        _add_mean_trace(
+            fig,
+            cv,
+            anti_2d,
+            d_idx,
+            color="red",
+            dash="dash",
+            name="anticorr (mean)",
+            legendgroup="anti",
+        )
+
+        # Baseline — constant across correlation
+        base_vals = base_filtered[d_idx, :]  # (n_seeds-1,)
+        base_2d = np.tile(base_vals, (len(cv), 1))  # (n_corr, n_seeds-1)
+        _add_seed_traces(
+            fig,
+            cv,
+            base_2d,
+            d_idx,
+            color="lightgreen",
+            opacity=0.5,
+            dash="dot",
+            legend_name="baseline (seeds)",
+            legendgroup="base",
+            width=1.5,
+        )
+        _add_mean_trace(
+            fig,
+            cv,
+            base_2d,
+            d_idx,
+            color="green",
+            dash="dot",
+            name="baseline (mean)",
+            legendgroup="base",
+        )
+
+    fig.update_layout(
+        title=f"Correlated vs Anticorrelated vs Baseline [n={N_FEATURES}]",
+        xaxis_title="Correlation",
+        yaxis_title="cos(W₀, W₁)",
+        xaxis=dict(range=[0, 1], dtick=0.05),
+        yaxis=dict(range=[-1, 1], dtick=0.1),
+        height=600,
+        width=900,
+        hovermode="x unified",
+        sliders=[
+            dict(
+                active=0,
+                currentvalue={"prefix": "Density: "},
+                steps=_density_slider_steps(traces_per_density),
+                pad={"t": 50},
+            )
+        ],
+    )
+    save_fig(fig, "08_anticorrelated_control.html")
+
 
 # %%
-# Cell 6: Summary and analysis
+# ── Train all grids ──────────────────────────────────────────────────────────
+os.makedirs(FIGURES_DIR, exist_ok=True)
 
-
-def print_summary(metrics_a, metrics_b, metrics_c, grid_a, grid_b, grid_c):
-    """Print quantitative summary to stdout."""
-    print("\n" + "=" * 80)
-    print("QUANTITATIVE SUMMARY")
-    print("=" * 80)
-
-    print("\n[EXPERIMENT A] 20 correlations × 15 densities = 300 models")
-    print(
-        f"  Within-pair cosine: min={metrics_a['within_pair_cos'].min():.4f}, "
-        f"max={metrics_a['within_pair_cos'].max():.4f}, "
-        f"mean={metrics_a['within_pair_cos'].mean():.4f}"
-    )
-
-    # Check monotonicity with correlation at middle density
-    mid_dens_idx = len(grid_a.axes[1].values) // 2
-    within_at_mid = metrics_a["within_pair_cos"][:, mid_dens_idx]
-    monotonic_increase = all(
-        within_at_mid[i] <= within_at_mid[i + 1] for i in range(len(within_at_mid) - 1)
-    )
-    print(
-        f"  Monotonic increase with correlation (at mid-density): {monotonic_increase}"
-    )
-
-    print("\n[EXPERIMENT B] 12 correlations × 10 densities = 120 models")
-    print(
-        f"  Within-pair cosine: min={metrics_b['within_pair_cos'].min():.4f}, "
-        f"max={metrics_b['within_pair_cos'].max():.4f}, "
-        f"mean={metrics_b['within_pair_cos'].mean():.4f}"
-    )
-
-    print("\n[EXPERIMENT C] Anticorrelated (1×15 = 15 models)")
-    print(
-        f"  Within-pair cosine: min={metrics_c['within_pair_cos'].min():.4f}, "
-        f"max={metrics_c['within_pair_cos'].max():.4f}, "
-        f"mean={metrics_c['within_pair_cos'].mean():.4f}"
-    )
-
-    # Evidence for Law 1
-    print("\n" + "-" * 80)
-    print("EVIDENCE FOR/AGAINST LAW 1")
-    print("-" * 80)
-
-    if monotonic_increase:
-        print(
-            "✓ SUPPORTS Law 1: Within-pair cosine increases monotonically with correlation"
-        )
-    else:
-        print(
-            "✗ CONTRADICTS Law 1: Non-monotonic or flat relationship with correlation"
-        )
-
-    # Check if cross-pair also increases (would be evidence against Law 1)
-    cross_pair_at_mid = metrics_a["cross_pair_cos_mean"][:, mid_dens_idx]
-    cross_monotonic = all(
-        cross_pair_at_mid[i] <= cross_pair_at_mid[i + 1]
-        for i in range(len(cross_pair_at_mid) - 1)
-    )
-
-    if cross_monotonic:
-        print("✗ CONTRADICTS Law 1: Cross-pair cosine also increases with correlation")
-        print("  (Suggests generic alignment, not correlation-specific effect)")
-    else:
-        print("✓ SUPPORTS Law 1: Cross-pair cosine independent of correlation")
-        print("  (Confirms correlation-specific effect on paired features)")
-
-    print("\n" + "=" * 80)
-
-
-print("✓ Summary function defined")
-
-# %%
-# Cell 7: MAIN EXECUTION
-
-print("\n" + "=" * 80)
-print("STARTING EXPERIMENTS")
+print("=" * 80)
+print("LAW 1: CORRELATION -> INTERFERENCE")
 print("=" * 80)
 
-metrics_a, metrics_b, metrics_c, grid_a, grid_b, grid_c = run_experiments()
-print_summary(metrics_a, metrics_b, metrics_c, grid_a, grid_b, grid_c)
-create_figures(metrics_a, metrics_b, metrics_c, grid_a, grid_b, grid_c)
+corr_grid, corr_metrics = run_correlated_grid()
+anticorr_grid, anticorr_cos = run_anticorrelated_grid()
+baseline_grid, baseline_cos = run_baseline_grid()
 
-print("\n✓ Experiment complete!")
+anticorr_losses = compute_losses(anticorr_grid)
+baseline_losses = compute_losses(baseline_grid)
+
+# %%
+# ── Generate all figures ─────────────────────────────────────────────────────
+print("\nGenerating figures...")
+
+fig1_within_pair_heatmap(corr_metrics)
+fig2_within_pair_vs_correlation(corr_metrics)
+fig3_cross_pair_heatmap(corr_metrics)
+fig4_structural_interference(corr_metrics)
+fig5_feature_norms_heatmap(corr_metrics)
+fig6_scaling_comparison(corr_metrics)
+fig7_scale_validation(corr_metrics)
+fig8_anticorrelated_baseline(
+    corr_metrics, anticorr_cos, baseline_cos, anticorr_losses, baseline_losses
+)
+
+# %%
+# ── Summary ──────────────────────────────────────────────────────────────────
+within_avg = corr_metrics["within_pair_cos"].mean(axis=2)
+print(f"\n[n={N_FEATURES}, {len(RANDOM_SEEDS)} seeds]")
+print(
+    f"  Within-pair cos (seed avg): min={within_avg.min():.4f}, max={within_avg.max():.4f}, mean={within_avg.mean():.4f}"
+)
+
+mid_dens_idx = len(DENS_VALUES) // 2
+within_at_mid = within_avg[:, mid_dens_idx]
+monotonic = all(
+    within_at_mid[i] <= within_at_mid[i + 1] for i in range(len(within_at_mid) - 1)
+)
+print(f"  Monotonic increase at mid-density: {monotonic}")
+
+print("\nDone.")
 
 # %%

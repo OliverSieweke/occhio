@@ -1,0 +1,84 @@
+Me: I spoke with me team and we'd really like to build a "Laws of Superposition"-type paper that tries to understand patterns of superposition at a more fundamental level. It would be awesome to understand the conditions in which some superpositional properties emerge. We have plenty of time, energy, money, man-power, and we really want to write a great paper.
+
+We think that there are many correlations among the parameters that cause superposition — sparsity, d_model, d_hidden, input data, n_features, etc — especially in correlated pairs distributions.
+
+It's more likely than not that there is some relation between these parameters and it would be really cool to do some theoretical work to formalize this. For example, it would be cool to see if we can reconstruct the embedding space (or at least identify which features are correlated, hierarchical) just by looking at the embedding space, and certain metrics from Toy Models of Superposition and some metrics of our own.
+
+
+Claude Opus 4.56This is a fantastic direction and I think it's very achievable. Let me lay out what a "Laws of Superposition" paper could actually look like — the theoretical framework, the specific laws you might discover, and the experimental program to establish them.
+The theoretical core
+The original TMoS paper established that for independent, sparse features, the key variables governing superposition are sparsity S, importance I, and the ratio n/m (features/dimensions). Your paper would extend this to structured distributions, and the central claim would be:
+The geometry of superposition is determined by a small number of distributional statistics, and these statistics can be read off from the learned representation.
+The beauty of your setup is that you have ground truth: you know the distribution, you know the architecture, and you can vary parameters continuously. This lets you derive laws rather than just observe phenomena.
+The key theoretical object: the Gram matrix
+For the tied-weight autoencoder h = Wf, x̂ = ReLU(W^Th + b), the matrix G = W^TW encodes everything about the learned representation. The diagonal G_ii = ||w_i||² tells you how much feature i is represented. The off-diagonal G_ij = w_i · w_j is the interference between features i and j.
+For independent features, TMoS showed that the optimal G depends on (sparsity, importance, n/m). The off-diagonal entries are "noise" the model tolerates because superposition lets it represent more features.
+Here's the key insight for your paper: for correlated features, the optimal off-diagonal entries of G are not just noise — they encode the correlation structure. If features i and j always co-occur, positive interference between them doesn't hurt reconstruction (and may help, since the model only needs to reconstruct correctly for inputs that actually occur). So the optimal G should reflect the input distribution's correlation structure.
+This gives you an analytical handle. The loss function is:
+L = E_f [ ||f - x̂(f)||² ]
+where the expectation is over the input distribution. For independent features, this expectation factors. For correlated features, it doesn't — and the cross-terms create pressure for specific off-diagonal patterns in G.
+Candidate "Laws"
+Here are specific, testable laws I think you could establish. Some may be analytically derivable; others may be empirical scaling laws validated across many settings.
+Law 1: The Correlation-Interference Law
+Claim: For correlated pairs with correlation c, the optimal interference G_ij between paired features i,j satisfies G_ij ≈ h(c, S, I) for some function h, where h(0, S, I) recovers the TMoS result for independent features and h increases monotonically with c.
+In the simplest case (2 features, 1 hidden dimension), you should be able to derive h analytically. The loss for correlated features with correlation c will have cross-terms that shift the optimal angle between the feature directions. At c = 0 you recover TMoS; at c = 1, the features are identical and should be represented identically.
+The experiment: sweep c from 0 to 1 for fixed (S, I, n, m), measure G_ij, and fit the functional form. Then verify it holds across different (S, I, n, m) settings.
+Law 2: The Structured Phase Transition
+TMoS showed a sharp phase change in sparsity: below a critical sparsity, a feature goes from "not represented" to "represented in superposition" to "represented monosemantically."
+Claim: For correlated features, the critical sparsity thresholds shift as a function of correlation. Specifically, correlated features enter superposition together — there's a phase transition where a correlated pair goes from (not represented, not represented) to (both in superposition) with no intermediate state where one is represented and the other isn't. The critical sparsity for this joint transition depends on both the individual sparsity and the correlation.
+The experiment: for CorrelatedPairs, sweep (p_active, p_individual) at fixed (n, m, importance) and plot the phase diagram. Compare to the independent-features phase diagram from TMoS. The boundary should shift, and the shift should be predictable from the correlation.
+Law 3: The Geometric Fingerprint Law
+Claim: The distributional structure of the input is encoded in specific, readable patterns in the Gram matrix G. Specifically:
+Correlated pairs → G has block structure (paired features have larger |G_ij|)
+Hierarchical features → G has nested block structure (parent-child features have systematic interference patterns)
+Anticorrelated pairs → G has negative off-diagonal entries between paired features
+DAG structure → The sign and magnitude pattern of G mirrors the DAG adjacency structure
+This is the "reading the embedding space" law. It says you don't need to know the input distribution to infer its structure — you can read it off from W^TW.
+The experiment: train toy models on each distribution family, compute G, and show that a simple algorithm (thresholding G, spectral clustering on G, etc.) recovers the distributional structure. Measure recovery accuracy as a function of (n, m, sparsity, correlation strength).
+Law 4: The Capacity-Structure Tradeoff
+TMoS showed that superposition lets models represent more features than dimensions: effective capacity > m.
+Claim: Distributional structure changes the capacity equation. Correlated features are "cheaper" to represent in superposition (because co-occurrence means interference is less costly), so the effective capacity increases with correlation. Anticorrelated features are "more expensive" (interference is always costly), so capacity decreases. There is a quantitative law: effective capacity = f(m, S, structure parameters).
+The experiment: for each distribution type, find the maximum n that can be faithfully represented in m dimensions (defined by some reconstruction threshold). Plot capacity vs. distributional parameters. Fit a scaling law.
+Law 5: The Dimensionality Allocation Law
+In TMoS, each feature gets some fraction of a dimension (feature dimensionality). For independent features, this depends on sparsity and importance.
+Claim: For structured distributions, dimensionality is allocated to structures, not individual features. A correlated pair shares dimensionality. A hierarchical tree allocates dimensionality to the tree, with parent features getting more. The allocation follows a quantifiable rule related to the mutual information structure of the distribution.
+The experiment: compute per-feature dimensionality (the diagonal of W^T(WW^T)^{-1}W, or simpler proxies like ||w_i||²/m) across distribution types. Show that it clusters by structural unit (pair, hierarchy, DAG path) rather than by individual feature.
+Law 6: The Recoverability Condition
+Connecting back to the SAE story:
+Claim: An SAE recovers the true features from a superposed representation if and only if the "structural interference" (the component of G_ij attributable to distributional structure rather than capacity pressure) is below a threshold that depends on SAE width and L0.
+This is the formal version of the SAE failure story. The "structural interference" is the part of the off-diagonal G entries that exists because of correlations, not because of capacity limits. When this is large, the SAE can't separate it from "true" feature directions, and you get absorption/duplication/composition.
+The experiment: decompose the Gram matrix into G = G_capacity + G_structure (where G_capacity is the component you'd get from independent features at the same sparsity, and G_structure is the remainder). Show that SAE failure correlates with ||G_structure|| but not with ||G_capacity||.
+Specific metrics to define and compute
+For the "reading the embedding space" program, you'll need a toolkit of metrics. Here are the ones I'd define:
+Feature dimensionality (from TMoS): D_i = ||w_i||² / Σ_j (w_i · w_j)² — how much of a full dimension feature i occupies.
+Interference graph: I(i,j) = (w_i · w_j)/(||w_i|| ||w_j||) — the cosine similarity between feature directions. Threshold this to get a graph. Compare this graph to the distributional structure graph.
+Structural coupling: For a pair (i,j), compute the ratio of |G_ij| to its expected value under the null hypothesis of independent features at the same sparsity. Values significantly > 1 indicate structural coupling. Values < 1 indicate structural repulsion.
+Subspace alignment: For a group of features (a correlated pair, a hierarchy, a DAG component), compute the dimensionality of the subspace they span: rank of the submatrix of W corresponding to those features. Compare to the number of features. If rank << number of features, the structure is being compressed into a shared subspace (consistent with Shai's factored representations).
+Mutual information recovery: Given the Gram matrix G, use it to predict the mutual information matrix M_ij = I(f_i; f_j) of the input distribution. If there's a lawful relationship between G and M, you can "read" the distributional structure from the embedding.
+Gram-graph isomorphism score: Threshold the absolute Gram matrix to create a graph, and compute the graph edit distance (or isomorphism) to the ground-truth distributional structure graph. This quantifies how well the embedding preserves the input structure.
+The research plan
+Here's how I'd sequence the work:
+Phase 1: The 2-feature analytical foundation (2-3 weeks)
+Start with the simplest case: 2 correlated features in 1 hidden dimension. Derive the optimal W analytically as a function of (p_active, p_individual, importance). This gives you Law 1 in closed form for the simplest case. This is probably doable with pen-and-paper calculus — the loss function is a low-dimensional integral.
+Then extend to 2 correlated pairs (4 features) in 2 hidden dimensions. This is where inter-pair structure first appears. Can you derive the optimal geometry? Even partial analytical results here would be very valuable.
+Phase 2: Large-scale empirical sweeps (3-4 weeks)
+Using occhio, run massive parameter sweeps for CorrelatedPairs:
+Independent variable grid: (n_features, m_hidden, p_active, p_individual, importance) — maybe 5 values per variable = 3125 configurations
+For each configuration: train 5 random seeds, record the trained W, compute all metrics above
+Dependent variables: feature dimensionality, interference graph, phase (monosemantic / superposed / not represented), reconstruction loss
+This gives you the empirical data to discover and validate Laws 1-5. Use the analytical results from Phase 1 to check whether the empirical patterns match the theory.
+Phase 3: Extending to other distributions (2-3 weeks)
+Repeat Phase 2 for HierarchicalPairs, AnticorrelatedPairs, HierarchicalSparse, and DAG distributions. The goal isn't to be exhaustive — it's to show that the laws from Phase 2 generalize, and to discover new laws specific to these richer structures.
+Phase 4: The "reading the embedding" experiments (2-3 weeks)
+Implement the Gram-graph isomorphism and mutual information recovery metrics. Show that you can recover distributional structure from the Gram matrix alone. Characterize when this is possible (which parameter regimes) and when it breaks down.
+Phase 5: SAE recoverability (2-3 weeks)
+Layer SAEs on top of your trained toy models. Establish Law 6 — the conditions under which SAEs recover the true features. Connect the geometric metrics from Phases 2-4 to SAE success/failure.
+Phase 6: Theory and writing (2-3 weeks)
+Consolidate the empirical laws. Try to derive analytical backing for as many as possible. Write the paper.
+What would make this paper great
+Three things:
+Analytical results. Even partial ones. If you can derive the optimal representation for 2 correlated features in 1 dimension, that's worth more than a thousand parameter sweeps. It shows you understand why the laws hold, not just that they do.
+Clean, parametric laws. TMoS worked because the plots were beautiful and the relationships were clean. If you plot "critical sparsity for superposition" vs. "correlation strength" and get a clean curve that you can fit with a simple formula, that's a Law. If it's noisy and unpredictable, it's just data.
+The reading-the-embedding result. This is the "wow" moment. Showing that you can hand someone a trained model, and from W alone — without seeing the training data — tell them "these features are correlated, these are hierarchical, and these are independent" would be a genuinely new capability and a striking demonstration that the laws have predictive power.
+Want me to work through the analytical derivation for the 2-feature case, or help design the experimental sweep infrastructure?
+
