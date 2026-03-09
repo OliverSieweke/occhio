@@ -1,14 +1,16 @@
 """Implements simple"""
 
 import functools
-from math import sqrt
-from torch import Tensor
-import torch.nn.functional as F
-from typing import Literal, Callable
-import torch.nn as nn
-import torch
-from abc import ABC, abstractmethod
 import math
+from abc import ABC, abstractmethod
+from math import sqrt
+from typing import Callable, Literal
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch import Tensor
+
 from .utils.device import _same_device
 
 
@@ -229,6 +231,145 @@ class MLPEncoder(AutoEncoderBase):
 
     def resample_weights(self, force_norm=False):
         self._build_layers()
+
+
+class MLPAutoencoder(AutoEncoderBase):
+    """MLP-based autoencoder with nonlinear encoder for manifold representations.
+
+    Uses a smooth nonlinearity (GELU by default) to enable curved feature manifolds,
+    while keeping the decoder linear (or with optional activation) to isolate
+    nonlinearity to the encoding side.
+
+    Architecture:
+        Encoder: x ∈ ℝⁿ → σ(V · σ(Wx + b₁) + b₂) → h ∈ ℝᵐ
+        Decoder: h ∈ ℝᵐ → σ_dec(W_dec · h + b_dec) → x̂ ∈ ℝⁿ
+
+    Parameters
+    ----------
+    n_features : int
+        Input/output dimension (number of features).
+    n_hidden : int
+        Bottleneck/latent dimension.
+    encoder_hidden_dim : int, optional
+        Hidden layer width in the encoder MLP. Defaults to 2 * n_hidden.
+    activation : str, optional
+        Nonlinearity to use in encoder: "gelu" (default), "tanh", or "silu".
+        ReLU is intentionally excluded as it's piecewise linear.
+    decoder_activation : str or None, optional
+        Activation on decoder output: None (default, linear), "relu", or "softplus".
+        Use "relu" for non-negative data like SparseUniform.
+    """
+
+    def __init__(
+        self,
+        n_features: int,
+        n_hidden: int,
+        encoder_hidden_dim: int | None = None,
+        activation: str = "gelu",
+        decoder_activation: str | None = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
+
+        self.n_features = n_features
+        self.n_hidden = n_hidden
+        self.encoder_hidden_dim = (
+            encoder_hidden_dim if encoder_hidden_dim is not None else 2 * n_hidden
+        )
+
+        # Select encoder activation function
+        if activation == "relu":
+            self.activation = F.relu
+        elif activation == "gelu":
+            self.activation = F.gelu
+        elif activation == "tanh":
+            self.activation = torch.tanh
+        elif activation == "silu":
+            self.activation = F.silu
+        else:
+            raise ValueError(
+                f"Unsupported activation '{activation}'. Use 'gelu', 'tanh', or 'silu'."
+            )
+        self._activation_name = activation
+
+        # Select decoder activation function
+        if decoder_activation is None:
+            self.decoder_activation = None
+        elif decoder_activation == "relu":
+            self.decoder_activation = torch.relu
+        elif decoder_activation == "softplus":
+            self.decoder_activation = F.softplus
+        else:
+            raise ValueError(
+                f"Unsupported decoder_activation '{decoder_activation}'. "
+                f"Use None, 'relu', or 'softplus'."
+            )
+        self._decoder_activation_name = decoder_activation
+
+        self.resample_weights()
+
+    def resample_weights(self) -> None:
+        """Initialize or reset all weights using Kaiming initialization."""
+        # Encoder: x -> hidden -> latent
+        # Layer 1: n_features -> encoder_hidden_dim
+        self.enc_W1 = nn.Parameter(
+            torch.empty(
+                self.encoder_hidden_dim,
+                self.n_features,
+                device=self.device,
+            )
+        )
+        self.enc_b1 = nn.Parameter(
+            torch.empty(self.encoder_hidden_dim, device=self.device)
+        )
+
+        # Layer 2: encoder_hidden_dim -> n_hidden
+        self.enc_W2 = nn.Parameter(
+            torch.empty(
+                self.n_hidden,
+                self.encoder_hidden_dim,
+                device=self.device,
+            )
+        )
+        self.enc_b2 = nn.Parameter(torch.empty(self.n_hidden, device=self.device))
+
+        # Decoder: latent -> features (linear)
+        self.dec_W = nn.Parameter(
+            torch.empty(
+                self.n_features,
+                self.n_hidden,
+                device=self.device,
+            )
+        )
+        self.dec_b = nn.Parameter(torch.empty(self.n_features, device=self.device))
+
+        # Initialize weights
+        self._init_linear(self.enc_W1, self.enc_b1)
+        self._init_linear(self.enc_W2, self.enc_b2)
+        self._init_linear(self.dec_W, self.dec_b)
+
+    def _init_linear(self, w: nn.Parameter, b: nn.Parameter) -> None:
+        """Kaiming initialization for a linear layer."""
+        nn.init.kaiming_uniform_(w, a=math.sqrt(5), generator=self.generator)
+        fan_in, _ = nn.init._calculate_fan_in_and_fan_out(w)
+        bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
+        nn.init.uniform_(b, -bound, bound, generator=self.generator)
+
+    def encode(self, x: Tensor) -> Tensor:
+        """Encode input through MLP with smooth nonlinearity."""
+        # x: (batch, n_features)
+        h = x @ self.enc_W1.T + self.enc_b1  # (batch, encoder_hidden_dim)
+        h = self.activation(h)
+        h = h @ self.enc_W2.T + self.enc_b2  # (batch, n_hidden)
+        # h = self.activation(h)
+        return h
+
+    def decode(self, z: Tensor) -> Tensor:
+        """Decode latent representation, optionally applying activation."""
+        out = z @ self.dec_W.T + self.dec_b
+        if self.decoder_activation is not None:
+            out = self.decoder_activation(out)
+        return out
 
 
 class ComputeAutoEncoder(AutoEncoderBase):
