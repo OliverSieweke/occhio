@@ -155,7 +155,7 @@ class ToyModel:
 
             optimizer.zero_grad(set_to_none=True)
             x_hat = self.ae(x)[0]  # Only take x_hat
-            loss = self.ae.loss(raw, x_hat, self.importances)  # type: ignore[call-arg]
+            loss = self.ae.loss(raw, x_hat, self.importances)
             loss.backward()
             optimizer.step()
 
@@ -251,6 +251,23 @@ class ToyModel:
     @torch.no_grad()
     def feature_representations(self) -> Tensor:
         return (self.W**2).sum(dim=0)
+
+    # [05.03.26 | OliverSieweke] TODO:maybe should define a per feature loss metric on the AE...?
+    @property
+    @torch.no_grad()
+    def per_feature_reconstruction_loss(self) -> Tensor:
+        """Reconstruction loss for each feature individually (shape: n_features)."""
+        x = torch.eye(self.n_features, device=self.ae.device)
+        x_hat = self.ae(x)[0]
+        # Compute per-feature loss: importances * (x - x_hat)^2 summed over dimensions
+        return torch.sum(self.importances * torch.square(x - x_hat), dim=-1)
+
+    @property
+    @torch.no_grad()
+    def mean_feature_reconstruction_loss(self) -> Tensor:
+        """Mean reconstruction loss across all features (scalar)."""
+        x = torch.eye(self.n_features, device=self.ae.device)
+        return self.ae.loss(x, self.ae(x)[0], self.importances)
 
     @property
     @torch.no_grad()

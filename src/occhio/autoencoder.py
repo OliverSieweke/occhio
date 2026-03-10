@@ -1,14 +1,16 @@
 """Implements simple"""
 
 import functools
-from math import sqrt
-from torch import Tensor
-import torch.nn.functional as F
-from typing import Literal, Callable
-import torch.nn as nn
-import torch
-from abc import ABC, abstractmethod
 import math
+from abc import ABC, abstractmethod
+from math import sqrt
+from typing import Callable, Literal
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch import Tensor
+
 from .utils.device import _same_device
 
 
@@ -30,15 +32,17 @@ class AutoEncoderBase(nn.Module, ABC):
         x_hat = self.decode(z)
         return x_hat, z
 
-    def loss(self, x_true: Tensor, x_hat: Tensor, importances: Tensor | None):
+    def loss(self, x_true: Tensor, x_hat: Tensor, importances: Tensor | None = None):
         """The associated loss function."""
+        if self._custom_loss_fn is not None:
+            return self._custom_loss_fn(x_true, x_hat, importances)
         if importances is None:
             importances = torch.ones(self.n_features, device=self.device)  # ty:ignore
         return torch.mean(torch.sum(importances * torch.square(x_true - x_hat), dim=-1))
 
     def __init__(
         self,
-        loss_fn: Callable | None = None,
+        loss_fn: Callable[[Tensor, Tensor, Tensor | None], Tensor] | None = None,
         device: torch.device | str | None = None,
         generator: torch.Generator | None = None,
     ):
@@ -47,8 +51,7 @@ class AutoEncoderBase(nn.Module, ABC):
         Note that we write device to `_init_device`, which remembers where the user intends to store the device.
         """
         super().__init__()
-        if loss_fn is not None:
-            self.loss = loss_fn  # type: ignore[method-assign]
+        self._custom_loss_fn = loss_fn
         if device is not None and generator is not None:
             gen_device = torch.device(generator.device)
             dev = torch.device(device)

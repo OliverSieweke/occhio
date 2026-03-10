@@ -1,3 +1,13 @@
-from .plots import EmbeddingPlot, RepresentationPlot
+from .plots import (
+    EmbeddingPlot,
+    FeatureDimensionalityPlot,
+    ReconstructionLossPlot,
+    RepresentationPlot,
+)
 
-__all__ = ["RepresentationPlot", "EmbeddingPlot"]
+__all__ = [
+    "RepresentationPlot",
+    "EmbeddingPlot",
+    "ReconstructionLossPlot",
+    "FeatureDimensionalityPlot",
+]

@@ -1,11 +1,11 @@
 import plotly.graph_objects as go
+from plotly.graph_objs import Figure
 
 from occhio.toy_model import ToyModel
-from occhio.visualization_2.core.base_plot import BasePlot
-from occhio.visualization_2.core.figure_wrappers import FigureProxy
+from occhio.visualization_2.core.base_plot import SingleModelPlot
 
 
-class RepresentationPlot(BasePlot):
+class RepresentationPlot(SingleModelPlot):
     """Plot W^T W heatmap showing feature interference/orthogonality.
 
     Note: The original plot_representation also showed:
@@ -16,7 +16,7 @@ class RepresentationPlot(BasePlot):
 
     def render(
         self,
-        fig: FigureProxy,
+        fig: Figure,
         model: ToyModel,
     ) -> None:
         colorscale = ["#6699FF", "#F0F0F0", "#FF6666"]

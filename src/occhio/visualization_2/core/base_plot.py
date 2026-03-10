@@ -3,34 +3,46 @@ from abc import ABC, abstractmethod
 from typing import Sequence, cast, overload
 
 import plotly.graph_objects as go
+from plotly.graph_objs import Figure
 from plotly.subplots import make_subplots
 
-from occhio.model_grid import ModelGrid
+from occhio.model_grid import ModelGrid, TrainingAxis
 from occhio.toy_model import ToyModel
 from occhio.visualization_2.core.figure_wrappers import FigureProxy, InteractiveFigure
 from occhio.visualization_2.core.plotting_utils import add_grid_headers
 
 
 class PlotRenderer(ABC):
-    """Abstract base for objects that render a single model into a subplot cell.
+    """Abstract base for objects that render models into a subplot cell.
 
     Subclasses implement ``render()`` to add Plotly traces to a ``FigureProxy``.
+    The ``n_render_axes`` class attribute declares how many grid axes the plot
+    expects to receive for rendering within a single subplot.
+    """
+
+    n_render_axes: int = 0
+    """Number of grid axes this plot expects to iterate over within a single subplot.
+
+    - 0: receives a single ToyModel (default, backward-compatible)
+    - 1: receives a 1D ModelGrid (e.g., for line charts over Epoch)
+    - 2: receives a 2D ModelGrid (e.g., x-axis + line series)
     """
 
     @abstractmethod
     def render(
         self,
-        fig: FigureProxy,
-        model: ToyModel,
+        fig: Figure,
+        models: ToyModel | ModelGrid,
     ) -> None:
-        """Add traces for a single model to the figure.
+        """Add traces for model(s) to the figure.
 
         Subclasses must implement this method. Write normal Plotly code
         against fig—subplot routing is handled automatically.
 
         Args:
             fig: A FigureProxy wrapping the Plotly figure.
-            model: The ToyModel to visualize.
+            models: A ToyModel (when n_render_axes=0) or a ModelGrid with
+                    dimensionality equal to n_render_axes.
         """
         ...
 
@@ -80,8 +92,8 @@ class BasePlot(PlotRenderer, ABC):
             f"Axis specifier must be int or str, got {type(spec).__name__}."
         )
 
-    @staticmethod
-    def _resolve_full_axes(
+    def _resolve_axes(
+        self,
         grid: ModelGrid,
         *,
         facet_axes: Sequence[AxisSpec] | None,
@@ -149,6 +161,51 @@ class BasePlot(PlotRenderer, ABC):
         )
         available_axes = all_axes - used_axes
 
+        # If slider_axes was not explicitly provided, default TrainingAxis to slider
+        if resolved_slider_axes is None:
+            training_indices = {
+                i for i in available_axes if isinstance(grid.axes[i], TrainingAxis)
+            }
+            if training_indices:
+                resolved_slider_axes = sorted(training_indices)
+                available_axes -= training_indices
+
+        # Handle render_axes based on n_render_axes
+        if resolved_render_axes is None and self.n_render_axes > 0:
+            # Auto-assign render axes: prefer TrainingAxis first, then rightmost axes
+            # For n_render_axes=1, pick the last available axis (often TrainingAxis/Epoch)
+            training_in_available = [
+                i
+                for i in sorted(available_axes)
+                if isinstance(grid.axes[i], TrainingAxis)
+            ]
+            if (
+                training_in_available
+                and len(training_in_available) >= self.n_render_axes
+            ):
+                resolved_render_axes = training_in_available[: self.n_render_axes]
+            else:
+                # Fall back to rightmost available axes
+                resolved_render_axes = sorted(available_axes)[-self.n_render_axes :]
+
+            # Remove from slider_axes if they were auto-assigned there
+            if resolved_slider_axes:
+                resolved_slider_axes = [
+                    i for i in resolved_slider_axes if i not in resolved_render_axes
+                ]
+            available_axes -= set(resolved_render_axes)
+
+        if resolved_render_axes is None:
+            resolved_render_axes = []
+
+        # Validate render_axes count matches n_render_axes
+        if len(resolved_render_axes) != self.n_render_axes:
+            raise ValueError(
+                f"{type(self).__name__} expects {self.n_render_axes} render axes, "
+                f"but got {len(resolved_render_axes)}. "
+                f"Provide render_axes explicitly or ensure the grid has enough axes."
+            )
+
         if resolved_facet_axes is None:
             # facet_axes gets all the axes starting from the left, up-to-two available axes
             resolved_facet_axes = sorted(available_axes)[: min(2, len(available_axes))]
@@ -157,9 +214,12 @@ class BasePlot(PlotRenderer, ABC):
         if resolved_slider_axes is None:
             # slider_axes gets everything that is left
             resolved_slider_axes = sorted(available_axes)
+        else:
+            # slider_axes was set (either explicitly or via TrainingAxis default),
+            # absorb any remaining unassigned axes
+            resolved_slider_axes = sorted(set(resolved_slider_axes) | available_axes)
 
-        # [05.03.26 | OliverSieweke] TODO: render_axes is hard coded to empty for now
-        return [], resolved_facet_axes, resolved_slider_axes
+        return resolved_render_axes, resolved_facet_axes, resolved_slider_axes
 
     def __call__(
         self,
@@ -185,7 +245,7 @@ class BasePlot(PlotRenderer, ABC):
             fig = self._render_static_subplots(models)
 
         elif isinstance(models, ModelGrid):
-            render_axes, facet_axes, slider_axes = self._resolve_full_axes(
+            render_axes, facet_axes, slider_axes = self._resolve_axes(
                 models,
                 render_axes=render_axes,
                 facet_axes=facet_axes,
@@ -232,7 +292,6 @@ class BasePlot(PlotRenderer, ABC):
         self,
         grid: ModelGrid | ToyModel,
         *,
-        # TODO: In the future, render axes could be iterated over within each subplot
         render_axes: list[int] | None = None,
         facet_axes: list[int] | None = None,
     ) -> go.Figure:
@@ -245,31 +304,39 @@ class BasePlot(PlotRenderer, ABC):
         if isinstance(grid, ToyModel):
             # This is the case where the facet axes were explicitly set to an empty list
             fig = make_subplots(rows=1, cols=1)
-            self.render(FigureProxy(fig, row=1, col=1), grid)
+            self.render(cast(Figure, FigureProxy(fig, row=1, col=1)), grid)
 
         elif isinstance(grid, ModelGrid):
             if facet_axes is None:
                 raise ValueError(
                     "facet_axes must be provided when rendering a ModelGrid"
                 )
+            if render_axes is None:
+                render_axes = []
+
             n_cols = grid.shape[facet_axes[0]] if len(facet_axes) >= 1 else 1
             n_rows = grid.shape[facet_axes[1]] if len(facet_axes) >= 2 else 1
 
             fig = make_subplots(rows=n_rows, cols=n_cols)
 
             for row_idx, col_idx in itertools.product(range(n_rows), range(n_cols)):
-                # Select the right model from grid for the current subplot position:
-                # - The first facet index determines the column position
-                # - The second facet index determines the row position
-                grid_index: list[int] = [0] * len(grid.shape)
+                # Build grid index:
+                #  - facet dims → specific int (selects one position)
+                #  - render dims → slice(None) (preserves the axis for render())
+                #  - everything else → 0
+                grid_index: list[int | slice] = [0] * len(grid.shape)
+                for render_idx in render_axes:
+                    grid_index[render_idx] = slice(None)
                 if len(facet_axes) >= 1:
                     grid_index[facet_axes[0]] = col_idx
                 if len(facet_axes) >= 2:
                     grid_index[facet_axes[1]] = row_idx
 
+                sub_data = grid[tuple(grid_index)]
+
                 self.render(
-                    FigureProxy(fig, row=row_idx + 1, col=col_idx + 1),
-                    cast(ToyModel, grid[tuple(grid_index)]),
+                    cast(Figure, FigureProxy(fig, row=row_idx + 1, col=col_idx + 1)),
+                    sub_data,
                 )
 
         return fig
@@ -381,3 +448,81 @@ class BasePlot(PlotRenderer, ABC):
         )
 
         return InteractiveFigure(fig)
+
+
+class SingleModelPlot(BasePlot, ABC):
+    """BasePlot that renders a single ToyModel per subplot (n_render_axes=0).
+
+    Subclasses implement ``render(fig, model)`` with a ``ToyModel`` — no need to
+    check types or unwrap a grid.
+
+    Example::
+
+        class MyPlot(SingleModelPlot):
+            def render(self, fig, model):
+                fig.add_trace(go.Scatter(x=[0, 1], y=[model.feature_norms[0].item()]))
+    """
+
+    n_render_axes = 0
+
+    @abstractmethod
+    def render(self, fig: Figure, model: ToyModel) -> None:  # type: ignore[override]
+        """Add traces for a single model to the figure.
+
+        Args:
+            fig: A FigureProxy wrapping the Plotly figure.
+            model: The ToyModel to visualize.
+        """
+        ...
+        # [05.03.26 | OliverSieweke] TODO:also checks here
+
+
+class GridPlot(BasePlot, ABC):
+    """BasePlot that renders an N-dimensional ModelGrid per subplot (n_render_axes≥1).
+
+    Subclasses set ``n_render_axes`` and implement ``render(fig, grid)``
+    receiving a ``ModelGrid`` with exactly that many dimensions — no need to
+    check types or validate dimensionality.
+
+    Example::
+
+        class LossCurvePlot(GridPlot):
+            n_render_axes = 1
+
+            def render(self, fig, grid):
+                axis = grid.axes[0]
+                losses = [
+                    m.feature_reconstruction_loss.item() for m in grid.models.ravel()
+                ]
+                fig.add_trace(go.Scatter(x=axis.values.tolist(), y=losses))
+    """
+
+    n_render_axes: int = 1
+
+    def render(  # type: ignore[override]
+        self,
+        fig: Figure,
+        models: ModelGrid,
+    ) -> None:
+        if isinstance(models, ToyModel):
+            raise TypeError(
+                f"{type(self).__name__} (n_render_axes={self.n_render_axes}) "
+                f"expects a ModelGrid, not a single ToyModel. "
+                f"Provide a ModelGrid with render_axes specified."
+            )
+        if len(models.shape) != self.n_render_axes:
+            raise ValueError(
+                f"{type(self).__name__} expects a {self.n_render_axes}D ModelGrid, "
+                f"got {len(models.shape)}D (shape: {models.shape})."
+            )
+        self.render_grid(fig, models)
+
+    @abstractmethod
+    def render_grid(self, fig: Figure, grid: ModelGrid) -> None:
+        """Add traces for a grid of models to the figure.
+
+        Args:
+            fig: A FigureProxy wrapping the Plotly figure.
+            grid: A ModelGrid with dimensionality equal to ``n_render_axes``.
+        """
+        ...

@@ -1,23 +1,22 @@
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.graph_objs import Figure
 
+from occhio.model_grid import ModelGrid
 from occhio.toy_model import ToyModel
-from occhio.visualization_2.core.base_plot import BasePlot
-from occhio.visualization_2.core.figure_wrappers import FigureProxy
+from occhio.visualization_2.core.base_plot import BasePlot, SingleModelPlot
 
 
-class EmbeddingPlot(BasePlot):
+class EmbeddingPlot(SingleModelPlot):
     """Plot encoder weight vectors as arrows from origin."""
 
     def render(
         self,
-        fig: FigureProxy,
+        fig: Figure,
         model: ToyModel,
-        **kwargs,
     ) -> None:
         colorscale = px.colors.sequential.Plasma_r
 
-        # Check embedding dimension
         embedding_dim = model.W.shape[0]
         if embedding_dim not in [1, 2]:
             raise ValueError(
