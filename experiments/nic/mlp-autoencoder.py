@@ -156,7 +156,7 @@ for model_name, snapshots in all_models:
     print(f"{model_name}: {n_below}/{N_FEATURES} features with MSE < 0.5")
 
 # %%
-# --- Encoder linearity deviation: encode(α·e_i) - α·encode(e_i) ---
+# --- Encoder linearity deviation: encode(α·e_i) vs α·encode(e_i) + (1-α)·encode(0) ---
 # Only meaningful for TiedMLPEncoder models (TiedLinearRelu encoder is linear by construction)
 alphas = torch.linspace(0, 1, 20, device=DEVICE)
 
@@ -165,12 +165,14 @@ ae_test = ae  # last ae from the loop above
 with torch.no_grad():
     eye = torch.eye(N_FEATURES, device=DEVICE)
     enc_ei = ae_test.encode(eye)  # (N_FEATURES, N_HIDDEN)
+    enc_0 = ae_test.encode(torch.zeros(N_FEATURES, device=DEVICE))  # (N_HIDDEN,)
 
     # Sum deviation over all alphas for each feature
     total_deviation = torch.zeros(N_FEATURES, device=DEVICE)
     for alpha in alphas:
         enc_alpha_ei = ae_test.encode(alpha * eye)
-        total_deviation += (enc_alpha_ei - alpha * enc_ei).mean(dim=-1)
+        expected = alpha * enc_ei + (1 - alpha) * enc_0
+        total_deviation += (enc_alpha_ei - expected).abs().mean(dim=-1)
 
 fig = go.Figure()
 fig.add_trace(
@@ -182,17 +184,18 @@ fig.add_trace(
 fig.update_layout(
     title=f"Encoder Nonlinearity — TiedMLP (d={INTERMEDIATES[-1]})",
     xaxis_title="Feature index",
-    yaxis_title="mean |enc(a * eᵢ) − a * enc(eᵢ)|",
+    yaxis_title="mean |enc(αeᵢ) − [α·enc(eᵢ) + (1−α)·enc(0)]|",
 )
 fig.show()
 
 # %%
-# --- Encoder additivity deviation: encode(e_i + e_j) - encode(e_i) - encode(e_j) ---
-# For a linear encoder this is zero; measures how much the MLP encoder creates cross-feature interference
+# --- Encoder additivity deviation: enc(eᵢ+eⱼ) vs enc(eᵢ) + enc(eⱼ) - enc(0) ---
+# For an affine encoder f(x+y) = f(x) + f(y) - f(0); deviation measures nonlinearity
 N_PAIRS = 1000  # random pairs to sample
 with torch.no_grad():
     eye = torch.eye(N_FEATURES, device=DEVICE)
     enc_ei = ae_test.encode(eye)  # (N_FEATURES, N_HIDDEN)
+    enc_0 = ae_test.encode(torch.zeros(N_FEATURES, device=DEVICE))  # (N_HIDDEN,)
 
     # Sample random (i, j) pairs with i < j
     rng = np.random.default_rng(0)
@@ -206,8 +209,8 @@ with torch.no_grad():
     x_ij = eye[pairs_i] + eye[pairs_j]  # (N_PAIRS, N_FEATURES)
     enc_ij = ae_test.encode(x_ij)  # (N_PAIRS, N_HIDDEN)
 
-    # encode(e_i) + encode(e_j)
-    enc_sum = enc_ei[pairs_i] + enc_ei[pairs_j]  # (N_PAIRS, N_HIDDEN)
+    # encode(e_i) + encode(e_j) - encode(0)
+    enc_sum = enc_ei[pairs_i] + enc_ei[pairs_j] - enc_0  # (N_PAIRS, N_HIDDEN)
 
     # Per-pair deviation
     pair_deviation = (enc_ij - enc_sum).abs().sum(dim=-1).cpu().numpy()  # (N_PAIRS,)
@@ -233,7 +236,7 @@ fig.add_trace(
 fig.update_layout(
     title=f"Encoder Additivity Deviation — TiedMLP (d={INTERMEDIATES[-1]})",
     xaxis_title="Feature index",
-    yaxis_title="mean |enc(eᵢ+eⱼ) − enc(eᵢ) − enc(eⱼ)|",
+    yaxis_title="mean |enc(eᵢ+eⱼ) − enc(eᵢ) − enc(eⱼ) + enc(0)|",
 )
 fig.show()
 
@@ -325,11 +328,9 @@ eigvals_origin = torch.linalg.eigvalsh(g0.cpu()).numpy()
 fig = go.Figure()
 for k in range(N_HIDDEN):
     fig.add_trace(
-        go.Violin(
+        go.Box(
             y=all_eigenvalues[:, k],
             name=f"λ_{k}",
-            box_visible=True,
-            meanline_visible=True,
             showlegend=False,
         )
     )
@@ -348,6 +349,143 @@ fig.update_layout(
     xaxis_title="Eigenvalue index (ascending)",
     yaxis_title="Eigenvalue",
     yaxis_type="log",
+)
+fig.show()
+
+# %%
+# --- Ricci scalar curvature per sample, averaged per active feature ---
+EPS = 1e-3
+N_RICCI_SAMPLES = 512
+
+x_ricci = x_samples[:N_RICCI_SAMPLES]
+ricci_scalars = np.zeros(N_RICCI_SAMPLES)
+
+
+def metric_at(x):
+    """Compute g(x) = J(x)^T J(x)."""
+    x = x.requires_grad_(True)
+    J = torch.autograd.functional.jacobian(ae_test.encode, x)
+    return J @ J.T
+
+
+for i in range(N_RICCI_SAMPLES):
+    xi = x_ricci[i]
+    n = N_HIDDEN
+
+    g = metric_at(xi).cpu()
+    g_inv = torch.linalg.inv(g)
+
+    # Tangent vectors in input space for latent coordinate directions
+    J_i = torch.autograd.functional.jacobian(
+        ae_test.encode, xi.requires_grad_(True)
+    ).cpu()
+    J_pinv = torch.linalg.pinv(J_i)  # (N_FEATURES, N_HIDDEN)
+
+    # Numerical derivatives of metric: dg[k, a, b] = ∂g_{ab}/∂z^k
+    dg = torch.zeros(n, n, n)
+    for k in range(n):
+        delta = EPS * J_pinv[:, k].to(DEVICE)
+        g_plus = metric_at(xi + delta).cpu()
+        g_minus = metric_at(xi - delta).cpu()
+        dg[k] = (g_plus - g_minus) / (2 * EPS)
+
+    # Christoffel symbols: Γ^c_{ab} = 0.5 * g^{cd} (∂_a g_{bd} + ∂_b g_{ad} - ∂_d g_{ab})
+    christoffel = torch.zeros(n, n, n)
+    for c in range(n):
+        for a in range(n):
+            for b in range(n):
+                val = 0.0
+                for d in range(n):
+                    val += g_inv[c, d] * (dg[a, b, d] + dg[b, a, d] - dg[d, a, b])
+                christoffel[c, a, b] = 0.5 * val
+
+    # Numerical derivatives of Christoffel symbols
+    dchristoffel = torch.zeros(n, n, n, n)  # [deriv_dir, c, a, b]
+    for k in range(n):
+        delta = EPS * J_pinv[:, k].to(DEVICE)
+
+        g_plus = metric_at(xi + delta).cpu()
+        g_minus = metric_at(xi - delta).cpu()
+        g_inv_plus = torch.linalg.inv(g_plus)
+        g_inv_minus = torch.linalg.inv(g_minus)
+
+        dg_plus = torch.zeros(n, n, n)
+        dg_minus = torch.zeros(n, n, n)
+        for j in range(n):
+            delta_j = EPS * J_pinv[:, j].to(DEVICE)
+            dg_plus[j] = (
+                metric_at(xi + delta + delta_j).cpu()
+                - metric_at(xi + delta - delta_j).cpu()
+            ) / (2 * EPS)
+            dg_minus[j] = (
+                metric_at(xi - delta + delta_j).cpu()
+                - metric_at(xi - delta - delta_j).cpu()
+            ) / (2 * EPS)
+
+        chris_plus = torch.zeros(n, n, n)
+        chris_minus = torch.zeros(n, n, n)
+        for c in range(n):
+            for a in range(n):
+                for b in range(n):
+                    vp, vm = 0.0, 0.0
+                    for d in range(n):
+                        vp += g_inv_plus[c, d] * (
+                            dg_plus[a, b, d] + dg_plus[b, a, d] - dg_plus[d, a, b]
+                        )
+                        vm += g_inv_minus[c, d] * (
+                            dg_minus[a, b, d] + dg_minus[b, a, d] - dg_minus[d, a, b]
+                        )
+                    chris_plus[c, a, b] = 0.5 * vp
+                    chris_minus[c, a, b] = 0.5 * vm
+
+        dchristoffel[k] = (chris_plus - chris_minus) / (2 * EPS)
+
+    # Ricci tensor: R_{ab} = ∂_c Γ^c_{ab} - ∂_b Γ^c_{ac} + Γ^c_{cd} Γ^d_{ab} - Γ^c_{bd} Γ^d_{ac}
+    ricci_tensor = torch.zeros(n, n)
+    for a in range(n):
+        for b in range(n):
+            val = 0.0
+            for c in range(n):
+                val += dchristoffel[c, c, a, b] - dchristoffel[b, c, a, c]
+                for d in range(n):
+                    val += christoffel[c, c, d] * christoffel[d, a, b]
+                    val -= christoffel[c, b, d] * christoffel[d, a, c]
+            ricci_tensor[a, b] = val
+
+    # Ricci scalar: R = g^{ab} R_{ab}
+    ricci_scalars[i] = torch.einsum("ab,ab->", g_inv, ricci_tensor).item()
+
+    if (i + 1) % 100 == 0:
+        print(f"Ricci: {i + 1}/{N_RICCI_SAMPLES}")
+
+# %%
+# --- Average Ricci scalar per feature (over samples where that feature is active) ---
+active_mask = (
+    (x_ricci[:N_RICCI_SAMPLES] > 0).cpu().numpy()
+)  # (N_RICCI_SAMPLES, N_FEATURES)
+
+per_feature_ricci = np.zeros(N_FEATURES)
+per_feature_ricci_count = np.zeros(N_FEATURES)
+for i in range(N_RICCI_SAMPLES):
+    for f in range(N_FEATURES):
+        if active_mask[i, f]:
+            per_feature_ricci[f] += ricci_scalars[i]
+            per_feature_ricci_count[f] += 1
+
+per_feature_ricci_count = np.maximum(per_feature_ricci_count, 1)
+per_feature_ricci_avg = per_feature_ricci / per_feature_ricci_count
+
+fig = go.Figure()
+fig.add_trace(
+    go.Bar(
+        x=list(range(N_FEATURES)),
+        y=per_feature_ricci_avg,
+    )
+)
+fig.update_layout(
+    title=f"Average Ricci Scalar per Active Feature — TiedMLP (d={INTERMEDIATES[-1]})",
+    xaxis_title="Feature index",
+    yaxis_title="Mean Ricci scalar (when feature active)",
 )
 fig.show()
 

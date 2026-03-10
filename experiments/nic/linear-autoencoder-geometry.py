@@ -65,12 +65,14 @@ alphas = torch.linspace(0, 1, 20, device=DEVICE)
 with torch.no_grad():
     eye = torch.eye(N_FEATURES, device=DEVICE)
     enc_ei = ae.encode(eye)  # (N_FEATURES, N_HIDDEN)
+    enc_0 = ae.encode(torch.zeros(N_FEATURES, device=DEVICE))  # (N_HIDDEN,)
 
     # Sum deviation over all alphas for each feature
     total_deviation = torch.zeros(N_FEATURES, device=DEVICE)
     for alpha in alphas:
         enc_alpha_ei = ae.encode(alpha * eye)
-        total_deviation += (enc_alpha_ei - alpha * enc_ei).mean(dim=-1)
+        expected = alpha * enc_ei + (1 - alpha) * enc_0
+        total_deviation += (enc_alpha_ei - expected).abs().mean(dim=-1)
 
 fig = go.Figure()
 fig.add_trace(
@@ -82,17 +84,18 @@ fig.add_trace(
 fig.update_layout(
     title="Encoder Nonlinearity — TiedLinearRelu (null baseline)",
     xaxis_title="Feature index",
-    yaxis_title="mean |enc(a * eᵢ) − a * enc(eᵢ)|",
+    yaxis_title="mean |enc(αeᵢ) − [α·enc(eᵢ) + (1−α)·enc(0)]|",
 )
 fig.show()
 
 # %%
-# --- Encoder additivity deviation: encode(e_i + e_j) - encode(e_i) - encode(e_j) ---
-# For a linear encoder this is zero; measures cross-feature interference
+# --- Encoder additivity deviation: enc(eᵢ+eⱼ) vs enc(eᵢ) + enc(eⱼ) - enc(0) ---
+# For an affine encoder f(x+y) = f(x) + f(y) - f(0); deviation measures nonlinearity
 N_PAIRS = 1000  # random pairs to sample
 with torch.no_grad():
     eye = torch.eye(N_FEATURES, device=DEVICE)
     enc_ei = ae.encode(eye)  # (N_FEATURES, N_HIDDEN)
+    enc_0 = ae.encode(torch.zeros(N_FEATURES, device=DEVICE))  # (N_HIDDEN,)
 
     # Sample random (i, j) pairs with i < j
     rng = np.random.default_rng(0)
@@ -106,8 +109,8 @@ with torch.no_grad():
     x_ij = eye[pairs_i] + eye[pairs_j]  # (N_PAIRS, N_FEATURES)
     enc_ij = ae.encode(x_ij)  # (N_PAIRS, N_HIDDEN)
 
-    # encode(e_i) + encode(e_j)
-    enc_sum = enc_ei[pairs_i] + enc_ei[pairs_j]  # (N_PAIRS, N_HIDDEN)
+    # encode(e_i) + encode(e_j) - encode(0)
+    enc_sum = enc_ei[pairs_i] + enc_ei[pairs_j] - enc_0  # (N_PAIRS, N_HIDDEN)
 
     # Per-pair deviation
     pair_deviation = (enc_ij - enc_sum).abs().sum(dim=-1).cpu().numpy()  # (N_PAIRS,)
@@ -133,7 +136,7 @@ fig.add_trace(
 fig.update_layout(
     title="Encoder Additivity Deviation — TiedLinearRelu (null baseline)",
     xaxis_title="Feature index",
-    yaxis_title="mean |enc(eᵢ+eⱼ) − enc(eᵢ) − enc(eⱼ)|",
+    yaxis_title="mean |enc(eᵢ+eⱼ) − enc(eᵢ) − enc(eⱼ) + enc(0)|",
 )
 fig.show()
 
@@ -223,11 +226,9 @@ eigvals_origin = torch.linalg.eigvalsh(g0.cpu()).numpy()
 fig = go.Figure()
 for k in range(N_HIDDEN):
     fig.add_trace(
-        go.Violin(
+        go.Box(
             y=all_eigenvalues[:, k],
             name=f"λ_{k}",
-            box_visible=True,
-            meanline_visible=True,
             showlegend=False,
         )
     )

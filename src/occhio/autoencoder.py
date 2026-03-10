@@ -155,19 +155,31 @@ class TiedLinearRelu(AutoEncoderBase):
 
 
 class MLPEncoder(AutoEncoderBase):
-    def __init__(self, embedding: list[int], unembedding: list[int], **kwargs):
+    def __init__(
+        self,
+        embedding: list[int],
+        unembedding: list[int],
+        tied_initialization: bool = False,
+        **kwargs,
+    ):
         super().__init__(**kwargs)
 
         assert len(embedding) >= 2, "embedding must have at least [input, latent]"
         assert len(unembedding) >= 2, "unembedding must have at least [latent, output]"
         assert embedding[-1] == unembedding[0], "latent dims must match"
         assert embedding[0] == unembedding[-1], "input/output dims must match"
+        if tied_initialization:
+            assert unembedding == embedding[::-1], (
+                "tied_initialization requires unembedding to be the reverse of embedding, "
+                f"got embedding={embedding}, unembedding={unembedding}"
+            )
 
         self.n_features = embedding[0]
         self.n_hidden = embedding[-1]
 
         self.embedding_dims = embedding
         self.unembedding_dims = unembedding
+        self.tied_initialization = tied_initialization
 
         self._build_layers()
 
@@ -192,17 +204,27 @@ class MLPEncoder(AutoEncoderBase):
         self.decoder_weights = nn.ParameterList()
         self.decoder_biases = nn.ParameterList()
         for i in range(len(self.unembedding_dims) - 1):
-            w = nn.Parameter(
-                torch.empty(
-                    self.unembedding_dims[i + 1],
-                    self.unembedding_dims[i],
-                    device=self.device,
+            if self.tied_initialization:
+                # Initialize decoder layer i as transpose of mirrored encoder layer
+                enc_idx = len(self.encoder_weights) - 1 - i
+                w = nn.Parameter(self.encoder_weights[enc_idx].data.t().clone())
+            else:
+                w = nn.Parameter(
+                    torch.empty(
+                        self.unembedding_dims[i + 1],
+                        self.unembedding_dims[i],
+                        device=self.device,
+                    )
                 )
-            )
             b = nn.Parameter(
                 torch.empty(self.unembedding_dims[i + 1], device=self.device)
             )
-            self._init_param(w, b)
+            if not self.tied_initialization:
+                self._init_param(w, b)
+            else:
+                fan_in = self.unembedding_dims[i]
+                bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
+                nn.init.uniform_(b, -bound, bound, generator=self.generator)
             self.decoder_weights.append(w)
             self.decoder_biases.append(b)
 
