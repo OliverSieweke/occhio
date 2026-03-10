@@ -10,6 +10,10 @@ from .jacobian import (
     jacobian_pca,
     direction_vs_context,
     compute_all_feature_jacobians,
+    compute_decoder_jacobians,
+    gradient_norm_distribution,
+    perturbation_sensitivity,
+    get_relu_boundary_normals,
 )
 
 __all__ = [
@@ -18,4 +22,8 @@ __all__ = [
     "jacobian_pca",
     "direction_vs_context",
     "compute_all_feature_jacobians",
+    "compute_decoder_jacobians",
+    "gradient_norm_distribution",
+    "perturbation_sensitivity",
+    "get_relu_boundary_normals",
 ]
