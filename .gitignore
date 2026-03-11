@@ -14,3 +14,4 @@ test.ipynb
 .vscode/
 docs/_build
 .ipynb_checkpoints/
+experiments/laws/law1/figures/
