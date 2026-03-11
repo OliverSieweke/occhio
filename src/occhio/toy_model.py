@@ -161,7 +161,7 @@ class ToyModel:
 
             if loss_buffer is not None:
                 loss_buffer[ep] = loss.detach()
-            if verbose and (ep + 1) % 1000 == 0:
+            if verbose and (ep + 1) % 5000 == 0:
                 print(f"AE Epoch {ep + 1}/{n_epochs}, Loss: {loss.item():.6f}")
             if hooks and (ep % hook_freq == 0 or ep == n_epochs - 1):
                 with torch.no_grad():

@@ -52,18 +52,16 @@ things: list[np.ndarray] = [
 gen = torch.Generator()
 gen.manual_seed(5)
 
-dist = DAGRandomWalkToRoot(2, 0.5, 1.0, generator=gen)
-
-# We force DAG layout
-dist.adjacency = torch.Tensor(things[0])
-dist._build_parent_cache()
+dist = DAGRandomWalkToRoot(2, 0.5, things[0], generator=gen)
 
 
 ae = MLPEncoder([2, 1], [1, 4, 2], generator=gen)
-tm = ToyModel(dist, ae, generator=gen)
+tm = ToyModel(dist, ae)
 losses = tm.fit(15_000, verbose=True)
+
+
 # %%
-px.line(losses)
+px.line(losses[0])
 
 # %%
 exsample = dist.sample(5)

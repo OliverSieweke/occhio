@@ -14,7 +14,7 @@ from occhio.toy_model import ToyModel
 DEVICE = "mps"
 N_FEATURES = 200
 N_HIDDEN = 20
-N_EPOCHS = 50_000
+N_EPOCHS = 150_000
 BATCH_SIZE = 512
 EVAL_SAMPLES = 10_000
 EVAL_FREQ = 200
@@ -310,8 +310,174 @@ fig.update_layout(
 )
 fig.show()
 
+# %% --- SAE training ---
+import importlib
+import occhio.sae.sae
+
+importlib.reload(occhio.sae.sae)
+from occhio.sae.sae import SAESimple
+
+N_DICT = 2 * N_FEATURES  # overcomplete dictionary
+SAE_STEPS = 50_000
+SAE_BATCH = 2048
+SAE_LR = 3e-4
+SAE_L1 = 0.05
+
+sae = SAESimple(
+    n_latent=N_HIDDEN,
+    n_dict=N_DICT,
+    l1_coef=SAE_L1,
+    device=DEVICE,
+).to(DEVICE)
+
+
+def sae_data_fn(batch_size: int):
+    """Sample from the distribution and encode through tm to get hidden activations."""
+    with torch.no_grad():
+        raw = tm.distribution.sample(batch_size)
+        x = raw[0] if isinstance(raw, tuple) else raw
+        x = x.to(DEVICE)
+        return tm.ae.encode(x)
+
+
+sae_losses = sae.train_sae(
+    data_fn=sae_data_fn,
+    n_steps=SAE_STEPS,
+    batch_size=SAE_BATCH,
+    lr=SAE_LR,
+)
+
 # %%
-# --- Eigenspectrum of g(z) across samples ---
+# --- SAE loss curve ---
+fig = go.Figure()
+fig.add_trace(go.Scatter(y=sae_losses, mode="lines", name="SAE loss"))
+fig.update_layout(
+    title=f"SAE Training Loss (dict={N_DICT}, L1={SAE_L1})",
+    xaxis_title="Step",
+    yaxis_title="Loss",
+    yaxis_type="log",
+)
+fig.show()
+
+# %%
+# --- SAE per-feature reconstruction MSE ---
+with torch.no_grad():
+    eye = torch.eye(N_FEATURES, device=DEVICE)
+    hidden = tm.ae.encode(eye)  # (N_FEATURES, N_HIDDEN)
+    hidden_hat = sae.decode(sae.encode(hidden))  # (N_FEATURES, N_HIDDEN)
+    sae_per_feature_mse = (hidden - hidden_hat).abs().sum(dim=-1).cpu().numpy()
+
+fig = go.Figure()
+fig.add_trace(
+    go.Bar(
+        x=list(range(N_FEATURES)),
+        y=sae_per_feature_mse,
+        name="SAE per-feature abs(err)",
+    )
+)
+fig.update_layout(
+    title="SAE Per-Feature Reconstruction abs(err) (in hidden space)",
+    xaxis_title="Feature index",
+    yaxis_title="abs(err)",
+)
+fig.show()
+
+# %%
+# --- Decode SAE dictionary elements through tm.ae.decode → feature space ---
+# Each row of W_dec is a dictionary element in hidden space; decode to feature space
+with torch.no_grad():
+    # W_dec: (N_DICT, N_HIDDEN) — each row is a dict element's hidden representation
+    dict_in_feature_space = tm.ae.decode(sae.W_dec)  # (N_DICT, N_FEATURES)
+
+    # For each dict element, which ground-truth feature does it align with most?
+    best_feature = dict_in_feature_space.abs().argmax(dim=-1).cpu().numpy()  # (N_DICT,)
+    # How "pure" is it? Fraction of energy in the top feature
+    norms = dict_in_feature_space.abs().sum(dim=-1, keepdim=True).clamp(min=1e-8)
+    purity = (
+        (dict_in_feature_space.abs().max(dim=-1).values / norms.squeeze()).cpu().numpy()
+    )
+
+    # Dead latent detection: which dict elements never fire on real data?
+    test_data = sae_data_fn(10_000)
+    sae_activations = sae.encode(test_data)  # (10000, N_DICT)
+    ever_active = (sae_activations > 0).any(dim=0).cpu().numpy()  # (N_DICT,)
+    n_dead = int((~ever_active).sum())
+    n_alive = int(ever_active.sum())
+
+    # Feature coverage: how many ground-truth features have at least one dedicated alive latent?
+    covered_features = set(best_feature[ever_active])
+    n_covered = len(covered_features)
+
+print(f"Alive latents: {n_alive}/{N_DICT}, Dead: {n_dead}")
+print(f"Ground-truth features covered: {n_covered}/{N_FEATURES}")
+
+# %%
+# --- Dictionary element purity histogram ---
+fig = go.Figure()
+fig.add_trace(go.Histogram(x=purity[ever_active], nbinsx=40, name="Alive latents"))
+fig.update_layout(
+    title="SAE Dictionary Element Purity (fraction of energy in top feature)",
+    xaxis_title="Purity (max feature / total)",
+    yaxis_title="Count",
+)
+fig.show()
+
+# %%
+# --- Decoded dictionary elements: heatmap of top-20 most active ---
+with torch.no_grad():
+    # Rank dict elements by mean activation
+    mean_act = sae_activations.mean(dim=0)  # (N_DICT,)
+    top_dict_idx = mean_act.argsort(descending=True)[:20].cpu().numpy()
+    top_decoded = dict_in_feature_space[top_dict_idx].cpu().numpy()  # (20, N_FEATURES)
+
+fig = go.Figure(
+    go.Heatmap(
+        z=top_decoded,
+        x=list(range(N_FEATURES)),
+        y=[f"dict_{i} → feat {best_feature[i]}" for i in top_dict_idx],
+        colorscale="RdBu_r",
+        zmid=0,
+    )
+)
+fig.update_layout(
+    title="Top-20 SAE Dict Elements Decoded to Feature Space",
+    xaxis_title="Ground-truth feature index",
+    yaxis_title="Dictionary element",
+    height=600,
+)
+fig.show()
+
+# %%
+# --- How does the SAE represent each ground-truth feature? ---
+with torch.no_grad():
+    eye = torch.eye(N_FEATURES, device=DEVICE)
+    hidden = tm.ae.encode(eye)  # (N_FEATURES, N_HIDDEN)
+    sae_acts = sae.encode(hidden)  # (N_FEATURES, N_DICT)
+
+    # Only show SAE latents that are ever active for any feature
+    active_latents = (sae_acts > 0).any(dim=0)  # (N_DICT,)
+    active_idx = torch.where(active_latents)[0].cpu().numpy()
+    sae_acts_active = (
+        sae_acts[:, active_latents].cpu().numpy()
+    )  # (N_FEATURES, n_active)
+
+fig = go.Figure(
+    go.Heatmap(
+        z=sae_acts_active.T,
+        x=list(range(N_FEATURES)),
+        y=[f"latent_{i}" for i in active_idx],
+        colorscale="Viridis",
+    )
+)
+fig.update_layout(
+    title="SAE Activations per Ground-Truth Feature (one-hot → encode → SAE)",
+    xaxis_title="Ground-truth feature index",
+    yaxis_title="SAE latent",
+    height=max(400, len(active_idx) * 12),
+)
+fig.show()
+
+# %% --- Eigenspectrum of g(z) across samples ---
 all_eigenvalues = []  # list of (N_HIDDEN,) arrays
 for i in range(N_METRIC_SAMPLES):
     xi = x_samples[i].requires_grad_(True)
@@ -355,7 +521,7 @@ fig.show()
 # %%
 # --- Ricci scalar curvature per sample, averaged per active feature ---
 EPS = 1e-3
-N_RICCI_SAMPLES = 512
+N_RICCI_SAMPLES = 8
 
 x_ricci = x_samples[:N_RICCI_SAMPLES]
 ricci_scalars = np.zeros(N_RICCI_SAMPLES)

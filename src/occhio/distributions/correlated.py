@@ -20,6 +20,13 @@ class HierarchicalPairs(Distribution):
         p_follow: Conditional probability that the secondary feature (2i+1)
             activates given that the primary feature is active. Defaults to 0.5.
             Scalar or per-feature.
+        beta: Optional magnitude coupling factor in [0, 1]. When set, the
+            secondary feature's value is tied to the primary's:
+            ``v_child = v_parent * (beta + (1 - beta) * U)`` where
+            ``U ~ Uniform(0, 1)``. At ``beta=1.0`` the child copies the
+            parent value exactly; at ``beta=0.0`` the child gets
+            ``v_parent * U``. When ``None`` (default), the secondary value
+            is an independent ``Uniform(0, 1)`` draw (original behaviour).
         device: Torch device for all generated tensors.
         generator: Optional ``torch.Generator`` for deterministic sampling.
 
@@ -42,12 +49,14 @@ class HierarchicalPairs(Distribution):
         n_features: int,
         p_active: float | list[float] | Tensor,
         p_follow: float | list[float] | Tensor = 0.5,
+        beta: float | None = None,
         **kwargs,
     ):
         assert n_features % 2 == 0, "Need even `n_features` for pairs."
         super().__init__(n_features, **kwargs)
         self.p_active = self._broadcast(p_active)
         self.p_follow = self._broadcast(p_follow)
+        self.beta = beta
 
     def sample(self, batch_size: int) -> Tensor:
         n_pairs = self.n_features // 2
@@ -56,14 +65,19 @@ class HierarchicalPairs(Distribution):
             self._rand(batch_size, n_pairs) < self.p_follow[1::2]
         )
 
-        mask = torch.empty(
-            batch_size, self.n_features, dtype=torch.bool, device=self.device
-        )
-        mask[:, 0::2] = primary_mask
-        mask[:, 1::2] = secondary_mask
+        primary_values = self._rand(batch_size, n_pairs)
 
-        values = self._rand(batch_size, self.n_features)
-        return mask * values
+        if self.beta is not None:
+            secondary_values = primary_values * (
+                self.beta + (1.0 - self.beta) * self._rand(batch_size, n_pairs)
+            )
+        else:
+            secondary_values = self._rand(batch_size, n_pairs)
+
+        out = torch.zeros(batch_size, self.n_features, device=self.device)
+        out[:, 0::2] = primary_mask * primary_values
+        out[:, 1::2] = secondary_mask * secondary_values
+        return out
 
 
 class ScaledHierarchicalPairs(Distribution):
