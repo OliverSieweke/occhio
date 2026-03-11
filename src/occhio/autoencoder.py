@@ -422,3 +422,112 @@ class ComputeAutoEncoder(AutoEncoderBase):
         self.W = nn.Parameter(torch.randn(k, N, generator=gen) / N)
         self.Z = nn.Parameter(torch.randn(k, k, generator=gen) / k)
         self.b = nn.Parameter(torch.zeros(N))
+
+
+class MultiHeadSoftmaxAE(AutoEncoderBase):
+    """Multi-head softmax bottleneck autoencoder for MRH-style experiments.
+
+    Each encoder head projects the input to ``dict_size`` logits, applies
+    softmax, then multiplies by a learned value matrix to produce a
+    ``value_dim``-sized output.  The latent is the concatenation of all
+    heads' outputs (``n_hidden = n_heads * value_dim``).  The decoder is a
+    linear projection with ReLU, mirroring :class:`TiedLinearRelu`.
+
+    The softmax constraint forces each head's contribution to be a convex
+    combination of its dictionary vectors, providing the architectural
+    inductive bias for Minkowski-style tile representations.
+
+    Parameters
+    ----------
+    n_features : int
+        Input / output dimensionality.
+    n_hidden : int
+        Total latent dimensionality (must be divisible by ``n_heads``).
+    n_heads : int
+        Number of independent softmax heads.
+    dict_size : int
+        Number of dictionary elements (archetypes) per head.
+    """
+
+    def __init__(
+        self,
+        n_features: int,
+        n_hidden: int,
+        n_heads: int,
+        dict_size: int,
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
+
+        if n_hidden % n_heads != 0:
+            raise ValueError(
+                f"n_hidden ({n_hidden}) must be divisible by n_heads ({n_heads})"
+            )
+
+        self.n_features = n_features
+        self.n_hidden = n_hidden
+        self.n_heads = n_heads
+        self.dict_size = dict_size
+        self.value_dim = n_hidden // n_heads
+
+        self.resample_weights()
+
+    def resample_weights(self, force_norm=False):
+        dev = self.device
+        gen = self.generator
+
+        # Per-head encoder projections: (n_features, dict_size)
+        self.encoder_projs = nn.ParameterList(
+            [
+                nn.Parameter(
+                    torch.randn(
+                        self.n_features,
+                        self.dict_size,
+                        device=dev,
+                        generator=gen,
+                    )
+                    / sqrt(self.n_features)
+                )
+                for _ in range(self.n_heads)
+            ]
+        )
+
+        # Per-head value matrices: (dict_size, value_dim)
+        self.value_matrices = nn.ParameterList(
+            [
+                nn.Parameter(
+                    torch.randn(
+                        self.dict_size,
+                        self.value_dim,
+                        device=dev,
+                        generator=gen,
+                    )
+                    / sqrt(self.dict_size)
+                )
+                for _ in range(self.n_heads)
+            ]
+        )
+
+        # Decoder: linear projection from latent to features
+        self.W_out = nn.Parameter(
+            torch.randn(
+                self.n_hidden,
+                self.n_features,
+                device=dev,
+                generator=gen,
+            )
+            / sqrt(self.n_hidden)
+        )
+        self.b = nn.Parameter(torch.zeros(self.n_features, device=dev))
+
+    def encode(self, x: Tensor) -> Tensor:
+        parts = []
+        for h in range(self.n_heads):
+            logits = x @ self.encoder_projs[h]  # (B, dict_size)
+            weights = F.softmax(logits, dim=-1)  # (B, dict_size)
+            values = weights @ self.value_matrices[h]  # (B, value_dim)
+            parts.append(values)
+        return torch.cat(parts, dim=-1)  # (B, n_hidden)
+
+    def decode(self, z: Tensor) -> Tensor:
+        return torch.relu(z @ self.W_out + self.b)

@@ -14,6 +14,7 @@ from .dag import (
     DAGRandomWalkToRoot,
     PowerLawDigraph,
 )
+from .simplex import SimplexDistribution, SimplicialComplexDistribution
 
 
 __all__ = [
@@ -33,4 +34,6 @@ __all__ = [
     "DAGDistribution",
     "DAGRandomWalkToRoot",
     "PowerLawDigraph",
+    "SimplexDistribution",
+    "SimplicialComplexDistribution",
 ]
