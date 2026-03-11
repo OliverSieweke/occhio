@@ -41,20 +41,40 @@ class SparseAutoEncoderBase(nn.Module, ABC):
         n_steps: int = 10_000,
         batch_size: int = 1024,
         lr: float = 3e-4,
+        sample_every: int = 25,
     ) -> list[float]:
+        if sample_every < 1:
+            raise ValueError(f"sample_every must be positive, got {sample_every}")
+
         optimizer = AdamW(self.parameters(), lr=lr)
-        losses = []
+        sae_device = next(self.parameters()).device
+        loss_buffer = torch.empty(n_steps, device=sae_device)
+
+        raw_buffer: Tensor | None = None
+
         for step in range(n_steps):
-            x = data_fn(batch_size)
+            buf_offset = step % sample_every
+            if buf_offset == 0:
+                steps_left = min(sample_every, n_steps - step)
+                total_samples = steps_left * batch_size
+                raw_buffer = data_fn(total_samples).detach()
+
+            assert raw_buffer is not None
+            start = buf_offset * batch_size
+            end = start + batch_size
+            x = raw_buffer[start:end]
+
             optimizer.zero_grad()
             x_hat, z = self.forward(x)
             loss = self.loss(x, x_hat, z)
             loss.backward()
             optimizer.step()
-            losses.append(loss.item())
-            if (step + 1) % 1000 == 0:
+
+            loss_buffer[step] = loss.detach()
+            if (step + 1) % 5000 == 0:
                 print(f"  SAE step {step + 1}/{n_steps}  loss={loss.item():.4f}")
-        return losses
+
+        return loss_buffer.cpu().tolist()
 
     def __init__(
         self,
@@ -74,17 +94,20 @@ class SAESimple(SparseAutoEncoderBase):
         n_latent: int,
         n_dict: int,
         l1_coef: float = 0.1,
+        dec_bias: bool = False,
         **kwargs,
     ):
         super().__init__(l1_coef, **kwargs)
 
         self.n_latent = n_latent
         self.n_dict = n_dict
+        self.dec_bias = dec_bias
 
         self.W_enc = nn.Parameter(torch.empty((n_latent, n_dict)))
         self.b_enc = nn.Parameter(torch.zeros(n_dict))
 
         self.W_dec = nn.Parameter(torch.empty((n_dict, n_latent)))
+        self.b_dec = nn.Parameter(torch.zeros(n_latent))
 
         self.resample_weights()
 
@@ -92,12 +115,16 @@ class SAESimple(SparseAutoEncoderBase):
         nn.init.xavier_normal_(self.W_enc, generator=self.generator)
         nn.init.xavier_normal_(self.W_dec, generator=self.generator)
         nn.init.zeros_(self.b_enc)
+        nn.init.zeros_(self.b_dec)
 
     def encode(self, x: Tensor) -> Tensor:
         return torch.relu(x @ self.W_enc + self.b_enc)
 
     def decode(self, z: Tensor) -> Tensor:
-        return z @ self.W_dec
+        if self.dec_bias:
+            return z @ self.W_dec + self.b_dec
+        else:
+            return z @ self.W_dec
 
 
 class TopKIgnoreSAE(SparseAutoEncoderBase):

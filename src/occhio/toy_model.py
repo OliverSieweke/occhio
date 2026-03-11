@@ -120,7 +120,7 @@ class ToyModel:
 
         # Pre-allocated sample buffer: sample once every `sample_every` epochs
         # with sample_every × batch_size samples, then slice per epoch.
-        raw_buffer: Tensor | tuple | None = None
+        raw_buffer: Tensor | tuple[Any, ...] | None = None
 
         for ep in range(n_epochs):
             buf_offset = ep % sample_every
@@ -133,12 +133,15 @@ class ToyModel:
                 # Move samples to the ae device; distribution may be on a different device.
                 if isinstance(raw_buffer, tuple):
                     raw_buffer = tuple(
-                        t.to(ae_device) if isinstance(t, Tensor) else t
+                        t.to(ae_device, non_blocking=True)
+                        if isinstance(t, Tensor)
+                        else t
                         for t in raw_buffer
                     )
                 else:
-                    raw_buffer = raw_buffer.to(ae_device)
+                    raw_buffer = raw_buffer.to(ae_device, non_blocking=True)
 
+            assert raw_buffer is not None  # Always set on first iter (0 % n == 0)
             start = buf_offset * batch_size
             end = start + batch_size
             if isinstance(raw_buffer, tuple):
@@ -150,25 +153,25 @@ class ToyModel:
                 raw = raw_buffer[start:end]
                 x = raw
 
-            optimizer.zero_grad()
+            optimizer.zero_grad(set_to_none=True)
             x_hat = self.ae(x)[0]  # Only take x_hat
             loss = self.ae.loss(raw, x_hat, self.importances)  # type: ignore[call-arg]
             loss.backward()
             optimizer.step()
 
-            if track_losses:
-                loss_buffer[ep] = loss.detach()  # type: ignore[index]
-            if verbose and (ep + 1) % 1000 == 0:
+            if loss_buffer is not None:
+                loss_buffer[ep] = loss.detach()
+            if verbose and (ep + 1) % 5000 == 0:
                 print(f"AE Epoch {ep + 1}/{n_epochs}, Loss: {loss.item():.6f}")
             if hooks and (ep % hook_freq == 0 or ep == n_epochs - 1):
                 with torch.no_grad():
                     hook_data = dict(
-                        tm=self, epoch=ep, loss=loss.item(), x=x, x_hat=x_hat
+                        tm=self, epoch=ep, loss=loss.detach(), x=x, x_hat=x_hat
                     )
                     for i, h in enumerate(hooks):
                         hook_returns[i].append(h(hook_data))
 
-        losses = loss_buffer.cpu().tolist() if track_losses else []
+        losses = loss_buffer.cpu().tolist() if loss_buffer is not None else []
         return losses, hook_returns
 
     def sample_latent(self, batch_size) -> Tensor:
