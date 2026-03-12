@@ -25,6 +25,8 @@ class Bump(Distribution):
         n_features: int,
         p_active: float,
         bump_width: int = 2,
+        amp_low: float = 1.0,
+        noise_std: float = 0.0,
         **kwargs,
     ):
         if bump_width >= n_features // 2:
@@ -34,6 +36,8 @@ class Bump(Distribution):
         super().__init__(n_features, **kwargs)
         self.p_active = p_active
         self.bump_width = bump_width
+        self.amp_low = amp_low
+        self.noise_std = noise_std
         self._bump_matrix = self._build_bump_matrix()
 
     def _build_bump_matrix(self) -> Tensor:
@@ -51,7 +55,14 @@ class Bump(Distribution):
     def sample(self, batch_size: int) -> Tensor:
         active = self._rand(batch_size) < self.p_active
         states = self._randint(0, self.n_features, (batch_size,))
-        result = self._bump_matrix[states]
+        result = self._bump_matrix[states].clone()
+        if self.amp_low < 1.0:
+            amp = self.amp_low + (1.0 - self.amp_low) * self._rand(batch_size, 1)
+            result = result * amp
+        if self.noise_std > 0.0:
+            on_spike = result > 0.0
+            noise = self._randn(batch_size, self.n_features) * self.noise_std
+            result[on_spike] += noise[on_spike]
         result[~active] = 0.0
         return result
 
