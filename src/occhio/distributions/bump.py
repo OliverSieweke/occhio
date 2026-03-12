@@ -1,4 +1,4 @@
-"""Circular feature distribution with cyclic bump activation."""
+"""Bump feature distribution with cyclic activation over discrete states."""
 
 import torch
 from torch import Tensor
@@ -6,7 +6,7 @@ from torch import Tensor
 from .base import Distribution
 
 
-class CircularFeature(Distribution):
+class Bump(Distribution):
     """A single irreducible multi-dimensional feature with cyclic structure.
 
     Each sample is either the zero vector (inactive) or a triangular bump

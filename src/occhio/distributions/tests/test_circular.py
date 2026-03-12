@@ -1,9 +1,9 @@
-"""Tests for CircularFeature distribution."""
+"""Tests for Bump distribution."""
 
 import pytest
 import torch
 
-from ..circular import CircularFeature
+from ..bump import Bump
 
 
 @pytest.fixture
@@ -13,24 +13,24 @@ def seeded_generator():
     return gen
 
 
-class TestCircularFeatureShape:
+class TestBumpShape:
     def test_sample_shape(self, seeded_generator):
-        dist = CircularFeature(n_features=7, p_active=0.5, generator=seeded_generator)
+        dist = Bump(n_features=7, p_active=0.5, generator=seeded_generator)
         samples = dist.sample(100)
         assert samples.shape == (100, 7)
 
     def test_sample_shape_large(self, seeded_generator):
-        dist = CircularFeature(
+        dist = Bump(
             n_features=20, p_active=0.8, bump_width=3, generator=seeded_generator
         )
         samples = dist.sample(500)
         assert samples.shape == (500, 20)
 
 
-class TestCircularFeatureBumpValues:
+class TestBumpValues:
     def test_known_bump_vectors_k7_bw1(self, seeded_generator):
         """Verify bump vectors match the spec example: n_features=7, bump_width=1."""
-        dist = CircularFeature(
+        dist = Bump(
             n_features=7, p_active=1.0, bump_width=1, generator=seeded_generator
         )
 
@@ -50,7 +50,7 @@ class TestCircularFeatureBumpValues:
 
     def test_bump_peak_is_one(self, seeded_generator):
         """The active state position should always have value 1."""
-        dist = CircularFeature(
+        dist = Bump(
             n_features=10, p_active=1.0, bump_width=2, generator=seeded_generator
         )
         for j in range(10):
@@ -58,7 +58,7 @@ class TestCircularFeatureBumpValues:
 
     def test_bump_wraps_around(self, seeded_generator):
         """State 0 should have nonzero activation at the last positions."""
-        dist = CircularFeature(
+        dist = Bump(
             n_features=8, p_active=1.0, bump_width=2, generator=seeded_generator
         )
         bump_0 = dist._bump_matrix[0]
@@ -75,7 +75,7 @@ class TestCircularFeatureBumpValues:
 
     def test_bump_symmetry(self, seeded_generator):
         """Bump should be symmetric around the peak due to circular distance."""
-        dist = CircularFeature(
+        dist = Bump(
             n_features=12, p_active=1.0, bump_width=3, generator=seeded_generator
         )
         for j in range(12):
@@ -88,13 +88,13 @@ class TestCircularFeatureBumpValues:
                 )
 
     def test_bump_values_are_non_negative(self, seeded_generator):
-        dist = CircularFeature(
+        dist = Bump(
             n_features=10, p_active=1.0, bump_width=3, generator=seeded_generator
         )
         assert (dist._bump_matrix >= 0).all()
 
     def test_bump_max_is_one(self, seeded_generator):
-        dist = CircularFeature(
+        dist = Bump(
             n_features=10, p_active=1.0, bump_width=3, generator=seeded_generator
         )
         assert dist._bump_matrix.max().item() == 1.0
@@ -102,7 +102,7 @@ class TestCircularFeatureBumpValues:
     def test_bump_linear_decay(self, seeded_generator):
         """Values should decay linearly: 1 - d/(bump_width+1)."""
         bw = 3
-        dist = CircularFeature(
+        dist = Bump(
             n_features=15, p_active=1.0, bump_width=bw, generator=seeded_generator
         )
         j = 5
@@ -115,74 +115,64 @@ class TestCircularFeatureBumpValues:
             )
 
 
-class TestCircularFeatureActivity:
+class TestBumpActivity:
     def test_inactive_samples_are_zero(self, seeded_generator):
-        dist = CircularFeature(n_features=7, p_active=0.0, generator=seeded_generator)
+        dist = Bump(n_features=7, p_active=0.0, generator=seeded_generator)
         samples = dist.sample(100)
         assert (samples == 0).all()
 
     def test_all_active_no_zeros(self, seeded_generator):
         """With p_active=1, every sample should have a nonzero peak."""
-        dist = CircularFeature(n_features=7, p_active=1.0, generator=seeded_generator)
+        dist = Bump(n_features=7, p_active=1.0, generator=seeded_generator)
         samples = dist.sample(500)
         # Each row should have max value 1.0 (the peak)
         assert (samples.max(dim=1).values == 1.0).all()
 
     def test_empirical_activity_rate(self, seeded_generator):
         p = 0.4
-        dist = CircularFeature(
-            n_features=10, p_active=p, bump_width=2, generator=seeded_generator
-        )
+        dist = Bump(n_features=10, p_active=p, bump_width=2, generator=seeded_generator)
         samples = dist.sample(10000)
         # A row is active if it has any nonzero value
         active = (samples.sum(dim=1) > 0).float().mean().item()
         assert abs(active - p) < 0.03, f"Expected ~{p}, got {active}"
 
 
-class TestCircularFeatureReproducibility:
+class TestBumpReproducibility:
     def test_same_seed_same_samples(self):
         gen1 = torch.Generator().manual_seed(999)
         gen2 = torch.Generator().manual_seed(999)
 
-        dist1 = CircularFeature(
-            n_features=10, p_active=0.6, bump_width=2, generator=gen1
-        )
-        dist2 = CircularFeature(
-            n_features=10, p_active=0.6, bump_width=2, generator=gen2
-        )
+        dist1 = Bump(n_features=10, p_active=0.6, bump_width=2, generator=gen1)
+        dist2 = Bump(n_features=10, p_active=0.6, bump_width=2, generator=gen2)
 
         samples1 = dist1.sample(200)
         samples2 = dist2.sample(200)
         assert torch.equal(samples1, samples2)
 
 
-class TestCircularFeatureValidation:
+class TestBumpValidation:
     def test_bump_width_too_large_raises(self, seeded_generator):
         with pytest.raises(ValueError, match="bump_width"):
-            CircularFeature(
-                n_features=7, p_active=0.5, bump_width=3, generator=seeded_generator
-            )
+            Bump(n_features=7, p_active=0.5, bump_width=3, generator=seeded_generator)
 
     def test_bump_width_at_boundary_raises(self, seeded_generator):
         """bump_width must be strictly less than n_features // 2."""
         with pytest.raises(ValueError, match="bump_width"):
-            CircularFeature(
-                n_features=8, p_active=0.5, bump_width=4, generator=seeded_generator
-            )
+            Bump(n_features=8, p_active=0.5, bump_width=4, generator=seeded_generator)
 
     def test_bump_width_just_below_boundary_ok(self, seeded_generator):
         # n_features=8, n_features//2=4, bump_width=3 should be fine
-        dist = CircularFeature(
+        dist = Bump(
             n_features=8, p_active=0.5, bump_width=3, generator=seeded_generator
         )
         assert dist.bump_width == 3
 
 
-class TestCircularFeatureUniformStateSelection:
+class TestBumpUniformStateSelection:
     def test_states_are_roughly_uniform(self, seeded_generator):
         """Each state should be selected approximately uniformly."""
         k = 6
-        dist = CircularFeature(
+        dist = Bump(
             n_features=k, p_active=1.0, bump_width=0, generator=seeded_generator
         )
         samples = dist.sample(12000)
@@ -196,10 +186,10 @@ class TestCircularFeatureUniformStateSelection:
             )
 
 
-class TestCircularFeatureBumpWidthZero:
+class TestBumpWidthZero:
     def test_bump_width_zero_is_one_hot(self, seeded_generator):
         """With bump_width=0, active samples should be one-hot vectors."""
-        dist = CircularFeature(
+        dist = Bump(
             n_features=5, p_active=1.0, bump_width=0, generator=seeded_generator
         )
         samples = dist.sample(200)

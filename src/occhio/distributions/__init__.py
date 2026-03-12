@@ -6,7 +6,7 @@ from .correlated import (
     ScaledHierarchicalPairs,
     AnticorrelatedPairs,
 )
-from .circular import CircularFeature
+from .bump import Bump
 from .relational import RelationalSimple, MultiRelational
 from .hierarchical import HierarchicalSparse
 from .dag import (
@@ -27,7 +27,7 @@ __all__ = [
     "HierarchicalPairs",
     "ScaledHierarchicalPairs",
     "AnticorrelatedPairs",
-    "CircularFeature",
+    "Bump",
     "RelationalSimple",
     "MultiRelational",
     "HierarchicalSparse",
