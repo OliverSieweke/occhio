@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 import numpy as np
 
 from occhio.autoencoder import TiedLinearRelu
-from occhio.distributions import ManifoldDistribution
+from occhio.distributions import ManifoldDistribution, DistributionStack
 from occhio.toy_model import ToyModel
 
 # %%
@@ -13,18 +13,25 @@ DEVICE = "mps"
 gen = torch.Generator(DEVICE)
 gen.manual_seed(7)
 
-n_features = 48
+n_features = 32
 length_scale = 0.7
-manifold_dim = 1  # circle
+manifold_dim = 2  # circle
 n_hidden = 3
 
-dist = ManifoldDistribution(
-    n_features,
-    length_scale=length_scale,
-    manifold_dim=manifold_dim,
-    magnitude_range=(0.9, 1.0),
-    generator=gen,
-    device=DEVICE,
+dist = DistributionStack(
+    [
+        ManifoldDistribution(
+            n_features // 2,
+            length_scale=length_scale,
+            manifold_dim=manifold_dim,
+            magnitude_range=(0.9, 1.0),
+            generator=gen,
+            device=DEVICE,
+        )
+        for i in range(2)
+    ],
+    sampling_mode="single",
+    p_meta=0.5,
 )
 ae = TiedLinearRelu(n_features, n_hidden, generator=gen, device=DEVICE)
 tm = ToyModel(distribution=dist, ae=ae, device=DEVICE)
@@ -89,7 +96,10 @@ fig.add_trace(
 
 # Connect consecutive features with lines to show manifold structure
 for j in range(n_features):
-    k = (j + 1) % n_features
+    if j < n_features // 2:
+        k = (j + 1) % (n_features // 2)
+    else:
+        k = n_features // 2 + ((j + 1) % (n_features // 2))
     fig.add_trace(
         go.Scatter3d(
             x=[W[0, j], W[0, k]],
@@ -113,4 +123,15 @@ fig.update_layout(
     height=700,
 )
 fig.show()
+
+# %%
+WtW = W.T @ W  # (n_features, n_features)
+px.imshow(
+    WtW,
+    title="W^T W",
+    labels=dict(x="Feature", y="Feature"),
+    color_continuous_scale="RdBu_r",
+    color_continuous_midpoint=0,
+).show()
+
 # %%
