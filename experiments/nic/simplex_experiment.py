@@ -1,4 +1,6 @@
 # %%
+import random
+
 import torch
 import plotly.express as px
 import plotly.graph_objects as go
@@ -10,30 +12,50 @@ from occhio.toy_model import ToyModel
 # %%
 DEVICE = "mps"
 gen = torch.Generator(DEVICE)
-gen.manual_seed(7)
+gen.manual_seed(6)
 
 # 3 simplices of size 3 → 9 features total
 # simplex_sizes = [2, 2, 2]
 # n_features = sum(simplex_sizes)
-n_features = 16
-p_active = 1 / (n_features + 1)
+n_features = 20
+p_active = 1 / (n_features)
 n_hidden = 3
 
 # dist = SimplexDistribution(simplex_sizes, p_active, generator=gen, device=DEVICE)
+# dist = SimplicialComplexDistribution(
+#     n_vertices=n_features,
+#     faces=[(i, (i + 1) % n_features) for i in range(n_features)],
+#     # + [(0, n_features // 2)],
+#     p_active=p_active,
+#     sampling_mode="single",
+#     generator=gen,
+#     device=DEVICE,
+# )
+
+random.seed(7)
+FACE_DIM = 1
+N_FACES = n_features
+faces = list(
+    {
+        tuple(sorted(random.sample(range(n_features), FACE_DIM + 1)))
+        for _ in range(N_FACES * 3)
+    }
+)[:N_FACES]
+
 dist = SimplicialComplexDistribution(
     n_vertices=n_features,
-    faces=[(i, (i + 1) % n_features) for i in range(n_features)],
-    # + [(0, n_features // 2)],
+    faces=faces,
     p_active=p_active,
     sampling_mode="single",
     generator=gen,
     device=DEVICE,
 )
+
 ae = TiedLinearRelu(n_features, n_hidden, generator=gen, device=DEVICE)
 tm = ToyModel(distribution=dist, ae=ae, device=DEVICE)
 
 # %%
-losses, _ = tm.fit(30_000, 256)
+losses, _ = tm.fit(25_000, 256, verbose=True)
 
 # %%
 px.line(y=losses, labels={"x": "Epoch", "y": "Loss"}, title="Training loss").show()
@@ -62,7 +84,7 @@ fig2.add_trace(
         y=hidden[:, 1],
         z=hidden[:, 2],
         mode="markers",
-        marker=dict(size=2, opacity=0.6, color="gray"),
+        marker=dict(size=2, opacity=0.3, color="gray"),
         text=active_verts,
         hovertemplate="Active vertices: %{text}<extra></extra>",
         name="Encoded samples",
@@ -96,9 +118,9 @@ fig2.add_trace(
 #     )
 
 # Draw edges between vertices that share a face
-pal = px.colors.qualitative.Set1
 for i, face in enumerate(dist.faces):
-    for a, b in zip(face, face[1:]):
+    edges = list(zip(face, face[1:])) + [(face[-1], face[0])]
+    for a, b in edges:
         fig2.add_trace(
             go.Scatter3d(
                 x=[W[0, a], W[0, b]],
@@ -122,4 +144,15 @@ fig2.update_layout(
     height=700,
 )
 fig2.show()
+
+# %%
+WtW = (tm.W.T @ tm.W).detach().cpu().numpy()
+px.imshow(
+    WtW,
+    title="W^T W (feature cosine structure)",
+    labels=dict(x="Feature", y="Feature"),
+    x=[f"v{j}" for j in range(n_features)],
+    y=[f"v{j}" for j in range(n_features)],
+).show()
+
 # %%

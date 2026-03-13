@@ -15,7 +15,7 @@ from .dag import (
     PowerLawDigraph,
 )
 from .simplex import SimplexDistribution, SimplicialComplexDistribution
-from .manifold import ManifoldDistribution
+from .manifold import ManifoldDistribution, TorusDistribution
 
 
 __all__ = [
@@ -38,4 +38,5 @@ __all__ = [
     "SimplexDistribution",
     "SimplicialComplexDistribution",
     "ManifoldDistribution",
+    "TorusDistribution",
 ]

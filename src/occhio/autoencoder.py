@@ -520,6 +520,9 @@ class MultiHeadSoftmaxAE(AutoEncoderBase):
         )
         self.b = nn.Parameter(torch.zeros(self.n_features, device=dev))
 
+        # Residual mixing projection: initialized to zero so encode starts as identity
+        self.W_mix = nn.Parameter(torch.zeros(self.n_hidden, self.n_hidden, device=dev))
+
     def encode(self, x: Tensor) -> Tensor:
         parts = []
         for h in range(self.n_heads):
@@ -527,7 +530,132 @@ class MultiHeadSoftmaxAE(AutoEncoderBase):
             weights = F.softmax(logits, dim=-1)  # (B, dict_size)
             values = weights @ self.value_matrices[h]  # (B, value_dim)
             parts.append(values)
-        return torch.cat(parts, dim=-1)  # (B, n_hidden)
+        z = torch.cat(parts, dim=-1)  # (B, n_hidden)
+        return z + z @ self.W_mix
 
     def decode(self, z: Tensor) -> Tensor:
         return torch.relu(z @ self.W_out + self.b)
+
+
+class MultiHeadSoftmaxSymmetricAE(AutoEncoderBase):
+    """Multi-head softmax autoencoder with attention-like encoding and decoding.
+
+    Encoder: ``softmax(x @ P_h) @ V_h`` per head, concatenated to latent.
+    Decoder: ``softmax(z_h @ Q_h) @ U_h`` per head, summed + bias + ReLU.
+
+    Both encoder and decoder use independent per-head softmax-weighted
+    dictionary lookups with separate parameters.
+
+    Parameters
+    ----------
+    n_features : int
+        Input / output dimensionality.
+    n_hidden : int
+        Total latent dimensionality (must be divisible by ``n_heads``).
+    n_heads : int
+        Number of independent softmax heads.
+    dict_size : int
+        Number of dictionary elements (archetypes) per head.
+    """
+
+    def __init__(
+        self,
+        n_features: int,
+        n_hidden: int,
+        n_heads: int,
+        dict_size: int,
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
+
+        if n_hidden % n_heads != 0:
+            raise ValueError(
+                f"n_hidden ({n_hidden}) must be divisible by n_heads ({n_heads})"
+            )
+
+        self.n_features = n_features
+        self.n_hidden = n_hidden
+        self.n_heads = n_heads
+        self.dict_size = dict_size
+        self.value_dim = n_hidden // n_heads
+
+        self.resample_weights()
+
+    def resample_weights(self, force_norm=False):
+        dev = self.device
+        gen = self.generator
+
+        # --- Encoder ---
+        # Per-head encoder projections: (n_features, dict_size)
+        self.encoder_projs = nn.ParameterList(
+            [
+                nn.Parameter(
+                    torch.randn(
+                        self.n_features, self.dict_size, device=dev, generator=gen
+                    )
+                    / sqrt(self.n_features)
+                )
+                for _ in range(self.n_heads)
+            ]
+        )
+        # Per-head encoder value matrices: (dict_size, value_dim)
+        self.encoder_values = nn.ParameterList(
+            [
+                nn.Parameter(
+                    torch.randn(
+                        self.dict_size, self.value_dim, device=dev, generator=gen
+                    )
+                    / sqrt(self.dict_size)
+                )
+                for _ in range(self.n_heads)
+            ]
+        )
+
+        # --- Decoder ---
+        # Per-head decoder projections: (value_dim, dict_size)
+        self.decoder_projs = nn.ParameterList(
+            [
+                nn.Parameter(
+                    torch.randn(
+                        self.value_dim, self.dict_size, device=dev, generator=gen
+                    )
+                    / sqrt(self.value_dim)
+                )
+                for _ in range(self.n_heads)
+            ]
+        )
+        # Per-head decoder value matrices: (dict_size, n_features)
+        self.decoder_values = nn.ParameterList(
+            [
+                nn.Parameter(
+                    torch.randn(
+                        self.dict_size, self.n_features, device=dev, generator=gen
+                    )
+                    / sqrt(self.dict_size)
+                )
+                for _ in range(self.n_heads)
+            ]
+        )
+
+        self.b = nn.Parameter(torch.zeros(self.n_features, device=dev))
+
+        # Residual mixing projection: initialized to zero so encode starts as identity
+        self.W_mix = nn.Parameter(torch.zeros(self.n_hidden, self.n_hidden, device=dev))
+
+    def encode(self, x: Tensor) -> Tensor:
+        parts = []
+        for h in range(self.n_heads):
+            logits = x @ self.encoder_projs[h]  # (B, dict_size)
+            weights = F.softmax(logits, dim=-1)  # (B, dict_size)
+            parts.append(weights @ self.encoder_values[h])  # (B, value_dim)
+        z = torch.cat(parts, dim=-1)  # (B, n_hidden)
+        return z + z @ self.W_mix
+
+    def decode(self, z: Tensor) -> Tensor:
+        chunks = z.split(self.value_dim, dim=-1)  # n_heads x (B, value_dim)
+        out = torch.zeros(z.shape[0], self.n_features, device=z.device)
+        for h in range(self.n_heads):
+            logits = chunks[h] @ self.decoder_projs[h]  # (B, dict_size)
+            weights = F.softmax(logits, dim=-1)  # (B, dict_size)
+            out = out + weights @ self.decoder_values[h]  # (B, n_features)
+        return torch.relu(out + self.b)

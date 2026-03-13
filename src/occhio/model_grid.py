@@ -588,7 +588,7 @@ class ModelGrid:
         # with sample_every × batch_size samples, then slice per epoch.
         sample_buffer: Tensor | None = None
 
-        for ep in tqdm(range(n_epochs), unit="epoch"):
+        for ep in tqdm(range(n_epochs), unit="epoch", disable=not verbose):
             buf_offset = ep % sample_every
             if buf_offset == 0:
                 # Determine how many epochs remain to avoid over-sampling
@@ -610,7 +610,7 @@ class ModelGrid:
 
             start = buf_offset * batch_size
             end = start + batch_size
-            stacked_samples = sample_buffer[:, start:end, :]
+            stacked_samples = sample_buffer[:, start:end, :]  # ty:ignore
 
             optimizer.zero_grad()
             stacked_x_hat = stacked_forward(
@@ -639,8 +639,6 @@ class ModelGrid:
 
             if track_losses:
                 losses.append(total_loss.item())
-            if verbose and (ep + 1) % 1000 == 0:
-                print(f"Epoch {ep + 1}/{n_epochs}, Mean Loss: {total_loss.item():.6f}")
 
             # Capture snapshot if needed
             if snapshot_interval is not None and (ep + 1) % snapshot_interval == 0:

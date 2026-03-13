@@ -133,8 +133,9 @@ class SimplicialComplexDistribution(Distribution):
         # Store face sizes for Dirichlet sampling
         self.face_sizes = [len(f) for f in faces]
         self.max_face_size = max(self.face_sizes)
+        self.uniform_faces = len(set(self.face_sizes)) == 1
 
-        # Padded index tensor (n_faces, max_face_size) for batched scatter
+        # Index tensor: (n_faces, max_face_size) — no padding needed when uniform
         padded = torch.zeros(
             self.n_faces, self.max_face_size, dtype=torch.long, device=self.device
         )
@@ -163,8 +164,10 @@ class SimplicialComplexDistribution(Distribution):
 
     def _sample_single(self, batch_size: int) -> Tensor:
         """Pick one face uniformly per sample, draw Dirichlet on its vertices."""
-        # Choose which face each sample gets
         face_idx = self._randint(0, self.n_faces, (batch_size,))
+
+        if self.uniform_faces:
+            return self._sample_single_fast(batch_size, face_idx)
 
         result = torch.zeros(batch_size, self.n_features, device=self.device)
         for i in range(self.n_faces):
@@ -174,7 +177,6 @@ class SimplicialComplexDistribution(Distribution):
                 continue
             face = self.faces[i]
             k = len(face)
-            # Dirichlet via normalized Exp(1)
             u = self._rand(n_active, k).clamp(min=1e-10)
             dirichlet = -torch.log(u)
             dirichlet = dirichlet / dirichlet.sum(dim=-1, keepdim=True)
@@ -182,8 +184,26 @@ class SimplicialComplexDistribution(Distribution):
                 result[mask, v] = dirichlet[:, j]
         return result
 
+    def _sample_single_fast(self, batch_size: int, face_idx: Tensor) -> Tensor:
+        """Vectorized single-face sampling when all faces have the same size."""
+        k = self.face_sizes[0]
+        # Dirichlet via normalized Exp(1): (batch, k)
+        u = self._rand(batch_size, k).clamp(min=1e-10)
+        dirichlet = -torch.log(u)
+        dirichlet = dirichlet / dirichlet.sum(dim=-1, keepdim=True)
+
+        # Gather the vertex indices for each sample's chosen face: (batch, k)
+        target_indices = self.face_indices[face_idx]  # (batch, k)
+
+        result = torch.zeros(batch_size, self.n_features, device=self.device)
+        result.scatter_(1, target_indices, dirichlet)
+        return result
+
     def _sample_sparse(self, batch_size: int) -> Tensor:
         """Each face fires independently; sum contributions, re-normalize."""
+        if self.uniform_faces:
+            return self._sample_sparse_fast(batch_size)
+
         result = torch.zeros(batch_size, self.n_features, device=self.device)
 
         for i in range(self.n_faces):
@@ -203,6 +223,37 @@ class SimplicialComplexDistribution(Distribution):
         row_sums = result.sum(dim=-1, keepdim=True).clamp(min=1e-10)
         result = result / row_sums
         # Zero out rows where nothing fired
+        result[row_sums.squeeze(-1) < 1e-9] = 0.0
+
+        return result
+
+    def _sample_sparse_fast(self, batch_size: int) -> Tensor:
+        """Vectorized sparse sampling when all faces have the same size."""
+        k = self.face_sizes[0]
+        n_f = self.n_faces
+
+        # Determine which faces fire: (batch, n_faces)
+        fire = self._rand(batch_size, n_f) < self.p_active.unsqueeze(0)
+
+        # Dirichlet draws for all (batch, face) pairs: (batch, n_faces, k)
+        u = self._rand(batch_size, n_f, k).clamp(min=1e-10)
+        dirichlet = -torch.log(u)
+        dirichlet = dirichlet / dirichlet.sum(dim=-1, keepdim=True)
+
+        # Zero out non-firing faces
+        dirichlet = dirichlet * fire.unsqueeze(-1)
+
+        # Scatter-add into vertex space: (batch, n_features)
+        # Expand face_indices (n_faces, k) -> (batch, n_faces, k)
+        indices = self.face_indices.unsqueeze(0).expand(batch_size, -1, -1)
+        result = torch.zeros(batch_size, self.n_features, device=self.device)
+        result.scatter_add_(
+            1, indices.reshape(batch_size, -1), dirichlet.reshape(batch_size, -1)
+        )
+
+        # Re-normalize rows with mass so active vertices sum to 1
+        row_sums = result.sum(dim=-1, keepdim=True).clamp(min=1e-10)
+        result = result / row_sums
         result[row_sums.squeeze(-1) < 1e-9] = 0.0
 
         return result

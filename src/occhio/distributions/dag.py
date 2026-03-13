@@ -454,9 +454,11 @@ class PowerLawDigraph(Distribution):
             Default: ``0.1``.
         p_active: Unconditional firing probability.  Scalar or per-feature.
             Default: ``0.05``.
-        p_child: Per-edge cascade probability.  Each out-edge from a fired node
-            independently triggers the child with this probability.
-            ``1.0`` = deterministic cascade; ``0.0`` = no cascade.
+        p_child: Per-edge cascade probability. Either a scalar ``float`` where
+            every edge shares the same cascade probability, or a
+            ``tuple(low, high)`` to sample an individual cascade probability
+            per edge uniformly from ``[low, high]`` when the graph is
+            generated.  ``1.0`` = deterministic cascade; ``0.0`` = no cascade.
             Default: ``0.9``.
         value_dist: Value distribution for active nodes.
             ``'uniform'`` — Uniform(0, 1).  ``'exponential'`` — Exponential(1).
@@ -471,7 +473,7 @@ class PowerLawDigraph(Distribution):
         alpha: float = 1.0,
         p_edge: float = 0.1,
         p_active: float | list[float] | Tensor = 0.05,
-        p_child: float = 0.9,
+        p_child: float | tuple[float, float] = 0.9,
         value_dist: Literal["uniform", "exponential"] = "uniform",
         **kwargs,
     ):
@@ -500,20 +502,39 @@ class PowerLawDigraph(Distribution):
         adj.fill_diagonal_(False)
         return adj
 
+    def _build_log_survival(self) -> None:
+        """Build the per-edge log-survival matrix for cascade computation.
+
+        When ``p_child`` is a scalar, ``_log_survival[j, i] = log(1 - p_child)``
+        for every edge j → i.  When ``p_child`` is a ``(low, high)`` tuple,
+        each edge gets an independently sampled cascade probability and the
+        log-survival is computed per edge.  Non-edges are 0 so they contribute
+        nothing to the sum.
+        """
+        if isinstance(self.p_child, tuple):
+            lo, hi = self.p_child
+            per_edge_p = lo + (hi - lo) * self._rand(self.n_features, self.n_features)
+            self._log_survival = torch.log(1.0 - per_edge_p) * self.adjacency.float()
+        else:
+            self._log_survival = (
+                torch.log(torch.tensor(1.0 - self.p_child, device=self.device))
+                * self.adjacency.float()
+            )
+
     def regenerate_graph(self) -> None:
         """Sample a new graph from the power-law digraph prior."""
         self.adjacency = self._generate_graph()
+        self._build_log_survival()
 
     def sample(self, batch_size: int) -> Tensor:
         """Sample activations via independent firing and one-step cascade."""
         # Step 1: independent fires — (batch_size, N)
         ind_active = self._rand(batch_size, self.n_features) < self.p_active
 
-        # Step 2: cascade — count active parents per node via matmul.
-        # ind_active @ adjacency: result[b, i] = number of independently-fired
-        # parents of node i in sample b.
-        n_active_parents = ind_active.float() @ self.adjacency.float()
-        cascade_prob = 1.0 - (1.0 - self.p_child) ** n_active_parents
+        # Step 2: cascade via log-survival sums (handles both scalar and
+        # per-edge p_child).  sum_log_surv[b, i] = Σ_j 1[j fired] · log(1 - p_{j→i})
+        sum_log_surv = ind_active.float() @ self._log_survival
+        cascade_prob = 1.0 - torch.exp(sum_log_surv)
         cascade_active = self._rand(batch_size, self.n_features) < cascade_prob
 
         active = ind_active | cascade_active
@@ -561,4 +582,5 @@ class PowerLawDigraph(Distribution):
         """Move distribution to device."""
         super().to(device)
         self.adjacency = self.adjacency.to(device)
+        self._log_survival = self._log_survival.to(device)
         return self
