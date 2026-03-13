@@ -23,11 +23,11 @@ SEED = 42
 torch.manual_seed(SEED)
 
 # SparseSpheres params: 5 circles (S^1) tilted into 3D ambient → n_features = 5*3 = 15
-K = 5
+K = 2
 N = 1  # S^1 (circles)
 M = 3  # ambient dim per feature (tilt from 2D into 3D)
 N_FEATURES = K * M  # = 15
-P_ACTIVE = 0.08
+P_ACTIVE = 0.01
 R = 1.0
 
 # AE / training params
@@ -52,7 +52,7 @@ dist = SparseSpheres(
     device=DEVICE,
 )
 
-samples, labels = dist.sample_with_labels(4)
+samples, labels = dist.sample_with_args(4)
 print(f"SparseSpheres: {K} circles (S^{N}) in {M}D ambient, total dim={N_FEATURES}")
 print(f"Tilt shapes: {dist.tilts.shape}")
 print(f"Sample shape: {samples.shape}, Labels shape: {labels.shape}")
@@ -192,16 +192,18 @@ fig = make_subplots(
 for idx, (name, tm) in enumerate(models.items()):
     row, col = idx // 2 + 1, idx % 2 + 1
 
-    # Sample with ground-truth labels
+    # Sample with ground-truth labels (same seed as training → same tilts)
+    # noise_std=0.1 adds Gaussian jitter to active features for realistic vis
     vis_dist = SparseSpheres(
         k=K,
         n=N,
         m=M,
         p_active=P_ACTIVE,
         r=R,
-        generator=torch.Generator().manual_seed(SEED + 1),
+        noise_std=0.1,
+        generator=torch.Generator().manual_seed(SEED),
     )
-    samples, mask = vis_dist.sample_with_labels(N_VIS)
+    samples, mask = vis_dist.sample_with_args(N_VIS)
     samples = samples.to(DEVICE)
 
     n_active_per_sample = mask.sum(dim=1)
@@ -282,8 +284,8 @@ for idx, (name, tm) in enumerate(models.items()):
 
     with torch.no_grad():
         for j in range(K):
-            Rj = dist.tilts[j].to(DEVICE)
-            ring_in_ambient = circle_2d @ Rj.T
+            Rj = vis_dist.tilts[j].to(DEVICE)
+            ring_in_ambient = circle_2d @ Rj.T + vis_dist.centers[j].to(DEVICE)
             full_input = torch.zeros(n_angles, N_FEATURES, device=DEVICE)
             full_input[:, j * M : (j + 1) * M] = ring_in_ambient
             zr = tm.ae.encode(full_input).cpu().numpy()
@@ -305,7 +307,7 @@ for idx, (name, tm) in enumerate(models.items()):
             )
 
 fig.update_layout(
-    title_text=f"Bottleneck (3D): SparseSpheres (k={K}, S^{N}, m={M}, hidden={HIDDEN_DIM})",
+    title_text=f"Embedding Space (3D): SparseSpheres (k={K}, S^{N}, m={M}, hidden={HIDDEN_DIM})",
     height=800,
     width=800,
     template="plotly_white",
@@ -363,7 +365,7 @@ for idx, (name, tm) in enumerate(models.items()):
         for j in range(K):
             # Tilt: (m, n+1) @ (n+1,) for each angle → (n_angles, m)
             Rj = dist.tilts[j].to(DEVICE)  # (m, n+1) = (3, 2)
-            ring_in_ambient = circle_2d @ Rj.T  # (n_angles, m)
+            ring_in_ambient = circle_2d @ Rj.T + dist.centers[j].to(DEVICE)
             # Place into full input: zeros everywhere except feature j's slice
             full_input = torch.zeros(n_angles, N_FEATURES, device=DEVICE)
             full_input[:, j * M : (j + 1) * M] = ring_in_ambient
@@ -395,6 +397,188 @@ fig.update_layout(
     template="plotly_white",
 )
 fig.write_html(cosine_path)
+fig.show()
+
+
+# %%
+# ── RECONSTRUCTION VISUALIZATION (per-ring 3D) ─────────────────────────
+# Same style as the embedding plot: 2x2 grid of 3D subplots, one per model.
+# Sample → forward → split 15D reconstruction into K blocks of M=3 → scatter
+# each block colored by its ring. GT rings overlaid as lines.
+recon_path = "experiments/rings/figures/reconstruction.html"
+ensure_dir_exists(recon_path)
+
+fig = make_subplots(
+    rows=2,
+    cols=2,
+    subplot_titles=model_names,
+    specs=[
+        [{"type": "scatter3d"}, {"type": "scatter3d"}],
+        [{"type": "scatter3d"}, {"type": "scatter3d"}],
+    ],
+    vertical_spacing=0.05,
+    horizontal_spacing=0.05,
+)
+
+for idx, (name, tm) in enumerate(models.items()):
+    row, col = idx // 2 + 1, idx % 2 + 1
+
+    # Sample with ground-truth labels (same seed → same tilts as training)
+    # noise_std=0.1 adds Gaussian jitter to active features for realistic vis
+    recon_dist = SparseSpheres(
+        k=K,
+        n=N,
+        m=M,
+        p_active=P_ACTIVE,
+        r=R,
+        noise_std=0.1,
+        generator=torch.Generator().manual_seed(SEED),
+    )
+    samples, mask = recon_dist.sample_with_args(N_VIS)
+    samples = samples.to(DEVICE)
+
+    n_active_per_sample = mask.sum(dim=1)
+    is_single = n_active_per_sample == 1
+    is_inactive = n_active_per_sample == 0
+    is_multi = n_active_per_sample > 1
+    single_ring_id = mask.float().argmax(dim=1)
+
+    # Forward pass: full encode → decode
+    with torch.no_grad():
+        recon, _ = tm.forward(samples)
+        recon = recon.cpu().numpy()
+
+    # For each ring, extract the M=3 block from the reconstruction
+    # and scatter those points colored by which ring the *input* belonged to.
+    # Inactive samples → black, multi-ring → grey, single-ring → ring color.
+    # We plot in the ring's own 3D coordinate block.
+
+    # We'll plot all K blocks overlaid in the same 3D space.
+    # For single-ring samples belonging to ring j, plot their j-th recon block.
+    single = is_single.numpy()
+    ring_ids = single_ring_id.numpy()
+
+    # Plot inactive reconstructions (use ring-0 block as representative)
+    inact = is_inactive.numpy()
+    if inact.any():
+        # For inactive inputs (all zeros), every block should reconstruct ~0.
+        # Pick block 0 to show the origin cluster.
+        blk = recon[inact, :M]
+        fig.add_trace(
+            go.Scatter3d(
+                x=blk[:, 0],
+                y=blk[:, 1],
+                z=blk[:, 2],
+                mode="markers",
+                marker=dict(color="black", size=1, opacity=0.15),
+                name="inactive",
+                showlegend=(idx == 0),
+                legendgroup="inactive",
+            ),
+            row=row,
+            col=col,
+        )
+
+    # Plot multi-ring reconstructions
+    multi = is_multi.numpy()
+    if multi.any():
+        # For multi-ring, plot the block of the first active ring
+        first_ring = mask[is_multi].float().argmax(dim=1).numpy()
+        for mi, ri in enumerate(np.unique(first_ring)):
+            sub = multi.copy()
+            sub[multi] = first_ring == ri
+            if sub.any():
+                blk = recon[sub, ri * M : (ri + 1) * M]
+                fig.add_trace(
+                    go.Scatter3d(
+                        x=blk[:, 0],
+                        y=blk[:, 1],
+                        z=blk[:, 2],
+                        mode="markers",
+                        marker=dict(color="#888888", size=1.5, opacity=0.1),
+                        name="multi-ring",
+                        showlegend=(idx == 0 and mi == 0),
+                        legendgroup="multi",
+                    ),
+                    row=row,
+                    col=col,
+                )
+
+    # Plot single-ring: for ring j, plot the j-th block of the reconstruction
+    for j in range(K):
+        ring_mask = single & (ring_ids == j)
+        if ring_mask.any():
+            blk = recon[ring_mask, j * M : (j + 1) * M]
+            fig.add_trace(
+                go.Scatter3d(
+                    x=blk[:, 0],
+                    y=blk[:, 1],
+                    z=blk[:, 2],
+                    mode="markers",
+                    marker=dict(color=COLORS[j % len(COLORS)], size=2, opacity=0.6),
+                    name=f"ring {j}",
+                    showlegend=(idx == 0),
+                    legendgroup=f"ring_{j}",
+                ),
+                row=row,
+                col=col,
+            )
+
+    # Overlay ground-truth rings
+    n_angles = 256
+    theta_r = torch.linspace(0, 2 * np.pi, n_angles + 1)[:-1].to(DEVICE)
+    circle_2d = R * torch.stack([torch.cos(theta_r), torch.sin(theta_r)], dim=-1)
+
+    with torch.no_grad():
+        for j in range(K):
+            Rj = recon_dist.tilts[j].to(DEVICE)
+            ring_in_ambient = circle_2d @ Rj.T + recon_dist.centers[j].to(DEVICE)
+            gt = ring_in_ambient.cpu().numpy()
+            gt = np.concatenate([gt, gt[:1]], axis=0)
+            fig.add_trace(
+                go.Scatter3d(
+                    x=gt[:, 0],
+                    y=gt[:, 1],
+                    z=gt[:, 2],
+                    mode="lines",
+                    line=dict(color=COLORS[j % len(COLORS)], width=4),
+                    name=f"gt ring {j}",
+                    showlegend=(idx == 0),
+                    legendgroup=f"gt_ring_{j}",
+                ),
+                row=row,
+                col=col,
+            )
+
+fig.update_layout(
+    title_text=f"Reconstruction (3D): SparseSpheres (k={K}, S^{N}, m={M}, hidden={HIDDEN_DIM})",
+    height=800,
+    width=800,
+    template="plotly_white",
+    legend=dict(itemsizing="constant", font=dict(size=13)),
+)
+scene_domains = [
+    {"x": [0, 0.45], "y": [0.55, 1.0]},
+    {"x": [0.55, 1.0], "y": [0.55, 1.0]},
+    {"x": [0, 0.45], "y": [0, 0.45]},
+    {"x": [0.55, 1.0], "y": [0, 0.45]},
+]
+for i in range(1, 5):
+    scene_key = f"scene{i}" if i > 1 else "scene"
+    dom = scene_domains[i - 1]
+    fig.update_layout(
+        **{
+            scene_key: dict(
+                xaxis_title="d₁",
+                yaxis_title="d₂",
+                zaxis_title="d₃",
+                aspectmode="cube",
+                domain=dom,
+            )
+        }
+    )
+
+fig.write_html(recon_path)
 fig.show()
 
 # %%
@@ -471,30 +655,37 @@ geom_fig.show()
 
 # %%
 # -- MANUAL TESTING ───────────────────────────────────────────────────────
-sample = dist.sample(25).to(DEVICE)
-TiedMLP = models["TiedMLPAE"]
-TiedLinear = models["TiedLinearAE"]
 
-# Show input, TiedMLPAE recon, and TiedLinearAE recon for each sample, side by side.
-mlp_recon, _ = TiedMLP.forward(sample)
-linear_recon, _ = TiedLinear.forward(sample)
 
-for i in range(sample.shape[0]):
-    print(f"\nSample {i}:")
-    print("GT:       ", torch.round(sample[i], decimals=4).tolist())
-    print("MLP Recon:", torch.round(mlp_recon[i], decimals=4).tolist())
-    print("Linear Recon:", torch.round(linear_recon[i], decimals=4).tolist())
-    # Cosine similarity (handle non-1D tensors safely)
-    s = sample[i].detach().cpu().flatten().float()
-    mlp_r = mlp_recon[i].detach().cpu().flatten().float()
-    lin_r = linear_recon[i].detach().cpu().flatten().float()
-    mlp_cos = torch.nn.functional.cosine_similarity(
-        s.unsqueeze(0), mlp_r.unsqueeze(0)
-    ).item()
-    lin_cos = torch.nn.functional.cosine_similarity(
-        s.unsqueeze(0), lin_r.unsqueeze(0)
-    ).item()
-    print(f"Cosine similarity (GT vs MLP):    {mlp_cos:.4f}")
-    print(f"Cosine similarity (GT vs Linear): {lin_cos:.4f}")
+def is_nonsparse(vec, tol=1e-6):
+    # Returns True if any element is greater than the given tolerance
+    return torch.any(torch.abs(vec) > tol).item()
 
+
+n_runs = 100
+batch_size = 25
+for run in range(n_runs):
+    sample = dist.sample(batch_size).to(DEVICE)
+    TiedMLP = models["TiedMLPAE"]
+    TiedLinear = models["TiedLinearAE"]
+    mlp_recon, _ = TiedMLP.forward(sample)
+    linear_recon, _ = TiedLinear.forward(sample)
+
+    for i in range(sample.shape[0]):
+        s = sample[i].detach().cpu().flatten().float()
+        mlp_r = mlp_recon[i].detach().cpu().flatten().float()
+        lin_r = linear_recon[i].detach().cpu().flatten().float()
+        if is_nonsparse(s) or is_nonsparse(mlp_r) or is_nonsparse(lin_r):
+            print(f"\nRun {run}, Sample {i}:")
+            print("GT:       ", torch.round(s, decimals=4).tolist())
+            print("MLP Recon:", torch.round(mlp_r, decimals=4).tolist())
+            print("Linear Recon:", torch.round(lin_r, decimals=4).tolist())
+            mlp_dist = torch.norm(s - mlp_r, p=2).item()
+            lin_dist = torch.norm(s - lin_r, p=2).item()
+            print(f"L2 distance (GT vs MLP):    {mlp_dist:.4f}")
+            print(f"L2 distance (GT vs Linear): {lin_dist:.4f}")
+
+# %%
+print(TiedLinear.ae.W)
+print(TiedLinear.ae.W.T)
 # %%

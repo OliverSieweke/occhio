@@ -25,12 +25,7 @@ def plot_geometry(
 ):
     # Convert ToyModel to ModelGrid
     if isinstance(model_grid, ToyModel):
-        model_grid = ModelGrid(
-            create_model=lambda: model_grid,
-            axes=[],
-            broadcast_samples=False,
-            _models=np.array([model_grid]),
-        )
+        model_grid = ModelGrid.from_iterable([model_grid])
 
     # Find TrainingAxis if present
     training_axis_idx = None

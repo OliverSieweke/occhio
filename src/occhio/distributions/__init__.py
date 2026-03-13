@@ -7,6 +7,7 @@ from .correlated import (
     AnticorrelatedPairs,
 )
 from .bump import Bump
+from .sphere import SparseSpheres
 from .relational import RelationalSimple, MultiRelational
 from .hierarchical import HierarchicalSparse
 from .dag import (
@@ -28,6 +29,7 @@ __all__ = [
     "ScaledHierarchicalPairs",
     "AnticorrelatedPairs",
     "Bump",
+    "SparseSpheres",
     "RelationalSimple",
     "MultiRelational",
     "HierarchicalSparse",
