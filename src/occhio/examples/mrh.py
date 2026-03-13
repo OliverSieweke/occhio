@@ -7,7 +7,7 @@ the standard linear bottleneck (LRH-style), the bottom row shows the multi-head
 softmax bottleneck (MRH-style).
 """
 
-from occhio.distributions.sparse import SparseUniform
+from occhio.distributions import SparseUniform, SimplicialComplexDistribution
 from occhio.autoencoder import (
     TiedLinearRelu,
     AttnLinearAE,
@@ -23,15 +23,15 @@ n_features = 6
 n_hidden = 2
 n_heads = 2
 dict_size = 4
-N_EPOCHS = 25_000
+N_EPOCHS = 30_000
 batch_size = 256
 
 # %%
 device = torch.device("mps")
-importances = torch.tensor([0.9**i for i in range(n_features)], device=device)
+importances = torch.tensor([0.95**i for i in range(n_features)], device=device)
 gen = torch.Generator(device)
 
-p_actives = [0.01, 0.1, 0.5, 0.75]
+p_actives = [0.1, 0.5, 0.75]
 
 # Train all models and collect W embeddings
 results: dict[str, list[np.ndarray]] = {
@@ -69,9 +69,19 @@ def eval_loss_hook(data: dict) -> float:
 HOOK_FREQ = 500
 
 for p_active in p_actives:
+    print(f"starting on p_active = {p_active}")
     # --- TiedLinearRelu (LRH baseline) ---
     gen.manual_seed(7)
-    dist = SparseUniform(n_features, p_active, generator=gen, device=device)
+    # dist = SparseUniform(n_features, p_active, generator=gen, device=device)
+    dist = SimplicialComplexDistribution(
+        6,
+        [(0, 1), (2, 3), (4, 5)],
+        p_active=p_active,
+        sampling_mode="sparse",
+        generator=gen,
+        device=device,
+    )
+
     ae_linear = TiedLinearRelu(n_features, n_hidden, generator=gen, device=device)
     tm_linear = ToyModel(dist, ae_linear, importances=importances)
     _, hook_out = tm_linear.fit(
@@ -87,7 +97,15 @@ for p_active in p_actives:
 
     # --- AttnLinearAE (MRH) ---
     gen.manual_seed(7)
-    dist = SparseUniform(n_features, p_active, generator=gen, device=device)
+    # dist = SparseUniform(n_features, p_active, generator=gen, device=device)
+    dist = SimplicialComplexDistribution(
+        6,
+        [(0, 1), (2, 3), (4, 5)],
+        p_active=p_active,
+        sampling_mode="sparse",
+        generator=gen,
+        device=device,
+    )
     ae_mrh = AttnLinearAE(
         n_features,
         n_hidden,
@@ -110,7 +128,15 @@ for p_active in p_actives:
 
     # --- AttnAttnAE (MRH tied) ---
     gen.manual_seed(7)
-    dist = SparseUniform(n_features, p_active, generator=gen, device=device)
+    # dist = SparseUniform(n_features, p_active, generator=gen, device=device)
+    dist = SimplicialComplexDistribution(
+        6,
+        [(0, 1), (2, 3), (4, 5)],
+        p_active=p_active,
+        sampling_mode="sparse",
+        generator=gen,
+        device=device,
+    )
     ae_sym = AttnAttnAE(
         n_features,
         n_hidden,
@@ -263,5 +289,17 @@ loss_fig.update_layout(
     width=300 * len(p_actives),
 )
 loss_fig.show()
+
+# %%
+print("=== Frobenius norms (last p_active) ===")
+print(f"TiedLinearRelu:  W={ae_linear.W.norm().item():.4f}")
+print(
+    f"AttnLinearAE:    W_out={ae_mrh.W_out.norm().item():.4f}  "
+    f"W_mix={ae_mrh.W_mix.norm().item():.4f}"
+)
+print(
+    f"AttnAttnAE:      W_mix={ae_sym.W_mix.norm().item():.4f}  "
+    f"W_skip={ae_sym.W_skip.norm().item():.4f}"
+)
 
 # %%

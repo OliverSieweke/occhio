@@ -16,6 +16,7 @@ from .dag import (
 )
 from .simplex import SimplexDistribution, SimplicialComplexDistribution
 from .manifold import ManifoldDistribution, TorusDistribution
+from .ssb import SyntheticDataModel, SyntheticDataConfig, HierarchyNode
 
 
 __all__ = [
@@ -39,4 +40,7 @@ __all__ = [
     "SimplicialComplexDistribution",
     "ManifoldDistribution",
     "TorusDistribution",
+    "SyntheticDataModel",
+    "SyntheticDataConfig",
+    "HierarchyNode",
 ]
