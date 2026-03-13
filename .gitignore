@@ -1,7 +1,5 @@
 dist/
 .venv/
-AGENTS.md
-.codex/
 .private/
 __pycache__/
 *.pyc
@@ -13,5 +11,7 @@ test.ipynb
 .pytest_cache/
 .vscode/
 docs/_build
+docs/_autosummary
 .ipynb_checkpoints/
 experiments/laws/law1/figures/
+
