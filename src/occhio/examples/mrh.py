@@ -1,5 +1,5 @@
 # %%
-"""MRH experiment: compare TiedLinearRelu vs MultiHeadSoftmaxAE on SparseUniform.
+"""MRH experiment: compare TiedLinearRelu vs AttnLinearAE on SparseUniform.
 
 Sweeps over p_active values and plots W embeddings (one-hot encodings projected
 to the 2D latent space) for both architectures side by side.  The top row shows
@@ -10,8 +10,8 @@ softmax bottleneck (MRH-style).
 from occhio.distributions.sparse import SparseUniform
 from occhio.autoencoder import (
     TiedLinearRelu,
-    MultiHeadSoftmaxAE,
-    MultiHeadSoftmaxSymmetricAE,
+    AttnLinearAE,
+    AttnAttnAE,
 )
 from occhio.toy_model import ToyModel
 import torch
@@ -36,13 +36,13 @@ p_actives = [0.01, 0.1, 0.5, 0.75]
 # Train all models and collect W embeddings
 results: dict[str, list[np.ndarray]] = {
     "TiedLinearRelu": [],
-    "MultiHeadSoftmaxAE": [],
-    "MultiHeadSoftmaxSymmetricAE": [],
+    "AttnLinearAE": [],
+    "AttnAttnAE": [],
 }
 losses: dict[str, list[list[float]]] = {
     "TiedLinearRelu": [],
-    "MultiHeadSoftmaxAE": [],
-    "MultiHeadSoftmaxSymmetricAE": [],
+    "AttnLinearAE": [],
+    "AttnAttnAE": [],
 }
 
 EVAL_BATCH = 2**14
@@ -85,10 +85,10 @@ for p_active in p_actives:
     results["TiedLinearRelu"].append(tm_linear.W.detach().cpu().numpy())
     losses["TiedLinearRelu"].append(hook_out[0])
 
-    # --- MultiHeadSoftmaxAE (MRH) ---
+    # --- AttnLinearAE (MRH) ---
     gen.manual_seed(7)
     dist = SparseUniform(n_features, p_active, generator=gen, device=device)
-    ae_mrh = MultiHeadSoftmaxAE(
+    ae_mrh = AttnLinearAE(
         n_features,
         n_hidden,
         n_heads=n_heads,
@@ -105,13 +105,13 @@ for p_active in p_actives:
         hooks=[eval_loss_hook],
         hook_freq=HOOK_FREQ,
     )
-    results["MultiHeadSoftmaxAE"].append(tm_mrh.W.detach().cpu().numpy())
-    losses["MultiHeadSoftmaxAE"].append(hook_out[0])
+    results["AttnLinearAE"].append(tm_mrh.W.detach().cpu().numpy())
+    losses["AttnLinearAE"].append(hook_out[0])
 
-    # --- MultiHeadSoftmaxSymmetricAE (MRH tied) ---
+    # --- AttnAttnAE (MRH tied) ---
     gen.manual_seed(7)
     dist = SparseUniform(n_features, p_active, generator=gen, device=device)
-    ae_sym = MultiHeadSoftmaxSymmetricAE(
+    ae_sym = AttnAttnAE(
         n_features,
         n_hidden,
         n_heads=n_heads,
@@ -128,20 +128,20 @@ for p_active in p_actives:
         hooks=[eval_loss_hook],
         hook_freq=HOOK_FREQ,
     )
-    results["MultiHeadSoftmaxSymmetricAE"].append(tm_sym.W.detach().cpu().numpy())
-    losses["MultiHeadSoftmaxSymmetricAE"].append(hook_out[0])
+    results["AttnAttnAE"].append(tm_sym.W.detach().cpu().numpy())
+    losses["AttnAttnAE"].append(hook_out[0])
 
 
 # %%
 row_labels = [
     "TiedLinearRelu (LRH)",
-    "MultiHeadSoftmaxAE (MRH)",
-    "MultiHeadSoftmaxSymmetricAE (MRH tied)",
+    "AttnLinearAE (MRH)",
+    "AttnAttnAE (MRH tied)",
 ]
 row_keys = [
     "TiedLinearRelu",
-    "MultiHeadSoftmaxAE",
-    "MultiHeadSoftmaxSymmetricAE",
+    "AttnLinearAE",
+    "AttnAttnAE",
 ]
 
 fig = make_subplots(

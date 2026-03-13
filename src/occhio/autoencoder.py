@@ -424,7 +424,7 @@ class ComputeAutoEncoder(AutoEncoderBase):
         self.b = nn.Parameter(torch.zeros(N))
 
 
-class MultiHeadSoftmaxAE(AutoEncoderBase):
+class AttnLinearAE(AutoEncoderBase):
     """Multi-head softmax bottleneck autoencoder for MRH-style experiments.
 
     Each encoder head projects the input to ``dict_size`` logits, applies
@@ -537,7 +537,7 @@ class MultiHeadSoftmaxAE(AutoEncoderBase):
         return torch.relu(z @ self.W_out + self.b)
 
 
-class MultiHeadSoftmaxSymmetricAE(AutoEncoderBase):
+class AttnAttnAE(AutoEncoderBase):
     """Multi-head softmax autoencoder with attention-like encoding and decoding.
 
     Encoder: ``softmax(x @ P_h) @ V_h`` per head, concatenated to latent.
