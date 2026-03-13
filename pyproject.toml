@@ -33,6 +33,7 @@ dev = [
     "plotly>=6.5.2",
     "pre-commit>=4.5.1",
     "pytest>=9.0.2",
+    "pytest-asyncio>=0.24",
     "pytest-cov>=7.0.0",
     "ruff>=0.15.0",
     "ruff-jupyter-jetbrains>=1.0.0",
@@ -44,6 +45,7 @@ dev = [
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
+asyncio_mode = "auto"
 
 
 # For read the docs deployment with pip
@@ -54,4 +56,14 @@ docs = [
     "sphinx-autobuild>=2024.10.3",
     "sphinx-rtd-theme>=3.1.0",
     "sphinx-notfound-page>=1.1.0",
+    "sphinx-llm>=0.3.0",
 ]
+
+
+# Occhio MCP Server
+mcp = [
+    "fastmcp>=2.0",
+    "httpx>=0.27",
+]
+[project.scripts]
+occhio-mcp = "occhio.mcp.server:main"
