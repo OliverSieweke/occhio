@@ -15,3 +15,4 @@ test.ipynb
 docs/_build
 .ipynb_checkpoints/
 experiments/laws/law1/figures/
+*.html
