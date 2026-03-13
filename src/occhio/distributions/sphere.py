@@ -110,10 +110,18 @@ class SparseSpheres(Distribution):
                 tilts[i] = Q
             return tilts
 
-    def _sample_core(self, batch_size: int) -> tuple[Tensor, Tensor]:
-        """Shared sampling logic. Returns (output, mask)."""
+    def _sample_core(
+        self, batch_size: int, noise_std: float | None = None
+    ) -> tuple[Tensor, Tensor]:
+        """Shared sampling logic. Returns (output, mask).
+
+        Args:
+            batch_size: Number of samples.
+            noise_std: Override for Gaussian noise std. None falls back to self.noise_std.
+        """
         k = self.k
         n_plus_1 = self.n + 1
+        effective_noise = self.noise_std if noise_std is None else noise_std
 
         # 1. Activation mask: (batch_size, k)
         mask = self._rand(batch_size, k) < self.p_active
@@ -133,23 +141,38 @@ class SparseSpheres(Distribution):
         tilted = tilted * mask.unsqueeze(-1)
 
         # 6. Add Gaussian noise to active features only
-        if self.noise_std > 0:
-            noise = self._randn(batch_size, k, self.m) * self.noise_std
+        if effective_noise > 0:
+            noise = self._randn(batch_size, k, self.m) * effective_noise
             tilted = tilted + noise * mask.unsqueeze(-1)
 
         # 7. Reshape to (batch_size, k * m)
         output = tilted.reshape(batch_size, k * self.m)
         return output, mask
 
-    def sample(self, batch_size: int):
-        output, _ = self._sample_core(batch_size)
+    def sample(self, batch_size: int, noise_std: float | None = None):
+        """Sample from the distribution.
+
+        Args:
+            batch_size: Number of samples.
+            noise_std: Override for Gaussian noise std. None falls back to self.noise_std.
+        """
+        output, _ = self._sample_core(batch_size, noise_std=noise_std)
         return output
 
     def sample_with_args(
-        self, batch_size: int, with_labels: bool = True
+        self,
+        batch_size: int,
+        with_labels: bool = True,
+        noise_std: float | None = None,
     ) -> Tensor | tuple[Tensor, Tensor]:
-        """Like sample(), but optionally returns the (batch_size, k) boolean activation mask."""
-        output, mask = self._sample_core(batch_size)
+        """Like sample(), but optionally returns the (batch_size, k) boolean activation mask.
+
+        Args:
+            batch_size: Number of samples.
+            with_labels: If True, return (output, mask) tuple. If False, return output only.
+            noise_std: Override for Gaussian noise std. None falls back to self.noise_std.
+        """
+        output, mask = self._sample_core(batch_size, noise_std=noise_std)
         if with_labels:
             return output, mask
         return output

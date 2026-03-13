@@ -275,16 +275,14 @@ class TestSparseSpheresNoise:
     def test_no_noise_exact_norms(self, seeded_generator):
         """Without noise, centered block norms should exactly equal r."""
         r = 1.0
-        dist = SparseSpheres(
-            k=1, n=1, p_active=1.0, r=r, noise_std=0.0, generator=seeded_generator
-        )
-        samples = dist.sample(500)
+        dist = SparseSpheres(k=1, n=1, p_active=1.0, r=r, generator=seeded_generator)
+        samples = dist.sample(500, noise_std=0.0)
         centered = samples - dist.centers.reshape(1, -1)
         norms = centered.norm(dim=1)
         assert torch.allclose(norms, torch.full_like(norms, r), atol=1e-5)
 
-    def test_noise_perturbs_norms(self, seeded_generator):
-        """With noise, centered block norms should deviate from r."""
+    def test_noise_perturbs_norms_via_init(self, seeded_generator):
+        """With noise_std on object, centered block norms should deviate from r."""
         r = 1.0
         dist = SparseSpheres(
             k=1, n=1, p_active=1.0, r=r, noise_std=0.5, generator=seeded_generator
@@ -292,16 +290,46 @@ class TestSparseSpheresNoise:
         samples = dist.sample(1000)
         centered = samples - dist.centers.reshape(1, -1)
         norms = centered.norm(dim=1)
-        # Norms should NOT all be exactly r anymore
         deviations = (norms - r).abs()
         assert deviations.max() > 0.05
 
+    def test_noise_perturbs_norms_via_param(self, seeded_generator):
+        """Passing noise_std at call time should perturb norms."""
+        r = 1.0
+        dist = SparseSpheres(k=1, n=1, p_active=1.0, r=r, generator=seeded_generator)
+        samples = dist.sample(1000, noise_std=0.5)
+        centered = samples - dist.centers.reshape(1, -1)
+        norms = centered.norm(dim=1)
+        deviations = (norms - r).abs()
+        assert deviations.max() > 0.05
+
+    def test_param_overrides_init(self, seeded_generator):
+        """noise_std param should override self.noise_std."""
+        r = 1.0
+        dist = SparseSpheres(
+            k=1, n=1, p_active=1.0, r=r, noise_std=0.5, generator=seeded_generator
+        )
+        # Override with 0.0 → should get exact norms
+        samples = dist.sample(500, noise_std=0.0)
+        centered = samples - dist.centers.reshape(1, -1)
+        norms = centered.norm(dim=1)
+        assert torch.allclose(norms, torch.full_like(norms, r), atol=1e-5)
+
+    def test_sample_with_args_noise_override(self, seeded_generator):
+        """sample_with_args should accept noise_std override."""
+        r = 1.0
+        dist = SparseSpheres(
+            k=1, n=1, p_active=1.0, r=r, noise_std=0.5, generator=seeded_generator
+        )
+        samples, _ = dist.sample_with_args(500, noise_std=0.0)
+        centered = samples - dist.centers.reshape(1, -1)
+        norms = centered.norm(dim=1)
+        assert torch.allclose(norms, torch.full_like(norms, r), atol=1e-5)
+
     def test_noise_only_on_active_features(self, seeded_generator):
         """Inactive features should remain exactly zero even with noise_std > 0."""
-        dist = SparseSpheres(
-            k=2, n=1, p_active=[1.0, 0.0], noise_std=0.5, generator=seeded_generator
-        )
-        samples = dist.sample(500)
+        dist = SparseSpheres(k=2, n=1, p_active=[1.0, 0.0], generator=seeded_generator)
+        samples = dist.sample(500, noise_std=0.5)
         # Second feature (indices 2:4) is always inactive → must be zero
         assert (samples[:, 2:] == 0).all()
         # First feature should be nonzero
@@ -309,10 +337,8 @@ class TestSparseSpheresNoise:
 
     def test_noise_does_not_affect_inactive_samples(self, seeded_generator):
         """Fully inactive samples (p_active=0) should be all zeros even with noise."""
-        dist = SparseSpheres(
-            k=3, n=1, p_active=0.0, noise_std=1.0, generator=seeded_generator
-        )
-        samples = dist.sample(200)
+        dist = SparseSpheres(k=3, n=1, p_active=0.0, generator=seeded_generator)
+        samples = dist.sample(200, noise_std=1.0)
         assert (samples == 0).all()
 
     def test_noise_preserves_same_tilts(self):
@@ -349,13 +375,22 @@ class TestSparseSpheresReproducibility:
         dist2 = SparseSpheres(k=3, n=1, m=4, p_active=0.3, generator=gen2)
         assert torch.equal(dist1.tilts, dist2.tilts)
 
-    def test_same_seed_same_noisy_samples(self):
+    def test_same_seed_same_noisy_samples_via_init(self):
         gen1 = torch.Generator().manual_seed(999)
         gen2 = torch.Generator().manual_seed(999)
         dist1 = SparseSpheres(k=3, n=1, p_active=0.5, noise_std=0.1, generator=gen1)
         dist2 = SparseSpheres(k=3, n=1, p_active=0.5, noise_std=0.1, generator=gen2)
         s1 = dist1.sample(200)
         s2 = dist2.sample(200)
+        assert torch.equal(s1, s2)
+
+    def test_same_seed_same_noisy_samples_via_param(self):
+        gen1 = torch.Generator().manual_seed(999)
+        gen2 = torch.Generator().manual_seed(999)
+        dist1 = SparseSpheres(k=3, n=1, p_active=0.5, generator=gen1)
+        dist2 = SparseSpheres(k=3, n=1, p_active=0.5, generator=gen2)
+        s1 = dist1.sample(200, noise_std=0.1)
+        s2 = dist2.sample(200, noise_std=0.1)
         assert torch.equal(s1, s2)
 
 
