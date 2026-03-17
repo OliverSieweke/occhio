@@ -65,14 +65,8 @@ class SyntheticDataConfig:
     magnitudes, correlation structure, hierarchy, bias, and runtime settings.
     """
 
-    # Dictionary
+    # Features
     n_features: int
-    d_hidden: int
-    orthogonalize: bool = False
-    ortho_lambda: float = 1.0
-    ortho_steps: int = 1000
-    ortho_lr: float = 0.01
-    ortho_chunk_size: int = 1024
 
     # Firing probabilities
     firing_prob_distribution: str = "zipfian"
@@ -101,9 +95,6 @@ class SyntheticDataConfig:
     # Hierarchy
     hierarchy: Optional[list[HierarchyNode]] = None
     compensate_probabilities: bool = True
-
-    # Bias
-    bias: Optional[str] = None
 
     # Post-processing
     post_processing: Optional[Callable[[Tensor], Tensor]] = None
@@ -155,105 +146,6 @@ def _make_schedule(
         ).abs()
     else:
         raise ValueError(f"Unknown schedule distribution: {distribution}")
-
-
-# ---------------------------------------------------------------------------
-# FeatureDictionary
-# ---------------------------------------------------------------------------
-
-
-class FeatureDictionary:
-    """Ground-truth feature dictionary D ∈ R^{N×D} with unit-norm rows.
-
-    Optionally orthogonalizes directions via gradient descent to reduce
-    inter-feature coherence.
-    """
-
-    def __init__(
-        self,
-        config: SyntheticDataConfig,
-        generator: Optional[torch.Generator] = None,
-    ):
-        device = torch.device(config.device)
-        dtype = _DTYPE_MAP.get(config.dtype, torch.float32)
-        N, D = config.n_features, config.d_hidden
-
-        # Random unit-norm directions
-        g = torch.randn(N, D, device=device, dtype=dtype, generator=generator)
-        directions = g / g.norm(dim=1, keepdim=True)
-
-        if config.orthogonalize:
-            directions = self._orthogonalize(
-                directions,
-                lam=config.ortho_lambda,
-                steps=config.ortho_steps,
-                lr=config.ortho_lr,
-                chunk_size=config.ortho_chunk_size,
-            )
-
-        self.directions = directions
-
-    @staticmethod
-    def _orthogonalize(
-        directions: Tensor,
-        lam: float,
-        steps: int,
-        lr: float,
-        chunk_size: int,
-    ) -> Tensor:
-        """Gradient descent to minimize off-diagonal cosine similarities."""
-        D = directions.clone().detach().requires_grad_(True)
-        optimizer = torch.optim.Adam([D], lr=lr)
-        N = D.shape[0]
-
-        for _ in range(steps):
-            optimizer.zero_grad()
-
-            # Chunked pairwise dot product loss
-            ortho_loss = torch.tensor(0.0, device=D.device, dtype=D.dtype)
-            for i in range(0, N, chunk_size):
-                chunk = D[i : i + chunk_size]  # (chunk, d)
-                dots = chunk @ D.T  # (chunk, N)
-                # Zero out self-similarities
-                idx_start = i
-                idx_end = min(i + chunk_size, N)
-                mask = torch.zeros_like(dots)
-                for k in range(idx_end - idx_start):
-                    mask[k, idx_start + k] = 1.0
-                dots = dots - mask * dots  # zero diagonal block entries
-                ortho_loss = ortho_loss + (dots**2).sum()
-
-            # Norm penalty
-            norms = D.norm(dim=1)
-            norm_loss = lam * ((norms - 1.0) ** 2).sum()
-
-            loss = ortho_loss + norm_loss
-            loss.backward()
-            optimizer.step()
-
-        # Re-normalize
-        with torch.no_grad():
-            D.div_(D.norm(dim=1, keepdim=True))
-        return D.detach()
-
-    @property
-    def rho_mm(self) -> float:
-        """Mean max absolute cosine similarity (superposition metric).
-
-        0 = fully orthogonal, 1 = full superposition.
-        """
-        D = self.directions
-        N = D.shape[0]
-        max_cos = torch.zeros(N, device=D.device, dtype=D.dtype)
-        # Chunked to avoid O(N^2) memory
-        chunk = min(1024, N)
-        for i in range(0, N, chunk):
-            sims = (D[i : i + chunk] @ D.T).abs()  # (chunk, N)
-            # Zero self-similarities
-            for k in range(sims.shape[0]):
-                sims[k, i + k] = 0.0
-            max_cos[i : i + chunk] = sims.max(dim=1).values
-        return max_cos.mean().item()
 
 
 # ---------------------------------------------------------------------------
@@ -603,17 +495,14 @@ class _LevelOp:
 
 
 class SyntheticDataModel(Distribution):
-    """Synthetic data generator for SAE benchmarking. From
-    https://arxiv.org/abs/2602.14687
+    """Synthetic sparse feature distribution for superposition experiments.
 
-    Produces batches of hidden activations ``a = D^T c + b`` from a ground-truth
-    feature dictionary with configurable firing patterns, correlations, and
-    hierarchical dependencies.
+    Based on the data model from https://arxiv.org/abs/2602.14687.
 
-    Compatible with the occhio ``Distribution`` interface: ``n_features`` equals
-    ``d_hidden`` (the activation dimensionality fed to an autoencoder), and
-    ``sample()`` returns ``(activations, coefficients, firing_mask)`` where
-    activations has shape ``(batch_size, d_hidden)``.
+    Produces batches of sparse coefficient vectors ``c`` of shape
+    ``(batch_size, n_features)`` with configurable firing patterns,
+    correlations, and hierarchical dependencies. The compression into a
+    lower-dimensional hidden space is left to the autoencoder.
 
     Args:
         config: Full configuration specifying all generator parameters.
@@ -630,18 +519,14 @@ class SyntheticDataModel(Distribution):
             generator = torch.Generator(device=device)
             generator.manual_seed(seed)
 
-        # n_features = d_hidden (the AE input dimension)
-        super().__init__(n_features=config.d_hidden, device=device, generator=generator)
+        super().__init__(
+            n_features=config.n_features, device=device, generator=generator
+        )
 
         self.config = config
-        self.n_ground_truth_features = config.n_features
-
         N = config.n_features
 
-        # 1. Feature dictionary
-        self._dictionary = FeatureDictionary(config, generator=self.generator)
-
-        # 2. Base firing probabilities
+        # 1. Base firing probabilities
         self._base_probs = _compute_firing_probs(
             N,
             config.firing_prob_distribution,
@@ -653,7 +538,7 @@ class SyntheticDataModel(Distribution):
             generator=self.generator,
         ).to(self._dtype)
 
-        # 3. Magnitude parameters
+        # 2. Magnitude parameters
         self._means = _make_schedule(
             N,
             config.mean_distribution,
@@ -677,7 +562,7 @@ class SyntheticDataModel(Distribution):
 
         self._magnitude_sampler = MagnitudeSampler(self._means, self._stds)
 
-        # 4. Hierarchy
+        # 3. Hierarchy
         forest = config.hierarchy or []
         self._hierarchy = HierarchyConstraints(
             forest=forest,
@@ -688,13 +573,13 @@ class SyntheticDataModel(Distribution):
             device=device,
         )
 
-        # 5. Compute effective probabilities (compensated if hierarchy active)
+        # 4. Compute effective probabilities (compensated if hierarchy active)
         if self._hierarchy.has_constraints and config.compensate_probabilities:
             effective_probs = self._hierarchy.get_compensated_probs(self._base_probs)
         else:
             effective_probs = self._base_probs
 
-        # 6. Correlation structure
+        # 5. Correlation structure
         self._correlation = CorrelationStructure(
             n_features=N,
             rank=config.correlation_rank,
@@ -705,32 +590,17 @@ class SyntheticDataModel(Distribution):
             generator=self.generator,
         )
 
-        # 7. Firing sampler
+        # 6. Firing sampler
         self._firing_sampler = FiringSampler(effective_probs, self._correlation)
 
-        # 8. Bias
-        self._bias: Optional[Tensor] = None
-        if config.bias == "zeros":
-            self._bias = torch.zeros(config.d_hidden, device=device, dtype=self._dtype)
-        elif config.bias == "learned":
-            self._bias = torch.zeros(
-                config.d_hidden, device=device, dtype=self._dtype
-            ).requires_grad_(True)
-        elif config.bias is not None:
-            self._bias = torch.load(config.bias, map_location=device).to(self._dtype)
-
-    def sample(self, batch_size: int) -> tuple[Tensor, Tensor, Tensor]:  # type: ignore[override]
-        """Generate a batch of synthetic activations.
+    def sample(self, batch_size: int) -> Tensor:
+        """Generate a batch of sparse coefficient vectors.
 
         Args:
             batch_size: Number of samples to generate.
 
         Returns:
-            Tuple of ``(activations, coefficients, firing_mask)`` where:
-
-            - ``activations``: shape ``(batch_size, d_hidden)`` — the AE input.
-            - ``coefficients``: shape ``(batch_size, N)`` — sparse ground-truth coefficients.
-            - ``firing_mask``: shape ``(batch_size, N)`` — binary pre-hierarchy firing indicators.
+            Sparse coefficients of shape ``(batch_size, n_features)``.
         """
         # 1. Firing indicators
         z = self._firing_sampler.sample(batch_size, generator=self.generator)
@@ -746,16 +616,10 @@ class SyntheticDataModel(Distribution):
         if self.config.post_processing is not None:
             c = self.config.post_processing(c)
 
-        # 5. Activation: a = D^T c + b
-        a = c @ self._dictionary.directions  # (batch, N) @ (N, D) = (batch, D)
-        if self._bias is not None:
-            a = a + self._bias
-
-        return a, c, z
+        return c
 
     def to(self, device: torch.device | str):
         super().to(device)
-        self._dictionary.directions = self._dictionary.directions.to(self.device)
         self._base_probs = self._base_probs.to(self.device)
         self._means = self._means.to(self.device)
         self._stds = self._stds.to(self.device)
@@ -770,19 +634,7 @@ class SyntheticDataModel(Distribution):
             )
         if self._correlation.diagonal is not None:
             self._correlation.diagonal = self._correlation.diagonal.to(self.device)
-        if self._bias is not None:
-            self._bias = self._bias.to(self.device)
         return self
-
-    @property
-    def dictionary(self) -> Tensor:
-        """Shape ``(N, D)``, unit-norm rows."""
-        return self._dictionary.directions
-
-    @property
-    def rho_mm(self) -> float:
-        """Mean max absolute cosine similarity."""
-        return self._dictionary.rho_mm
 
     @property
     def firing_probabilities(self) -> Tensor:

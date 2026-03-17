@@ -11,6 +11,7 @@ from occhio.distributions import SparseUniform, SimplicialComplexDistribution
 from occhio.autoencoder import (
     TiedLinearRelu,
     AttnLinearAE,
+    LinearAttnAE,
     AttnAttnAE,
 )
 from occhio.toy_model import ToyModel
@@ -23,7 +24,7 @@ n_features = 6
 n_hidden = 2
 n_heads = 2
 dict_size = 4
-N_EPOCHS = 30_000
+N_EPOCHS = 50_000
 batch_size = 256
 
 # %%
@@ -37,13 +38,23 @@ p_actives = [0.1, 0.5, 0.75]
 results: dict[str, list[np.ndarray]] = {
     "TiedLinearRelu": [],
     "AttnLinearAE": [],
+    "LinearAttnAE": [],
     "AttnAttnAE": [],
 }
 losses: dict[str, list[list[float]]] = {
     "TiedLinearRelu": [],
     "AttnLinearAE": [],
+    "LinearAttnAE": [],
     "AttnAttnAE": [],
 }
+# Store encoded samples (64 per model per sparsity) for overlay on embedding plots
+encoded_samples: dict[str, list[np.ndarray]] = {
+    "TiedLinearRelu": [],
+    "AttnLinearAE": [],
+    "LinearAttnAE": [],
+    "AttnAttnAE": [],
+}
+N_SAMPLES = 64
 
 EVAL_BATCH = 2**14
 
@@ -85,7 +96,7 @@ for p_active in p_actives:
     ae_linear = TiedLinearRelu(n_features, n_hidden, generator=gen, device=device)
     tm_linear = ToyModel(dist, ae_linear, importances=importances)
     _, hook_out = tm_linear.fit(
-        N_EPOCHS,
+        20_000,
         verbose=True,
         batch_size=batch_size,
         track_losses=False,
@@ -94,6 +105,12 @@ for p_active in p_actives:
     )
     results["TiedLinearRelu"].append(tm_linear.W.detach().cpu().numpy())
     losses["TiedLinearRelu"].append(hook_out[0])
+    with torch.no_grad():
+        s = dist.sample(N_SAMPLES)
+        s_in = s[0] if isinstance(s, tuple) else s
+        encoded_samples["TiedLinearRelu"].append(
+            tm_linear.ae.encode(s_in.to(device)).cpu().numpy()
+        )
 
     # --- AttnLinearAE (MRH) ---
     gen.manual_seed(7)
@@ -125,8 +142,14 @@ for p_active in p_actives:
     )
     results["AttnLinearAE"].append(tm_mrh.W.detach().cpu().numpy())
     losses["AttnLinearAE"].append(hook_out[0])
+    with torch.no_grad():
+        s = dist.sample(N_SAMPLES)
+        s_in = s[0] if isinstance(s, tuple) else s
+        encoded_samples["AttnLinearAE"].append(
+            tm_mrh.ae.encode(s_in.to(device)).cpu().numpy()
+        )
 
-    # --- AttnAttnAE (MRH tied) ---
+    # --- LinearAttnAE (MRH tied) ---
     gen.manual_seed(7)
     # dist = SparseUniform(n_features, p_active, generator=gen, device=device)
     dist = SimplicialComplexDistribution(
@@ -137,7 +160,7 @@ for p_active in p_actives:
         generator=gen,
         device=device,
     )
-    ae_sym = AttnAttnAE(
+    ae_sym = LinearAttnAE(
         n_features,
         n_hidden,
         n_heads=n_heads,
@@ -154,26 +177,70 @@ for p_active in p_actives:
         hooks=[eval_loss_hook],
         hook_freq=HOOK_FREQ,
     )
-    results["AttnAttnAE"].append(tm_sym.W.detach().cpu().numpy())
+    results["LinearAttnAE"].append(tm_sym.W.detach().cpu().numpy())
+    losses["LinearAttnAE"].append(hook_out[0])
+    with torch.no_grad():
+        s = dist.sample(N_SAMPLES)
+        s_in = s[0] if isinstance(s, tuple) else s
+        encoded_samples["LinearAttnAE"].append(
+            tm_sym.ae.encode(s_in.to(device)).cpu().numpy()
+        )
+
+    # --- AttnAttnAE ---
+    gen.manual_seed(7)
+    dist = SimplicialComplexDistribution(
+        6,
+        [(0, 1), (2, 3), (4, 5)],
+        p_active=p_active,
+        sampling_mode="sparse",
+        generator=gen,
+        device=device,
+    )
+    ae_aa = AttnAttnAE(
+        n_features,
+        n_hidden,
+        n_heads=n_heads,
+        dict_size=dict_size,
+        generator=gen,
+        device=device,
+    )
+    tm_aa = ToyModel(dist, ae_aa, importances=importances)
+    _, hook_out = tm_aa.fit(
+        N_EPOCHS,
+        verbose=True,
+        batch_size=batch_size,
+        track_losses=False,
+        hooks=[eval_loss_hook],
+        hook_freq=HOOK_FREQ,
+    )
+    results["AttnAttnAE"].append(tm_aa.W.detach().cpu().numpy())
     losses["AttnAttnAE"].append(hook_out[0])
+    with torch.no_grad():
+        s = dist.sample(N_SAMPLES)
+        s_in = s[0] if isinstance(s, tuple) else s
+        encoded_samples["AttnAttnAE"].append(
+            tm_aa.ae.encode(s_in.to(device)).cpu().numpy()
+        )
 
 
 # %%
 row_labels = [
     "TiedLinearRelu (LRH)",
     "AttnLinearAE (MRH)",
-    "AttnAttnAE (MRH tied)",
+    "LinearAttnAE (MRH tied)",
+    "AttnAttnAE",
 ]
 row_keys = [
     "TiedLinearRelu",
     "AttnLinearAE",
+    "LinearAttnAE",
     "AttnAttnAE",
 ]
 
 fig = make_subplots(
-    rows=3,
+    rows=4,
     cols=len(p_actives),
-    subplot_titles=[f"p={p}" for p in p_actives] * 3,
+    subplot_titles=[f"p={p}" for p in p_actives] * 4,
     vertical_spacing=0.08,
     horizontal_spacing=0.04,
 )
@@ -226,6 +293,22 @@ for row_idx, key in enumerate(row_keys):
                 col=c,
             )
 
+        # Encoded samples as low-opacity points
+        z = encoded_samples[key][col_idx]  # (N_SAMPLES, n_hidden)
+        fig.add_trace(
+            go.Scatter(
+                x=z[:, 0],
+                y=z[:, 1],
+                mode="markers",
+                marker=dict(color="black", size=3, opacity=0.25),
+                name="samples",
+                showlegend=show_legend,
+                legendgroup="samples",
+            ),
+            row=r,
+            col=c,
+        )
+
         fig.update_xaxes(
             range=[-1.5, 1.5],
             scaleanchor=f"y{row_idx * len(p_actives) + col_idx + 1}",
@@ -244,7 +327,7 @@ fig.update_layout(
         f"<sub>n_features={n_features}, n_hidden={n_hidden}, "
         f"heads={n_heads}, dict_size={dict_size}</sub>"
     ),
-    height=900,
+    height=1200,
     width=300 * len(p_actives),
 )
 fig.show()
@@ -262,7 +345,7 @@ loss_epochs = list(range(0, N_EPOCHS, HOOK_FREQ)) + [N_EPOCHS - 1]
 
 for col_idx, p_active in enumerate(p_actives):
     c = col_idx + 1
-    for key, color in zip(row_keys, ["#1f77b4", "#ff7f0e", "#2ca02c"]):
+    for key, color in zip(row_keys, ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728"]):
         loss_fig.add_trace(
             go.Scatter(
                 x=loss_epochs,
@@ -277,7 +360,9 @@ for col_idx, p_active in enumerate(p_actives):
             col=c,
         )
     loss_fig.update_xaxes(title_text="Epoch", row=1, col=c)
-    loss_fig.update_yaxes(title_text="Loss" if c == 1 else None, row=1, col=c)
+    loss_fig.update_yaxes(
+        title_text="Loss" if c == 1 else None, type="log", row=1, col=c
+    )
 
 loss_fig.update_layout(
     title_text=(
@@ -297,9 +382,7 @@ print(
     f"AttnLinearAE:    W_out={ae_mrh.W_out.norm().item():.4f}  "
     f"W_mix={ae_mrh.W_mix.norm().item():.4f}"
 )
-print(
-    f"AttnAttnAE:      W_mix={ae_sym.W_mix.norm().item():.4f}  "
-    f"W_skip={ae_sym.W_skip.norm().item():.4f}"
-)
+print(f"LinearAttnAE:    W_enc={ae_sym.W_enc.norm().item():.4f}")
+print(f"AttnAttnAE:      W_mix={ae_aa.W_mix.norm().item():.4f}")
 
 # %%

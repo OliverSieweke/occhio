@@ -11,11 +11,11 @@ from occhio.toy_model import ToyModel
 # %%
 DEVICE = "mps"
 gen = torch.Generator(DEVICE)
-gen.manual_seed(7)
+gen.manual_seed(6)
 
-n_features = 32
-length_scale = 0.7
-manifold_dim = 2  # circle
+n_features = 40
+length_scale = 1.5
+manifold_dim = 1
 n_hidden = 3
 
 dist = DistributionStack(
@@ -33,15 +33,45 @@ dist = DistributionStack(
     sampling_mode="single",
     p_meta=0.5,
 )
+
+
 ae = TiedLinearRelu(n_features, n_hidden, generator=gen, device=DEVICE)
 tm = ToyModel(distribution=dist, ae=ae, device=DEVICE)
+# %%
+
+print(dist.sample(1))
+# %%
+N_EPOCHS = 100_000
+EVAL_SAMPLES = 2**14
+EVAL_FREQ = 500
+
+
+def eval_hook(data):
+    """Compute eval loss on a large fresh sample."""
+    tm = data["tm"]
+    x = tm.distribution.sample(EVAL_SAMPLES).to(tm.device)
+    x_hat = tm.ae(x)[0]
+    return tm.ae.loss(x, x_hat, tm.importances).item()
+
+
+def per_feature_hook(data):
+    """Per-feature reconstruction MSE on one-hot inputs."""
+    tm = data["tm"]
+    eye = torch.eye(n_features, device=tm.device)
+    x_hat = tm.ae(eye)[0]
+    return (eye - x_hat).pow(2).sum(dim=-1).cpu().numpy()
+
+
+_, hook_results = tm.fit(
+    N_EPOCHS, 256, hooks=[eval_hook, per_feature_hook], hook_freq=EVAL_FREQ
+)
+eval_losses = hook_results[0]
+per_feature_mse = hook_results[1]
 
 # %%
-losses, _ = tm.fit(100_000, 256)
-
-# %%
+eval_epochs = list(range(0, N_EPOCHS, EVAL_FREQ)) + [N_EPOCHS - 1]
 px.line(
-    y=losses[0::10], labels={"x": "Epoch", "y": "Loss"}, title="Training loss"
+    x=eval_epochs, y=eval_losses, labels={"x": "Epoch", "y": "Loss"}, title="Eval loss"
 ).show()
 
 # %%
@@ -133,5 +163,38 @@ px.imshow(
     color_continuous_scale="RdBu_r",
     color_continuous_midpoint=0,
 ).show()
+
+# %%
+# --- Per-feature MSE over training (heatmap) ---
+pf_arr = np.array(per_feature_mse)  # (n_eval_points, n_features)
+eval_epochs = list(range(0, N_EPOCHS, EVAL_FREQ)) + [N_EPOCHS - 1]
+
+fig = go.Figure(
+    go.Heatmap(
+        z=pf_arr.T,
+        x=eval_epochs,
+        y=np.arange(n_features),
+        colorscale="Viridis",
+        colorbar=dict(title="MSE"),
+    )
+)
+fig.update_layout(
+    title="Per-Feature Reconstruction MSE Over Training",
+    xaxis_title="Epoch",
+    yaxis_title="Feature index",
+    height=500,
+)
+fig.show()
+
+# %%
+# --- Final per-feature MSE (bar chart) ---
+final_pf = np.array(per_feature_mse[-1])
+fig = go.Figure(go.Bar(x=np.arange(n_features), y=final_pf, opacity=0.7))
+fig.update_layout(
+    title="Final Per-Feature Reconstruction MSE",
+    xaxis_title="Feature index",
+    yaxis_title="MSE",
+)
+fig.show()
 
 # %%

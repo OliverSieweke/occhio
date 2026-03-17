@@ -15,7 +15,7 @@ from .dag import (
     PowerLawDigraph,
 )
 from .simplex import SimplexDistribution, SimplicialComplexDistribution
-from .manifold import ManifoldDistribution, TorusDistribution
+from .manifold import ManifoldDistribution, TorusDistribution, HypercubeDistribution
 from .ssb import SyntheticDataModel, SyntheticDataConfig, HierarchyNode
 
 
@@ -40,6 +40,7 @@ __all__ = [
     "SimplicialComplexDistribution",
     "ManifoldDistribution",
     "TorusDistribution",
+    "HypercubeDistribution",
     "SyntheticDataModel",
     "SyntheticDataConfig",
     "HierarchyNode",
