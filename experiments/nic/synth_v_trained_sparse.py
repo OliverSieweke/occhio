@@ -9,9 +9,12 @@ distribution instead of the full SyntheticDataModel. The zipfian firing pattern
 import torch
 import numpy as np
 import plotly.graph_objects as go
+import plotly.express as px
 from plotly.subplots import make_subplots
+from scipy.optimize import linear_sum_assignment
 
 from occhio.autoencoder import TiedLinearRelu, SynthAE
+from occhio.sae.sae import SAESimple
 from occhio.distributions.sparse import SparseUniform
 from occhio.toy_model import ToyModel
 
@@ -19,8 +22,8 @@ from occhio.toy_model import ToyModel
 # --- Configuration ---
 DEVICE = "mps"
 SEED = 42
-N_FEATURES = 100
-D_HIDDEN = 24
+N_FEATURES = 200
+D_HIDDEN = 36
 N_EPOCHS = 20_000
 BATCH_SIZE = 512
 EVAL_SAMPLES = 2**14
@@ -295,18 +298,32 @@ fig = make_subplots(
     ],
 )
 
+model_colors = {"TiedLinearRelu": "blue", "SynthAE (ortho)": "green"}
 for name, tm in models:
     fd = tm.feature_dimensionalities.detach().cpu().numpy()[sort_idx]
     fn = tm.feature_norms.detach().cpu().numpy()[sort_idx]
     ti = tm.total_feature_interferences.detach().cpu().numpy()[sort_idx]
     x = np.arange(N_FEATURES)
+    color = model_colors[name]
 
-    fig.add_trace(go.Scatter(x=x, y=fd, name=name, mode="lines"), row=1, col=1)
     fig.add_trace(
-        go.Scatter(x=x, y=fn, name=name, mode="lines", showlegend=False), row=1, col=2
+        go.Scatter(x=x, y=fd, name=name, mode="lines", line=dict(color=color)),
+        row=1,
+        col=1,
     )
     fig.add_trace(
-        go.Scatter(x=x, y=ti, name=name, mode="lines", showlegend=False), row=1, col=3
+        go.Scatter(
+            x=x, y=fn, name=name, mode="lines", showlegend=False, line=dict(color=color)
+        ),
+        row=1,
+        col=2,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=x, y=ti, name=name, mode="lines", showlegend=False, line=dict(color=color)
+        ),
+        row=1,
+        col=3,
     )
 
 fig.update_layout(
@@ -362,5 +379,231 @@ for name, eval_loss, pf in [
         f"recovered=[{recovered}]  "
         f"mean_feature_MSE={final_mse.mean():.4f}"
     )
+
+# %% --- SAE training on both models ---
+N_DICT = N_FEATURES + 4
+SAE_STEPS = 100_000
+SAE_BATCH = 1024
+SAE_LR = 3e-4
+SAE_L1 = 0.05
+
+sae_results = {}
+
+for name, tm in [("TiedLinearRelu", tm_tied), ("SynthAE (ortho)", tm_synth_ortho)]:
+    print(f"\nTraining SAE on {name}...")
+
+    sae = SAESimple(
+        n_latent=D_HIDDEN,
+        n_dict=N_DICT,
+        l1_coef=SAE_L1,
+        device=DEVICE,
+    ).to(DEVICE)
+
+    def make_data_fn(tm_ref):
+        def data_fn(n: int) -> torch.Tensor:
+            x = tm_ref.distribution.sample(n).to(DEVICE)
+            return tm_ref.ae.encode(x)
+
+        return data_fn
+
+    sae_losses = sae.train_sae(
+        data_fn=make_data_fn(tm),
+        n_steps=SAE_STEPS,
+        batch_size=SAE_BATCH,
+        lr=SAE_LR,
+    )
+
+    # Compute metrics
+    with torch.no_grad():
+        test_x = dist.sample(10_000).to(DEVICE)
+        test_hidden = tm.ae.encode(test_x)
+        test_z = sae.encode(test_hidden)
+        test_recon = sae.decode(test_z)
+
+        # L0 sparsity: mean number of active (> 0) dict elements per sample
+        l0 = (test_z > 0).float().sum(dim=-1).mean().item()
+
+        # Dead features: dict elements that never fire
+        ever_active = (test_z > 0).any(dim=0)
+        n_dead = int((~ever_active).sum().item())
+        n_alive = int(ever_active.sum().item())
+
+        # Reconstruction MSE in hidden space
+        recon_mse = (test_hidden - test_recon).pow(2).sum(dim=-1).mean().item()
+
+        # Per-feature faithfulness: encode one-hot, round-trip through SAE
+        eye = torch.eye(N_FEATURES, device=DEVICE)
+        h_eye = tm.ae.encode(eye)
+        h_eye_recon = sae.decode(sae.encode(h_eye))
+        per_feat_sae_mse = (h_eye - h_eye_recon).pow(2).sum(dim=-1).cpu().numpy()
+
+        # Explained variance ratio
+        total_var = test_hidden.var(dim=0).sum().item()
+        residual_var = (test_hidden - test_recon).var(dim=0).sum().item()
+        explained_var = 1 - residual_var / total_var
+
+    sae_results[name] = {
+        "sae": sae,
+        "losses": sae_losses,
+        "l0": l0,
+        "n_dead": n_dead,
+        "n_alive": n_alive,
+        "recon_mse": recon_mse,
+        "per_feat_sae_mse": per_feat_sae_mse,
+        "explained_var": explained_var,
+    }
+    print(
+        f"  L0={l0:.1f}  Dead={n_dead}/{N_DICT}  MSE={recon_mse:.6f}  ExplVar={explained_var:.4f}"
+    )
+
+# %% --- SAE loss curves ---
+fig = go.Figure()
+for name, res in sae_results.items():
+    fig.add_trace(go.Scatter(y=res["losses"], mode="lines", name=name, opacity=0.8))
+fig.update_layout(
+    title="SAE Training Loss Comparison",
+    xaxis_title="Step",
+    yaxis_title="Loss",
+    yaxis_type="log",
+)
+fig.show()
+
+
+# %% --- Per-feature SAE reconstruction error ---
+names = list(sae_results.keys())
+colors = ["blue", "green"]
+fig = go.Figure()
+for name in names:
+    res = sae_results[name]
+    fig.add_trace(
+        go.Scatter(
+            x=np.arange(N_FEATURES),
+            y=res["per_feat_sae_mse"][sort_idx],
+            name=name,
+            mode="lines",
+        )
+    )
+fig.update_layout(
+    title="SAE Per-Feature Reconstruction Error (sorted by firing probability)",
+    xaxis_title="Feature rank (most frequent → rarest)",
+    yaxis_title="MSE (hidden space)",
+)
+fig.show()
+
+# %% --- SAE activations on one-hot features (matched) ---
+
+
+for name in names:
+    sae = sae_results[name]["sae"]
+    tm_ref = tm_tied if name == "TiedLinearRelu" else tm_synth_ortho
+    with torch.no_grad():
+        eye = torch.eye(N_FEATURES, device=DEVICE)
+        sae_acts = (
+            sae.encode(tm_ref.ae.encode(eye)).cpu().numpy()
+        )  # (N_FEATURES, N_DICT)
+
+    # Hungarian matching: maximize total activation along the matched pairs
+    cost = -sae_acts  # (N_FEATURES, N_DICT)
+    feat_idx, dict_idx = linear_sum_assignment(cost)
+
+    # Reorder both rows and columns: matched pairs form the top-left diagonal,
+    # then append unmatched features (rows) and unmatched dict elements (cols)
+    matched_feats = set(feat_idx)
+    matched_dicts = set(dict_idx)
+    unmatched_feats = [f for f in range(N_FEATURES) if f not in matched_feats]
+    unmatched_dicts = [d for d in range(N_DICT) if d not in matched_dicts]
+
+    row_order = list(feat_idx) + unmatched_feats
+    col_order = list(dict_idx) + unmatched_dicts
+
+    sae_acts_matched = sae_acts[np.ix_(row_order, col_order)]
+    row_labels = [f"f{f}" for f in row_order]
+    col_labels = [f"d{d}" for d in col_order]
+
+    # Compute diagonality: fraction of total activation on the matched diagonal
+    n_matched = len(feat_idx)
+    diag_sum = sum(sae_acts_matched[i, i] for i in range(n_matched))
+    total_sum = sae_acts_matched.sum()
+    diagonality = diag_sum / total_sum if total_sum > 0 else 0.0
+    sae_results[name]["diagonality"] = diagonality
+    print(
+        f"{name}: diagonality = {diagonality:.4f} (diag_sum={diag_sum:.2f}, total={total_sum:.2f})"
+    )
+
+    px.imshow(
+        sae_acts_matched,
+        labels=dict(x="SAE dict element (matched)", y="Feature (matched)"),
+        x=col_labels,
+        y=row_labels,
+        title=f"SAE one-hot activations (Hungarian matched, diag={diagonality:.3f}) — {name}",
+        aspect="auto",
+        color_continuous_scale="ylgnbu_r",
+    ).show()
+
+# %% --- SAE summary print ---
+print("\n=== SAE Summary ===")
+print(
+    f"{'Model':25s}  {'MSE':>10s}  {'L0':>6s}  {'Dead':>6s}  {'Alive':>6s}  {'ExplVar':>8s}  {'Diag':>6s}"
+)
+for name, res in sae_results.items():
+    print(
+        f"{name:25s}  {res['recon_mse']:10.6f}  {res['l0']:6.1f}  "
+        f"{res['n_dead']:6d}  {res['n_alive']:6d}  {res['explained_var']:8.4f}  "
+        f"{res.get('diagonality', 0):6.4f}"
+    )
+
+# %%
+# %% --- SAE summary comparison ---
+fig = make_subplots(
+    rows=1,
+    cols=5,
+    subplot_titles=[
+        "Recon MSE",
+        "Mean L0",
+        "Dead Features",
+        "Explained Variance",
+        "Diagonality",
+    ],
+)
+
+for i, (name, color) in enumerate(zip(names, colors)):
+    res = sae_results[name]
+    fig.add_trace(
+        go.Bar(x=[name], y=[res["recon_mse"]], marker_color=color, showlegend=False),
+        row=1,
+        col=1,
+    )
+    fig.add_trace(
+        go.Bar(x=[name], y=[res["l0"]], marker_color=color, showlegend=False),
+        row=1,
+        col=2,
+    )
+    fig.add_trace(
+        go.Bar(x=[name], y=[res["n_dead"]], marker_color=color, showlegend=False),
+        row=1,
+        col=3,
+    )
+    fig.add_trace(
+        go.Bar(
+            x=[name], y=[res["explained_var"]], marker_color=color, showlegend=False
+        ),
+        row=1,
+        col=4,
+    )
+    fig.add_trace(
+        go.Bar(
+            x=[name],
+            y=[res.get("diagonality", 0)],
+            marker_color=color,
+            showlegend=False,
+        ),
+        row=1,
+        col=5,
+    )
+
+fig.update_layout(
+    title=f"SAE Comparison (dict={N_DICT}, L1={SAE_L1})", height=400, width=1400
+)
+fig.show()
 
 # %%

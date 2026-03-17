@@ -13,7 +13,7 @@ from torch import Tensor
 from .base import Distribution
 
 
-class ManifoldDistribution(Distribution):
+class SphericalDistribution(Distribution):
     """Features arranged on a sphere with cosine-bump activation.
 
     ``n_features`` points are placed on a ``manifold_dim``-dimensional unit sphere with approximately equal spacing.  To generate a sample we draw a random direction **θ** and magnitude *m*.  The feature at position **v_φ** activates as

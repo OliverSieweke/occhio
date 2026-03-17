@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 import numpy as np
 
 from occhio.autoencoder import TiedLinearRelu
-from occhio.distributions import ManifoldDistribution, DistributionStack
+from occhio.distributions import SphericalDistribution, DistributionStack
 from occhio.toy_model import ToyModel
 
 # %%
@@ -20,7 +20,7 @@ n_hidden = 3
 
 dist = DistributionStack(
     [
-        ManifoldDistribution(
+        SphericalDistribution(
             n_features // 2,
             length_scale=length_scale,
             manifold_dim=manifold_dim,
