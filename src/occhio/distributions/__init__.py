@@ -14,6 +14,9 @@ from .dag import (
     DAGRandomWalkToRoot,
     PowerLawDigraph,
 )
+from .simplex import SimplexDistribution, SimplicialComplexDistribution
+from .manifold import SphericalDistribution, TorusDistribution, HypercubeDistribution
+from .ssb import SyntheticDataModel, SyntheticDataConfig, HierarchyNode
 
 
 __all__ = [
@@ -33,4 +36,12 @@ __all__ = [
     "DAGDistribution",
     "DAGRandomWalkToRoot",
     "PowerLawDigraph",
+    "SimplexDistribution",
+    "SimplicialComplexDistribution",
+    "SphericalDistribution",
+    "TorusDistribution",
+    "HypercubeDistribution",
+    "SyntheticDataModel",
+    "SyntheticDataConfig",
+    "HierarchyNode",
 ]

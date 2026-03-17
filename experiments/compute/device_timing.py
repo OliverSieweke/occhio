@@ -27,7 +27,6 @@ Usage:
     python experiments/compute/device_timing.py
 """
 
-# %%
 import time
 
 import torch

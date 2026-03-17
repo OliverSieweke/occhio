@@ -17,9 +17,12 @@ class _ComputeAE(Protocol):
     def decode(self, z: Tensor) -> Tensor: ...
 
 
-def plot_decode_plane(tm: ToyModel, title: str = "Decode plane"):
-    assert isinstance(tm.ae, _ComputeAE)
-    ae = tm.ae
+def plot_decode_plane(tm: "ToyModel | _ComputeAE", title: str = "Decode plane"):
+    if isinstance(tm, _ComputeAE):
+        ae = tm
+    else:
+        assert isinstance(tm.ae, _ComputeAE)
+        ae = tm.ae
     """
     Grid the 2-D latent space, decode every point, colour by dominant feature,
     and overlay where each one-hot e_i maps after encode → compute_step.

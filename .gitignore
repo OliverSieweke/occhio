@@ -5,6 +5,7 @@ AGENTS.md
 .private/
 __pycache__/
 *.pyc
+*.pkl
 *.DS_Store
 *.png
 src/occhio/trash_experiment/
