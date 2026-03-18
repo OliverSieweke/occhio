@@ -211,7 +211,7 @@ class ModelGrid:
         models_array = _flatten_to_array(nested_list, shape)
 
         return ModelGrid(
-            create_model=lambda params: None,  # type: ignore[arg-type, return-value]
+            create_model=lambda params: None,
             axes=axes,
             broadcast_samples=False,
             _models=models_array,
@@ -837,6 +837,7 @@ class ModelGrid:
         snapshot_fn: Callable[[Any], None] | None = None,
         autocast_sae: bool = False,
         autocast_data: bool = False,
+        verbose: bool = False,
     ) -> None:
         """Train SAE(s) on each ToyModel in the grid.
 
@@ -851,10 +852,13 @@ class ModelGrid:
             snapshot_fn: Optional callback for snapshots (sae_lens param).
             autocast_sae: Use autocast for SAE (sae_lens param, default: False).
             autocast_data: Use autocast for data (sae_lens param, default: False).
+            verbose: Whether to show progress bars. Defaults to False.
         """
         flattened_models: NDArray[np.object_] = self.models.ravel()
 
-        for model in tqdm(flattened_models, desc="Models", unit="model"):
+        for model in tqdm(
+            flattened_models, desc="Models", unit="model", disable=not verbose
+        ):
             with (
                 suppress_tqdm()
             ):  # SAE Lens tqdm gets very verbose when training on a grid
@@ -869,23 +873,28 @@ class ModelGrid:
                     snapshot_fn=snapshot_fn,
                     autocast_sae=autocast_sae,
                     autocast_data=autocast_data,
+                    verbose=verbose,
                 )
 
     def evaluate_saes(
         self,
         labels: list[str] | None = None,
         num_samples: int = 100_000,
+        verbose: bool = False,
     ) -> None:
         """Evaluate stored SAEs on each ToyModel in the grid.
 
         Args:
             labels: List of SAE labels to evaluate. Defaults to all stored SAEs.
             num_samples: Number of samples to use for evaluation.
+            verbose: Whether to show progress bars. Defaults to False.
 
         Returns:
            None
         """
         flattened_models: NDArray[np.object_] = self.models.ravel()
 
-        for model in tqdm(flattened_models, desc="Models", unit="model"):
-            model.evaluate_saes(labels=labels, num_samples=num_samples)
+        for model in tqdm(
+            flattened_models, desc="Models", unit="model", disable=not verbose
+        ):
+            model.evaluate_saes(labels=labels, num_samples=num_samples, verbose=verbose)

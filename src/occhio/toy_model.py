@@ -4,7 +4,6 @@ Provides fit(), geometric analysis properties (W, feature_norms, interferences, 
 """
 
 import warnings
-from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -236,6 +235,7 @@ class ToyModel:
         snapshot_fn: Callable[[Any], None] | None = None,
         autocast_sae: bool = False,
         autocast_data: bool = False,
+        verbose: bool = False,
     ) -> None:
         """Train SAE(s) on this model's hidden activations using SAE Lens.
 
@@ -250,6 +250,7 @@ class ToyModel:
             snapshot_fn: Optional callback for snapshots (sae_lens param).
             autocast_sae: Use autocast for SAE (sae_lens param, default: False).
             autocast_data: Use autocast for data (sae_lens param, default: False).
+            verbose: Whether to show progress bars. Defaults to False.
 
         Returns:
             None
@@ -283,12 +284,14 @@ class ToyModel:
         self,
         labels: list[str] | None = None,
         num_samples: int = 100_000,
+        verbose: bool = False,
     ) -> dict[str, SyntheticDataEvalResult]:
         """Evaluate stored SAEs.
 
         Args:
             labels: List of SAE labels to evaluate. Defaults to all stored SAEs.
             num_samples: Number of samples to use for evaluation.
+            verbose: Whether to show progress bars. Defaults to False.
 
         Returns:
             Dict of results keyed by SAE label.
@@ -304,7 +307,9 @@ class ToyModel:
             )
 
         results = {}
-        with tqdm(labels, desc="SAEs", unit="SAE", leave=False) as pbar:
+        with tqdm(
+            labels, desc="SAEs", unit="SAE", leave=False, disable=not verbose
+        ) as pbar:
             for label in pbar:
                 sae_record = self.saes[label]
                 if sae_record.results is not None:
