@@ -193,9 +193,17 @@ class CompositePlot:
                 column_widths=self._column_widths,
                 row_heights=self._row_heights,
             )
+            legend_registry: set[str] = set()
             for subplot in self._subplots:
                 subplot.plot.render(
-                    FigureProxy(fig, row=subplot.row, col=subplot.col), models, **kwargs
+                    FigureProxy(
+                        fig,
+                        row=subplot.row,
+                        col=subplot.col,
+                        legend_registry=legend_registry,
+                    ),
+                    models,
+                    **kwargs,
                 )
             return fig
 
@@ -226,6 +234,7 @@ class CompositePlot:
                 else None,
             )
 
+            legend_registry = set()
             for model_row, model_col in itertools.product(
                 range(n_model_rows), range(n_model_cols)
             ):
@@ -243,7 +252,14 @@ class CompositePlot:
                     phys_row = model_row * self._inner_rows + subplot.row
                     phys_col = model_col * self._inner_cols + subplot.col
                     subplot.plot.render(
-                        FigureProxy(fig, row=phys_row, col=phys_col), model, **kwargs
+                        FigureProxy(
+                            fig,
+                            row=phys_row,
+                            col=phys_col,
+                            legend_registry=legend_registry,
+                        ),
+                        model,
+                        **kwargs,
                     )
 
             add_grid_headers(

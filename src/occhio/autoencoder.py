@@ -1,14 +1,16 @@
 """Implements simple"""
 
 import functools
-from math import sqrt
-from torch import Tensor
-import torch.nn.functional as F
-from typing import Literal, Callable
-import torch.nn as nn
-import torch
-from abc import ABC, abstractmethod
 import math
+from abc import ABC, abstractmethod
+from math import sqrt
+from typing import Callable, Literal
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch import Tensor
+
 from .utils.device import _same_device
 
 
@@ -25,6 +27,10 @@ class AutoEncoderBase(nn.Module, ABC):
     @abstractmethod
     def decode(self, z: Tensor) -> Tensor:
         """latent --> features"""
+
+    @property
+    def feature_vectors(self) -> Tensor:
+        return self.encode(torch.eye(self.n_features, device=self.device))
 
     @abstractmethod
     def resample_weights(self):
@@ -43,6 +49,8 @@ class AutoEncoderBase(nn.Module, ABC):
 
     def __init__(
         self,
+        n_features: int,
+        n_hidden: int,
         loss_fn: Callable | None = None,
         device: torch.device | str | None = None,
         generator: torch.Generator | None = None,
@@ -52,6 +60,10 @@ class AutoEncoderBase(nn.Module, ABC):
         Note that we write device to `_init_device`, which remembers where the user intends to store the device.
         """
         super().__init__()
+
+        self.n_features = n_features
+        self.n_hidden = n_hidden
+
         if loss_fn is not None:
             self.loss = loss_fn  # type: ignore[method-assign]
         if device is not None and generator is not None:
@@ -130,10 +142,7 @@ class TiedLinear(AutoEncoderBase):
 
 class TiedLinearRelu(AutoEncoderBase):
     def __init__(self, n_features: int, n_hidden: int, **kwargs) -> None:
-        super().__init__(**kwargs)
-
-        self.n_features = n_features
-        self.n_hidden = n_hidden
+        super().__init__(n_features, n_hidden, **kwargs)
 
         self.resample_weights()
 
@@ -277,11 +286,17 @@ class TiedMLPEncoder(AutoEncoderBase):
 
         assert len(dims) >= 2, "dims must have at least [input, latent]"
 
-        self.n_features = dims[0]
-        self.n_hidden = dims[-1]
         self.dims = dims
 
         self._build_layers()
+
+    @property
+    def n_features(self) -> int:
+        return self.dims[0]
+
+    @property
+    def n_hidden(self) -> int:
+        return self.dims[-1]
 
     def _build_layers(self):
         self.encoder_weights = nn.ParameterList()

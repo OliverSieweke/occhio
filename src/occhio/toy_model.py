@@ -3,16 +3,36 @@
 Provides fit(), geometric analysis properties (W, feature_norms, interferences, etc.), and sampling utilities.
 """
 
+import warnings
+from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import Any, Callable
 
 import torch
 import torch.nn.functional as F
+from sae_lens import TrainingSAE
+from sae_lens.synthetic import (
+    SyntheticDataEvalResult,
+    eval_sae_on_synthetic_data,
+    train_toy_sae,
+)
 from torch import Tensor
 from torch.optim import AdamW, Optimizer
+from tqdm.auto import tqdm
 
 from .autoencoder import AutoEncoderBase
 from .distributions import Distribution
+from .sae_lens_adapter.activation_generator import ActivationGeneratorWrapper
+from .sae_lens_adapter.feature_dictionary import FeatureDictionaryWrapper
 from .utils.device import _same_device
+
+
+@dataclass
+class SAERecord:
+    """Holds an SAE and its evaluation results."""
+
+    sae: TrainingSAE
+    results: SyntheticDataEvalResult | None = None
 
 
 class ToyModel:
@@ -32,6 +52,7 @@ class ToyModel:
 
     distribution: Distribution
     ae: AutoEncoderBase
+    saes: dict[str, SAERecord]
 
     def __init__(
         self,
@@ -43,6 +64,7 @@ class ToyModel:
 
         self.distribution = distribution
         self.ae = ae
+        self.saes = {}
 
         if distribution.n_features != ae.n_features:
             raise ValueError(
@@ -189,11 +211,122 @@ class ToyModel:
         if name == "sample":
             return getattr(self.distribution, name)
 
-        if name in ("encode", "decode", "forward", "resample_weights", "loss"):
+        if name in (
+            "encode",
+            "decode",
+            "forward",
+            "resample_weights",
+            "loss",
+            "n_features",
+            "n_hidden",
+        ):
             return getattr(self.ae, name)
 
         raise AttributeError(f"'{type(self).__name__}' has no attribute '{name}'")
 
+    def train_saes(
+        self,
+        saes: dict[str, TrainingSAE],
+        training_samples: int = 10_000_000,
+        batch_size: int = 1024,
+        lr: float = 0.0003,
+        lr_warm_up_steps: int = 0,
+        lr_decay_steps: int = 0,
+        n_snapshots: int = 0,
+        snapshot_fn: Callable[[Any], None] | None = None,
+        autocast_sae: bool = False,
+        autocast_data: bool = False,
+    ) -> None:
+        """Train SAE(s) on this model's hidden activations using SAE Lens.
+
+        Args:
+            saes: Dict mapping labels to SAEs.
+            training_samples: Number of training samples (sae_lens param, default: 10M).
+            batch_size: Training batch size (sae_lens param, default: 1024).
+            lr: Learning rate (sae_lens param, default: 0.0003).
+            lr_warm_up_steps: Number of warmup steps (sae_lens param, default: 0).
+            lr_decay_steps: Number of decay steps (sae_lens param, default: 0).
+            n_snapshots: Number of training snapshots (sae_lens param, default: 0).
+            snapshot_fn: Optional callback for snapshots (sae_lens param).
+            autocast_sae: Use autocast for SAE (sae_lens param, default: False).
+            autocast_data: Use autocast for data (sae_lens param, default: False).
+
+        Returns:
+            None
+        """
+        for label, sae in saes.items():
+            if label in self.saes.keys():
+                warnings.warn(
+                    f"An sae with the label '{label}' was already trained on this model and is being overwritten.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+
+            train_toy_sae(
+                sae=sae,
+                feature_dict=FeatureDictionaryWrapper(self.ae),
+                activations_generator=ActivationGeneratorWrapper(self.distribution),
+                training_samples=training_samples,
+                batch_size=batch_size,
+                lr=lr,
+                lr_warm_up_steps=lr_warm_up_steps,
+                lr_decay_steps=lr_decay_steps,
+                device=self.device,
+                n_snapshots=n_snapshots,
+                snapshot_fn=snapshot_fn,
+                autocast_sae=autocast_sae,
+                autocast_data=autocast_data,
+            )
+            self.saes[label] = SAERecord(sae=sae)
+
+    def evaluate_saes(
+        self,
+        labels: list[str] | None = None,
+        num_samples: int = 100_000,
+    ) -> dict[str, SyntheticDataEvalResult]:
+        """Evaluate stored SAEs.
+
+        Args:
+            labels: List of SAE labels to evaluate. Defaults to all stored SAEs.
+            num_samples: Number of samples to use for evaluation.
+
+        Returns:
+            Dict of results keyed by SAE label.
+        """
+        if labels is None:
+            labels = list(self.saes.keys())
+
+        unmatched_labels = [label for label in labels if label not in self.saes]
+        if unmatched_labels:
+            raise ValueError(
+                f"The following SAE labels do not exist: {', '.join(unmatched_labels)}. "
+                f"Available labels: {', '.join(self.saes.keys())}"
+            )
+
+        results = {}
+        with tqdm(labels, desc="SAEs", unit="SAE", leave=False) as pbar:
+            for label in pbar:
+                sae_record = self.saes[label]
+                if sae_record.results is not None:
+                    warnings.warn(
+                        f"SAE '{label}' was already evaluated. Re-evaluating and overwriting previous results.",
+                        stacklevel=2,
+                    )
+                sae_record.sae.to(self.device)
+
+                sae_record.results = eval_sae_on_synthetic_data(
+                    sae=sae_record.sae,
+                    feature_dict=FeatureDictionaryWrapper(self.ae),
+                    activations_generator=ActivationGeneratorWrapper(self.distribution),
+                    num_samples=num_samples,
+                )
+                results[label] = sae_record.results
+
+        return results
+
+    # ----------------------------------------------------------------------------------
+    # Model Metrics --------------------------------------------------------------------
+    # ----------------------------------------------------------------------------------
     @property
     @torch.no_grad()
     def frobenius_norm_squared(self):
@@ -272,3 +405,106 @@ class ToyModel:
     @torch.no_grad()
     def total_feature_interferences_including_self(self) -> Tensor:
         return self.interferences_sq.sum(dim=1)
+
+    # ----------------------------------------------------------------------------------
+    # SAE Metrics ----------------------------------------------------------------------
+    # ----------------------------------------------------------------------------------
+
+    @property
+    def saes_precision(self) -> dict[str, float]:
+        """Mean precision across SAE latents (TP / (TP + FP))"""
+        return {
+            label: sae_record.results.classification.precision
+            for label, sae_record in self.saes.items()
+            if sae_record.results is not None
+        }
+
+    @property
+    def saes_recall(self) -> dict[str, float]:
+        """Mean recall across SAE latents (TP / (TP + FN))"""
+        return {
+            label: sae_record.results.classification.recall
+            for label, sae_record in self.saes.items()
+            if sae_record.results is not None
+        }
+
+    @property
+    def saes_f1_score(self) -> dict[str, float]:
+        """Mean F1 score across SAE latents (harmonic mean of precision and recall)"""
+        return {
+            label: sae_record.results.classification.f1_score
+            for label, sae_record in self.saes.items()
+            if sae_record.results is not None
+        }
+
+    @property
+    def saes_accuracy(self) -> dict[str, float]:
+        """Mean accuracy across SAE latents ((TP + TN) / total)"""
+        return {
+            label: sae_record.results.classification.accuracy
+            for label, sae_record in self.saes.items()
+            if sae_record.results is not None
+        }
+
+    @property
+    def saes_explained_variance(self) -> dict[str, float]:
+        """Explained variance for evaluated SAEs."""
+        return {
+            label: sae_record.results.explained_variance
+            for label, sae_record in self.saes.items()
+            if sae_record.results is not None
+        }
+
+    @property
+    def saes_l0(self) -> dict[str, float]:
+        """L0 sparsity for evaluated SAEs."""
+        return {
+            label: sae_record.results.sae_l0
+            for label, sae_record in self.saes.items()
+            if sae_record.results is not None
+        }
+
+    @property
+    def saes_dead_latents(self) -> dict[str, int]:
+        """Dead latent count for evaluated SAEs."""
+        return {
+            label: sae_record.results.dead_latents
+            for label, sae_record in self.saes.items()
+            if sae_record.results is not None
+        }
+
+    @property
+    def saes_true_l0(self) -> dict[str, float]:
+        """True L0 (ground truth feature activations) for evaluated SAEs."""
+        return {
+            label: sae_record.results.true_l0
+            for label, sae_record in self.saes.items()
+            if sae_record.results is not None
+        }
+
+    @property
+    def saes_shrinkage(self) -> dict[str, float]:
+        """Shrinkage (ratio of SAE output norm to input norm) for evaluated SAEs."""
+        return {
+            label: sae_record.results.shrinkage
+            for label, sae_record in self.saes.items()
+            if sae_record.results is not None
+        }
+
+    @property
+    def saes_mcc(self) -> dict[str, float]:
+        """Mean Correlation Coefficient between SAE decoder and ground truth features."""
+        return {
+            label: sae_record.results.mcc
+            for label, sae_record in self.saes.items()
+            if sae_record.results is not None
+        }
+
+    @property
+    def saes_uniqueness(self) -> dict[str, float]:
+        """Fraction of SAE latents tracking unique ground-truth features."""
+        return {
+            label: sae_record.results.uniqueness
+            for label, sae_record in self.saes.items()
+            if sae_record.results is not None
+        }

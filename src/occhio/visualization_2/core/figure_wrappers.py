@@ -5,7 +5,18 @@ from IPython.display import HTML, display
 
 
 class FigureProxy:
-    """Proxy that intercepts subplot-aware Plotly methods to auto-inject row/col."""
+    """Proxy that intercepts subplot-aware Plotly methods to auto-inject row/col.
+
+    Automatically handles:
+    - **Legend deduplication**: Same trace names across subplots show only once
+    - **Axis label deduplication**: X-axis labels only on bottom row, y-axis labels
+      only on left column. Applied automatically after each add_trace() call and
+      when update_xaxes()/update_yaxes() is called without explicit showticklabels.
+      Override by passing showticklabels=True explicitly.
+
+    Subclasses of BasePlot can simply add traces and configure axes without
+    worrying about grid context.
+    """
 
     _SUBPLOT_METHODS = {
         "add_trace",
@@ -27,17 +38,38 @@ class FigureProxy:
         ),
     }
 
-    def __init__(self, fig: go.Figure, row: int, col: int):
+    def __init__(
+        self,
+        fig: go.Figure,
+        row: int,
+        col: int,
+        *,
+        legend_registry: set[str] | None = None,
+    ):
         """Create a proxy targeting a specific subplot cell.
 
         Args:
             fig: The underlying Plotly figure.
             row: 1-indexed subplot row.
             col: 1-indexed subplot column.
+            legend_registry: Shared set for legend deduplication across subplots.
+                If None, a new set is created (suitable for single-subplot figures).
         """
         self._fig = fig
         self.row = row
         self.col = col
+
+        # Extract grid dimensions from figure's internal grid reference
+        if hasattr(fig, "_grid_ref") and fig._grid_ref:  # ty:ignore[has-type]
+            self._n_rows = len(fig._grid_ref)  # ty:ignore[has-type]
+            self._n_cols = len(fig._grid_ref[0]) if fig._grid_ref else 1  # ty:ignore[has-type]
+        else:
+            self._n_rows = 1
+            self._n_cols = 1
+
+        self._legend_registry: set[str] = (
+            legend_registry if legend_registry is not None else set()
+        )
 
     def _remap_axis_refs(self, kwargs: dict) -> dict[str, Any]:
         """Rewrite bare axis references (e.g. ``'x'`` → ``'x2'``) to target this subplot."""
@@ -58,6 +90,58 @@ class FigureProxy:
 
         return remapped_kwargs
 
+    def _dedupe_legend(self, trace: Any) -> None:
+        """Apply legend deduplication to a trace.
+
+        If the trace name has been seen before, sets showlegend=False and
+        ensures legendgroup is set for proper hover/click behavior.
+        """
+        name: str | None = getattr(trace, "name", None)
+        # Ignore traces with no name
+        if name is None:
+            return
+
+        # Respect explicitly set showlegend=False
+        if trace.showlegend is False:
+            return
+
+        # Set legendgroup if not already set (ensures clicking legend toggles all)
+        if getattr(trace, "legendgroup", None) is None:
+            trace.legendgroup = name
+
+        # Only show legend for first occurrence of each name
+        if name in self._legend_registry:
+            trace.showlegend = False
+        else:
+            self._legend_registry.add(name)
+
+    def _dedup_axis_label(self) -> None:
+        """Apply axis label deduplication rules to current subplot.
+
+        X-axis labels only show on bottom row, y-axis labels only on left column.
+        Only applies if the user hasn't already explicitly set showticklabels to True.
+        """
+        # Get the axis names for this subplot
+        if hasattr(self._fig, "_grid_ref") and self._fig._grid_ref:
+            # It is sufficient for us to access the first trace, they all share the same axis.
+            trace_kwargs = self._fig._grid_ref[self.row - 1][self.col - 1][
+                0
+            ].trace_kwargs
+
+            # Update x-axis: only show on bottom row
+            # trace_kwargs has 'xaxis': 'x', 'x2', etc. We need to convert to 'xaxis', 'xaxis2'
+            xaxis_name = trace_kwargs["xaxis"].replace("x", "xaxis")
+            xaxis = getattr(self._fig.layout, xaxis_name, None)
+            if xaxis and xaxis.showticklabels is not True:
+                xaxis.showticklabels = self.row == self._n_rows
+
+            # Update y-axis: only show on left column
+            # trace_kwargs has 'yaxis': 'y', 'y2', etc. We need to convert to 'yaxis', 'yaxis2'
+            yaxis_name = trace_kwargs["yaxis"].replace("y", "yaxis")
+            yaxis = getattr(self._fig.layout, yaxis_name, None)
+            if yaxis and yaxis.showticklabels is not True:
+                yaxis.showticklabels = self.col == 1
+
     def __getattr__(self, name: str) -> Any:
         """Delegate attribute access to the wrapped figure.
 
@@ -69,6 +153,49 @@ class FigureProxy:
             raise AttributeError(msg)
 
         attr = getattr(self._fig, name)
+
+        if name == "add_trace" and callable(attr):
+
+            def add_trace_wrapper(trace: Any, *args: Any, **kwargs: Any) -> Any:
+                kwargs.setdefault("row", self.row)
+                kwargs.setdefault("col", self.col)
+                kwargs = self._remap_axis_refs(kwargs)
+                self._dedupe_legend(trace)
+                result = attr(trace, *args, **kwargs)
+
+                # After adding trace, apply axis label deduplication
+                # (Plotly shows tick labels by default when traces have x/y data)
+                self._dedup_axis_label()
+
+                return result
+
+            return add_trace_wrapper
+
+        if name == "update_xaxes" and callable(attr):
+
+            def update_xaxes_wrapper(*args: Any, **kwargs: Any) -> Any:
+                kwargs.setdefault("row", self.row)
+                kwargs.setdefault("col", self.col)
+                kwargs = self._remap_axis_refs(kwargs)
+                # Auto-hide x-axis labels unless on bottom row
+                if "showticklabels" not in kwargs:
+                    kwargs["showticklabels"] = self.row == self._n_rows
+                return attr(*args, **kwargs)
+
+            return update_xaxes_wrapper
+
+        if name == "update_yaxes" and callable(attr):
+
+            def update_yaxes_wrapper(*args: Any, **kwargs: Any) -> Any:
+                kwargs.setdefault("row", self.row)
+                kwargs.setdefault("col", self.col)
+                kwargs = self._remap_axis_refs(kwargs)
+                # Auto-hide y-axis labels unless on left column
+                if "showticklabels" not in kwargs:
+                    kwargs["showticklabels"] = self.col == 1
+                return attr(*args, **kwargs)
+
+            return update_yaxes_wrapper
 
         if name in self._SUBPLOT_METHODS and callable(attr):
 

@@ -15,6 +15,7 @@ class PlotRenderer(ABC):
     """Abstract base for objects that render a single model into a subplot cell.
 
     Subclasses implement ``render()`` to add Plotly traces to a ``FigureProxy``.
+    Optionally override ``configure_layout()`` for figure-wide styling.
     """
 
     @abstractmethod
@@ -33,6 +34,30 @@ class PlotRenderer(ABC):
             model: The ToyModel to visualize.
         """
         ...
+
+    def configure_layout(self, fig: go.Figure) -> None:
+        """Configure figure-wide layout properties (optional).
+
+        Called once after all render() calls complete. Use this for global
+        styling like background color, bar gaps, font settings, etc.
+
+        Per-subplot axis configuration should use update_xaxes/update_yaxes
+        in render() instead.
+
+        Args:
+            fig: The raw Plotly Figure (not a FigureProxy).
+
+        Example::
+
+            def configure_layout(self, fig):
+                fig.update_layout(
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    bargap=0.15,
+                )
+                # Style all axes globally
+                fig.update_xaxes(showgrid=False)
+        """
+        pass  # Default no-op implementation
 
 
 AxisSpec = int | str
@@ -208,6 +233,8 @@ class BasePlot(PlotRenderer, ABC):
 
             add_grid_headers(fig, models, facet_axes=facet_axes)
 
+        self.configure_layout(fig)
+
         fig.update_layout(
             height=height,
             width=width,
@@ -241,11 +268,16 @@ class BasePlot(PlotRenderer, ABC):
         For a single ``ToyModel``, produces a 1×1 figure (axes args are ignored).
         For a ``ModelGrid``, facet_axes must be provided.
         """
+        # Shared registry ensures legend entries are deduplicated across all subplots
+        legend_registry: set[str] = set()
 
         if isinstance(grid, ToyModel):
             # This is the case where the facet axes were explicitly set to an empty list
             fig = make_subplots(rows=1, cols=1)
-            self.render(FigureProxy(fig, row=1, col=1), grid)
+            self.render(
+                FigureProxy(fig, row=1, col=1, legend_registry=legend_registry),
+                grid,
+            )
 
         elif isinstance(grid, ModelGrid):
             if facet_axes is None:
@@ -268,7 +300,12 @@ class BasePlot(PlotRenderer, ABC):
                     grid_index[facet_axes[1]] = row_idx
 
                 self.render(
-                    FigureProxy(fig, row=row_idx + 1, col=col_idx + 1),
+                    FigureProxy(
+                        fig,
+                        row=row_idx + 1,
+                        col=col_idx + 1,
+                        legend_registry=legend_registry,
+                    ),
                     cast(ToyModel, grid[tuple(grid_index)]),
                 )
 

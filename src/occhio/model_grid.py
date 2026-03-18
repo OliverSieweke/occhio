@@ -5,6 +5,7 @@ Uses torch.vmap + torch.compile for fast parallel training across grid points.
 
 from __future__ import annotations
 
+import datetime
 import pickle
 from collections.abc import Iterable, Sequence
 from copy import deepcopy
@@ -12,21 +13,22 @@ from dataclasses import dataclass
 from functools import cached_property
 from inspect import signature
 from itertools import product
-from typing import Any, Callable, overload
+from typing import Any, Callable
 from warnings import warn
 
 import numpy as np
 import torch
-import datetime
 from numpy.typing import NDArray
+from sae_lens import TrainingSAE
 from torch import Tensor, meshgrid
 from torch.func import functional_call, stack_module_state
 from torch.optim import AdamW
-from tqdm import tqdm
+from tqdm.auto import tqdm
 
 from occhio.autoencoder import AutoEncoderBase
 from occhio.distributions.base import Distribution
 from occhio.toy_model import ToyModel
+from occhio.utils.logging import suppress_tqdm
 
 
 @dataclass
@@ -822,3 +824,68 @@ class ModelGrid:
             broadcast_samples=self.broadcast_samples,
             _models=result,
         )
+
+    def train_saes(
+        self,
+        saes: dict[str, TrainingSAE],
+        training_samples: int = 10_000_000,
+        batch_size: int = 1024,
+        lr: float = 0.0003,
+        lr_warm_up_steps: int = 0,
+        lr_decay_steps: int = 0,
+        n_snapshots: int = 0,
+        snapshot_fn: Callable[[Any], None] | None = None,
+        autocast_sae: bool = False,
+        autocast_data: bool = False,
+    ) -> None:
+        """Train SAE(s) on each ToyModel in the grid.
+
+        Args:
+            saes: Dict mapping labels to SAEs.
+            training_samples: Number of training samples (sae_lens param, default: 10M).
+            batch_size: Training batch size (sae_lens param, default: 1024).
+            lr: Learning rate (sae_lens param, default: 0.0003).
+            lr_warm_up_steps: Number of warmup steps (sae_lens param, default: 0).
+            lr_decay_steps: Number of decay steps (sae_lens param, default: 0).
+            n_snapshots: Number of training snapshots (sae_lens param, default: 0).
+            snapshot_fn: Optional callback for snapshots (sae_lens param).
+            autocast_sae: Use autocast for SAE (sae_lens param, default: False).
+            autocast_data: Use autocast for data (sae_lens param, default: False).
+        """
+        flattened_models: NDArray[np.object_] = self.models.ravel()
+
+        for model in tqdm(flattened_models, desc="Models", unit="model"):
+            with (
+                suppress_tqdm()
+            ):  # SAE Lens tqdm gets very verbose when training on a grid
+                model.train_saes(
+                    saes=deepcopy(saes),
+                    training_samples=training_samples,
+                    batch_size=batch_size,
+                    lr=lr,
+                    lr_warm_up_steps=lr_warm_up_steps,
+                    lr_decay_steps=lr_decay_steps,
+                    n_snapshots=n_snapshots,
+                    snapshot_fn=snapshot_fn,
+                    autocast_sae=autocast_sae,
+                    autocast_data=autocast_data,
+                )
+
+    def evaluate_saes(
+        self,
+        labels: list[str] | None = None,
+        num_samples: int = 100_000,
+    ) -> None:
+        """Evaluate stored SAEs on each ToyModel in the grid.
+
+        Args:
+            labels: List of SAE labels to evaluate. Defaults to all stored SAEs.
+            num_samples: Number of samples to use for evaluation.
+
+        Returns:
+           None
+        """
+        flattened_models: NDArray[np.object_] = self.models.ravel()
+
+        for model in tqdm(flattened_models, desc="Models", unit="model"):
+            model.evaluate_saes(labels=labels, num_samples=num_samples)

@@ -118,7 +118,7 @@ def add_grid_headers(
         for model_row in range(grid.shape[row_axis_idx]):
             fig.add_annotation(
                 text=f"{row_axis.label}: {_format_axis_value(row_axis.values[model_row])}",
-                x=-0.02,
+                x=-0.05,
                 y=model_domain_center(
                     fig,
                     model_row=model_row,
