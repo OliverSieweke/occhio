@@ -1,3 +1,35 @@
-from .plots import EmbeddingPlot, RepresentationPlot
+from .plots import (
+    EmbeddingPlot,
+    FeatureDimensionalityByIndexPlot,
+    FeatureDimensionalityDistributionPlot,
+    FeatureInterferenceByIndexPlot,
+    FeatureInterferenceDistributionPlot,
+    FeatureNormByIndexPlot,
+    FeatureNormDistributionPlot,
+    RepresentationPlot,
+    plot_feature_dimensionality_by_index,
+    plot_feature_dimensionality_distribution,
+    plot_feature_interference_by_index,
+    plot_feature_interference_distribution,
+    plot_feature_norm_by_index,
+    plot_feature_norm_distribution,
+    plot_feature_representation,
+)
 
-__all__ = ["RepresentationPlot", "EmbeddingPlot"]
+__all__ = [
+    "RepresentationPlot",
+    "EmbeddingPlot",
+    "FeatureDimensionalityByIndexPlot",
+    "FeatureDimensionalityDistributionPlot",
+    "FeatureNormByIndexPlot",
+    "FeatureNormDistributionPlot",
+    "FeatureInterferenceByIndexPlot",
+    "FeatureInterferenceDistributionPlot",
+    "plot_feature_dimensionality_by_index",
+    "plot_feature_dimensionality_distribution",
+    "plot_feature_norm_by_index",
+    "plot_feature_norm_distribution",
+    "plot_feature_interference_by_index",
+    "plot_feature_interference_distribution",
+    "plot_feature_representation",
+]

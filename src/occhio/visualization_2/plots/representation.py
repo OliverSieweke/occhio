@@ -1,17 +1,17 @@
 import plotly.graph_objects as go
 
 from occhio.toy_model import ToyModel
-from occhio.visualization_2.core.base_plot import BasePlot
+from occhio.visualization_2.core.base_plot import SinglePlot
 from occhio.visualization_2.core.figure_wrappers import FigureProxy
 
 
-class RepresentationPlot(BasePlot):
+class RepresentationPlot(SinglePlot):
     """Plot W^T W heatmap showing feature interference/orthogonality.
 
     Note: The original plot_representation also showed:
     - Bias vector as a thin vertical heatmap (requires multi-column per model)
     - Feature norms bar chart (requires multi-row per model)
-    These are not yet supported by the BasePlot layout.
+    These are not yet supported by the SinglePlot layout.
     """
 
     def render(

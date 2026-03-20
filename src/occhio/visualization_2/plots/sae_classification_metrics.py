@@ -11,7 +11,7 @@ import plotly.colors
 import plotly.graph_objects as go
 
 from occhio.toy_model import ToyModel
-from occhio.visualization_2.core.base_plot import BasePlot
+from occhio.visualization_2.core import SinglePlot
 from occhio.visualization_2.core.figure_wrappers import FigureProxy
 
 
@@ -22,7 +22,7 @@ class MetricConfig:
     color: str
 
 
-class SAEClassificationMetricsPlot(BasePlot):
+class SAEClassificationMetricsPlot(SinglePlot):
     """Plot SAE evaluation metrics as grouped bar charts.
 
     Creates a visualization with:

@@ -14,7 +14,7 @@ class FigureProxy:
       when update_xaxes()/update_yaxes() is called without explicit showticklabels.
       Override by passing showticklabels=True explicitly.
 
-    Subclasses of BasePlot can simply add traces and configure axes without
+    Subclasses of SinglePlot can simply add traces and configure axes without
     worrying about grid context.
     """
 
@@ -34,7 +34,7 @@ class FigureProxy:
         "update_layout": (
             "update_layout() is not allowed inside render(). "
             "Use update_xaxes/update_yaxes for per-subplot axis config, "
-            "or set global layout properties at the BasePlot/PlotGrid level."
+            "or set global layout properties at the SinglePlot/PlotGrid level."
         ),
     }
 
@@ -45,6 +45,7 @@ class FigureProxy:
         col: int,
         *,
         legend_registry: set[str] | None = None,
+        is_composite: bool = False,
     ):
         """Create a proxy targeting a specific subplot cell.
 
@@ -54,10 +55,13 @@ class FigureProxy:
             col: 1-indexed subplot column.
             legend_registry: Shared set for legend deduplication across subplots.
                 If None, a new set is created (suitable for single-subplot figures).
+            is_composite: If True, disables tick label deduplication since each
+                subplot in a composite may have different axis scales.
         """
         self._fig = fig
         self.row = row
         self.col = col
+        self._is_composite = is_composite
 
         # Extract grid dimensions from figure's internal grid reference
         if hasattr(fig, "_grid_ref") and fig._grid_ref:  # ty:ignore[has-type]
@@ -118,7 +122,9 @@ class FigureProxy:
     def _dedup_axis_label(self) -> None:
         """Apply axis label deduplication rules to current subplot.
 
-        X-axis labels only show on bottom row, y-axis labels only on left column.
+        For composite plots, all subplots show tick labels. For single plots
+        faceted across a grid, x-axis labels only show on the bottom row and
+        y-axis labels only on the left column.
         Only applies if the user hasn't already explicitly set showticklabels to True.
         """
         # Get the axis names for this subplot
@@ -128,19 +134,19 @@ class FigureProxy:
                 0
             ].trace_kwargs
 
-            # Update x-axis: only show on bottom row
+            # Update x-axis: show ticks for composites or bottom row of faceted grids
             # trace_kwargs has 'xaxis': 'x', 'x2', etc. We need to convert to 'xaxis', 'xaxis2'
             xaxis_name = trace_kwargs["xaxis"].replace("x", "xaxis")
             xaxis = getattr(self._fig.layout, xaxis_name, None)
-            if xaxis and xaxis.showticklabels is not True:
-                xaxis.showticklabels = self.row == self._n_rows
+            if xaxis and xaxis.showticklabels is None:
+                xaxis.showticklabels = self._is_composite or self.row == self._n_rows
 
-            # Update y-axis: only show on left column
+            # Update y-axis: show ticks for composites or left column of faceted grids
             # trace_kwargs has 'yaxis': 'y', 'y2', etc. We need to convert to 'yaxis', 'yaxis2'
             yaxis_name = trace_kwargs["yaxis"].replace("y", "yaxis")
             yaxis = getattr(self._fig.layout, yaxis_name, None)
-            if yaxis and yaxis.showticklabels is not True:
-                yaxis.showticklabels = self.col == 1
+            if yaxis and yaxis.showticklabels is None:
+                yaxis.showticklabels = self._is_composite or self.col == 1
 
     def __getattr__(self, name: str) -> Any:
         """Delegate attribute access to the wrapped figure.
@@ -177,9 +183,11 @@ class FigureProxy:
                 kwargs.setdefault("row", self.row)
                 kwargs.setdefault("col", self.col)
                 kwargs = self._remap_axis_refs(kwargs)
-                # Auto-hide x-axis labels unless on bottom row
+                # Show ticks for composites or bottom row of faceted grids
                 if "showticklabels" not in kwargs:
-                    kwargs["showticklabels"] = self.row == self._n_rows
+                    kwargs["showticklabels"] = (
+                        self._is_composite or self.row == self._n_rows
+                    )
                 return attr(*args, **kwargs)
 
             return update_xaxes_wrapper
@@ -190,9 +198,9 @@ class FigureProxy:
                 kwargs.setdefault("row", self.row)
                 kwargs.setdefault("col", self.col)
                 kwargs = self._remap_axis_refs(kwargs)
-                # Auto-hide y-axis labels unless on left column
+                # Show ticks for composites or left column of faceted grids
                 if "showticklabels" not in kwargs:
-                    kwargs["showticklabels"] = self.col == 1
+                    kwargs["showticklabels"] = self._is_composite or self.col == 1
                 return attr(*args, **kwargs)
 
             return update_yaxes_wrapper

@@ -26,6 +26,7 @@ from .distributions import Distribution
 from .sae_lens_adapter.activation_generator import ActivationGeneratorWrapper
 from .sae_lens_adapter.feature_dictionary import FeatureDictionaryWrapper
 from .utils.device import _same_device
+from .utils.logging import suppress_tqdm
 
 
 @dataclass
@@ -333,30 +334,40 @@ class ToyModel:
         Returns:
             None
         """
-        for label, sae in saes.items():
+        pbar = tqdm(
+            saes.items(),
+            desc="SAEs",
+            unit="SAE",
+            leave=False,
+            disable=not verbose,
+        )
+        for label, sae in pbar:
+            pbar.set_description(f"SAE: {label}")
             if label in self.saes.keys():
                 warnings.warn(
                     f"An sae with the label '{label}' was already trained on this model and is being overwritten.",
                     UserWarning,
                     stacklevel=2,
                 )
-
-            train_toy_sae(
-                sae=sae,
-                feature_dict=FeatureDictionaryWrapper(self.ae),
-                activations_generator=ActivationGeneratorWrapper(self.distribution),
-                training_samples=training_samples,
-                batch_size=batch_size,
-                lr=lr,
-                lr_warm_up_steps=lr_warm_up_steps,
-                lr_decay_steps=lr_decay_steps,
-                device=self.device,
-                n_snapshots=n_snapshots,
-                snapshot_fn=snapshot_fn,
-                autocast_sae=autocast_sae,
-                autocast_data=autocast_data,
-            )
-            self.saes[label] = SAERecord(sae=sae)
+            with (
+                suppress_tqdm()
+            ):  # SAE Lens tqdm gets very verbose when training on a grid
+                train_toy_sae(
+                    sae=sae,
+                    feature_dict=FeatureDictionaryWrapper(self.ae),
+                    activations_generator=ActivationGeneratorWrapper(self.distribution),
+                    training_samples=training_samples,
+                    batch_size=batch_size,
+                    lr=lr,
+                    lr_warm_up_steps=lr_warm_up_steps,
+                    lr_decay_steps=lr_decay_steps,
+                    device=self.device,
+                    n_snapshots=n_snapshots,
+                    snapshot_fn=snapshot_fn,
+                    autocast_sae=autocast_sae,
+                    autocast_data=autocast_data,
+                )
+                self.saes[label] = SAERecord(sae=sae)
 
     def evaluate_saes(
         self,
@@ -389,6 +400,7 @@ class ToyModel:
             labels, desc="SAEs", unit="SAE", leave=False, disable=not verbose
         ) as pbar:
             for label in pbar:
+                pbar.set_description(f"SAE: {label}")
                 sae_record = self.saes[label]
                 if sae_record.results is not None:
                     warnings.warn(
@@ -488,6 +500,37 @@ class ToyModel:
     @torch.no_grad()
     def total_feature_interferences_including_self(self) -> Tensor:
         return self.interferences_sq.sum(dim=1)
+
+    @property
+    @torch.no_grad()
+    def cosine_similarity_matrix(self) -> Tensor:
+        """Cosine similarity between all pairs of feature embeddings.
+
+        Returns:
+            Tensor of shape (n_features, n_features) where entry (i, j) is d_i^T d_j
+            with d_i, d_j being the normalized feature embeddings.
+        """
+        return self.W_normalized_features.T @ self.W_normalized_features
+
+    @property
+    @torch.no_grad()
+    def superposition(self) -> Tensor:
+        """Mean max absolute cosine similarity (ρmm), measuring degree of superposition.
+
+        ρmm = (1/N) * Σ_i max_{j≠i} |d_i^T d_j|
+
+        where d_i are the normalized feature embeddings. 0 ≤ ρmm ≤ 1, with ρmm = 0
+        indicating no superposition (all features mutually orthogonal).
+
+        Returns:
+            Scalar tensor with the mean max absolute cosine similarity.
+        """
+        cos_sim = self.cosine_similarity_matrix.abs()
+        # Zero out the diagonal to exclude self-similarity
+        cos_sim.fill_diagonal_(0.0)
+        # For each feature, find max cosine similarity to any other feature
+        max_cos_sim = cos_sim.max(dim=1).values
+        return max_cos_sim.mean()
 
     # ----------------------------------------------------------------------------------
     # SAE Metrics ----------------------------------------------------------------------
