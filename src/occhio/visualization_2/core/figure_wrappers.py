@@ -129,10 +129,18 @@ class FigureProxy:
         """
         # Get the axis names for this subplot
         if hasattr(self._fig, "_grid_ref") and self._fig._grid_ref:
-            # It is sufficient for us to access the first trace, they all share the same axis.
-            trace_kwargs = self._fig._grid_ref[self.row - 1][self.col - 1][
-                0
-            ].trace_kwargs
+            cell_ref = self._fig._grid_ref[self.row - 1][self.col - 1][0]
+            trace_kwargs = getattr(cell_ref, "trace_kwargs")
+
+            # Domain subplots (e.g., Indicator, Pie) have SubplotDomain objects
+            # instead of refs with trace_kwargs - skip them
+            # Skip traces that don't have x/y axes
+            if (
+                trace_kwargs is None
+                or "xaxis" not in trace_kwargs
+                or "yaxis" not in trace_kwargs
+            ):
+                return
 
             # Update x-axis: show ticks for composites or bottom row of faceted grids
             # trace_kwargs has 'xaxis': 'x', 'x2', etc. We need to convert to 'xaxis', 'xaxis2'
@@ -188,6 +196,9 @@ class FigureProxy:
                     kwargs["showticklabels"] = (
                         self._is_composite or self.row == self._n_rows
                     )
+                # Show axis titles only on bottom row (even for composites)
+                if "title_text" in kwargs and self.row != self._n_rows:
+                    kwargs["title_text"] = ""
                 return attr(*args, **kwargs)
 
             return update_xaxes_wrapper
@@ -201,6 +212,9 @@ class FigureProxy:
                 # Show ticks for composites or left column of faceted grids
                 if "showticklabels" not in kwargs:
                     kwargs["showticklabels"] = self._is_composite or self.col == 1
+                # Show axis titles only on left column (even for composites)
+                if "title_text" in kwargs and self.col != 1:
+                    kwargs["title_text"] = ""
                 return attr(*args, **kwargs)
 
             return update_yaxes_wrapper

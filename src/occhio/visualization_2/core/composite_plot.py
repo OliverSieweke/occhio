@@ -10,7 +10,7 @@ from plotly.subplots import make_subplots
 
 from occhio.model_grid import ModelGrid
 from occhio.toy_model import ToyModel
-from occhio.visualization_2.core.base_plot import Plot, SinglePlot
+from occhio.visualization_2.core.base_plot import PlotOrchestrator, PlotRenderer
 from occhio.visualization_2.core.figure_wrappers import FigureProxy
 from occhio.visualization_2.core.plotting_utils import add_grid_headers
 
@@ -38,14 +38,14 @@ PlotlySpecsGrid: TypeAlias = list[list[PlotlySubplotSpec]]
 # [03.03.26 | OliverSieweke] TODO:span never 0 or lower
 @dataclass
 class Span:
-    """Wrap a SinglePlot to span multiple rows/columns in a composite layout.
+    """Wrap a PlotRenderer to span multiple rows/columns in a composite layout.
 
     Example::
 
         Span(MyPlot(), colspan=2)  # plot spans two columns
     """
 
-    plot: SinglePlot
+    plot: PlotRenderer
     colspan: int = 1
     rowspan: int = 1
 
@@ -55,24 +55,24 @@ class SubplotSpec:
     """Specification for a subplot within the composite layout.
 
     Attributes:
-        plot: The SinglePlot to render in this subplot.
+        plot: The PlotRenderer to render in this subplot.
         row: 1-indexed row position in the inner grid.
         col: 1-indexed column position in the inner grid.
     """
 
-    plot: SinglePlot
+    plot: PlotRenderer
     row: int
     col: int
 
 
-# A layout cell is a SinglePlot, a Span wrapping one, or None.
-LayoutCell = SinglePlot | Span | None
+# A layout cell is a PlotRenderer, a Span wrapping one, or None.
+LayoutCell = PlotRenderer | Span | None
 
 # The layout is a 2D list: layout[row_index][col_index].
 Layout = list[list[LayoutCell]]
 
 
-class CompositePlot(Plot):
+class CompositePlot(PlotOrchestrator):
     """Compose multiple SinglePlot instances into a single figure.
 
     The layout is a 2D list describing the inner per-model grid. Each cell
@@ -102,6 +102,8 @@ class CompositePlot(Plot):
     _specs: PlotlySpecsGrid
     _n_render_axes: int
     _share_axes_across_facets: bool
+    _n_facet_cols: int
+    _n_facet_rows: int
 
     def __init__(
         self,
@@ -135,6 +137,8 @@ class CompositePlot(Plot):
 
         self._subplots, self._specs = self._resolve_layout()
         self._n_render_axes = self._validate_n_render_axes()
+        self._n_facet_cols = 1
+        self._n_facet_rows = 1
 
     @property
     def n_render_axes(self) -> int:
@@ -171,14 +175,17 @@ class CompositePlot(Plot):
                 if cell is None:
                     continue
 
+                plot = cell.plot if isinstance(cell, Span) else cell
+
                 specs[inner_row_index][inner_column_index] = {
                     "colspan": cell.colspan if isinstance(cell, Span) else 1,
                     "rowspan": cell.rowspan if isinstance(cell, Span) else 1,
+                    "type": plot.subplot_type,
                 }
 
                 subplots.append(
                     SubplotSpec(
-                        plot=cell.plot if isinstance(cell, Span) else cell,
+                        plot=plot,
                         row=inner_row_index + 1,
                         col=inner_column_index + 1,
                     )
@@ -220,15 +227,15 @@ class CompositePlot(Plot):
         if self._n_facet_cols <= 1 and self._n_facet_rows <= 1:
             return  # No faceting, nothing to match
 
-        for subplot in self._subplots:
-            # The reference axes are at the first facet position (facet_row=0, facet_col=0)
-            ref_phys_row = subplot.row
-            ref_phys_col = subplot.col
-            ref_axis_idx = (ref_phys_row - 1) * (
-                self._inner_cols * self._n_facet_cols
-            ) + ref_phys_col
-            ref_x = "x" if ref_axis_idx == 1 else f"x{ref_axis_idx}"
-            ref_y = "y" if ref_axis_idx == 1 else f"y{ref_axis_idx}"
+        for subplot_spec in self._subplots:
+            # Skip domain-type subplots (e.g., Indicator) - they don't have x/y axes
+            if subplot_spec.plot.subplot_type == "domain":
+                continue
+
+            # Get reference axes from first facet position (facet_row=0, facet_col=0)
+            ref_subplot = fig.get_subplot(row=subplot_spec.row, col=subplot_spec.col)
+            ref_x = ref_subplot.xaxis.plotly_name.replace("axis", "")
+            ref_y = ref_subplot.yaxis.plotly_name.replace("axis", "")
 
             # Apply matches to all other facet positions for this subplot
             for facet_row, facet_col in itertools.product(
@@ -237,14 +244,11 @@ class CompositePlot(Plot):
                 if facet_row == 0 and facet_col == 0:
                     continue  # Skip the reference facet
 
-                phys_row = facet_row * self._inner_rows + subplot.row
-                phys_col = facet_col * self._inner_cols + subplot.col
-                axis_idx = (phys_row - 1) * (
-                    self._inner_cols * self._n_facet_cols
-                ) + phys_col
-
-                x_key = "xaxis" if axis_idx == 1 else f"xaxis{axis_idx}"
-                y_key = "yaxis" if axis_idx == 1 else f"yaxis{axis_idx}"
+                phys_row = facet_row * self._inner_rows + subplot_spec.row
+                phys_col = facet_col * self._inner_cols + subplot_spec.col
+                target_subplot = fig.get_subplot(row=phys_row, col=phys_col)
+                x_key = target_subplot.xaxis.plotly_name
+                y_key = target_subplot.yaxis.plotly_name
 
                 fig.layout[x_key].matches = ref_x
                 fig.layout[y_key].matches = ref_y
