@@ -20,6 +20,9 @@ import plotly.colors as pc
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from scipy.optimize import linear_sum_assignment
+
+from occhio.sae.sae import SAESimple
 
 # %%  ── config ───────────────────────────────────────────────────────────────
 DEVICE = "mps"
@@ -27,14 +30,14 @@ gen = torch.Generator(DEVICE)
 gen.manual_seed(1)
 
 N_FEATURES = 200
-N_HIDDEN = 10
+N_HIDDEN = 20
 
 dist = PowerLawDigraph(
     n_features=N_FEATURES,
-    alpha=3,
-    p_edge=10 / N_FEATURES,
-    p_active=1 / N_FEATURES,
-    p_child=0.2,
+    alpha=2,
+    p_edge=15 / N_FEATURES,
+    p_active=2 / N_FEATURES,
+    p_child=(0, 0.5),
     generator=gen,
     device=DEVICE,
 )
@@ -44,6 +47,11 @@ tm = ToyModel(distribution=dist, ae=ae, device=DEVICE)
 
 # %%  ── graph structure ──────────────────────────────────────────────────────
 in_deg = dist.in_degrees().cpu().numpy()
+# Weighted in-degree: sum of p_child over incoming edges for each node
+_p_child_matrix = (
+    (1.0 - torch.exp(dist._log_survival)).cpu().numpy()
+)  # (N, N) p_child[j,i]
+weighted_in_deg = _p_child_matrix.sum(axis=0)  # sum over parents j for each child i
 out_deg = dist.out_degrees().cpu().numpy()
 tot_deg = in_deg + out_deg
 
@@ -213,7 +221,7 @@ fig = make_subplots(
     cols=2,
     subplot_titles=[
         "Feature dimensionality per node",
-        "Dimensionality vs in-degree",
+        "Dimensionality vs weighted in-degree",
     ],
 )
 fig.add_trace(
@@ -229,7 +237,7 @@ fig.add_trace(
 )
 fig.add_trace(
     go.Scatter(
-        x=in_deg,
+        x=weighted_in_deg,
         y=feat_dims,
         mode="markers",
         marker=dict(color="steelblue", size=8),
@@ -239,7 +247,7 @@ fig.add_trace(
     col=2,
 )
 fig.update_xaxes(title_text="node index", row=1, col=1)
-fig.update_xaxes(title_text="in-degree", row=1, col=2)
+fig.update_xaxes(title_text="weighted in-degree (Σ p_child)", row=1, col=2)
 fig.update_yaxes(title_text="dimensionality", row=1, col=1)
 fig.update_yaxes(title_text="dimensionality", row=1, col=2)
 fig.update_layout(title="Feature dimensionalities", showlegend=False)
@@ -534,21 +542,25 @@ with torch.no_grad():
 W_cols = W_np.T  # (n_features, n_hidden) — one row per feature
 W_centered = W_cols - W_cols.mean(axis=0)
 _, S, Vt = np.linalg.svd(W_centered, full_matrices=False)
-W_2d = W_centered @ Vt[:2].T  # (n_features, 2)
-var_ratio = S[:2] ** 2 / (S**2).sum()
+W_3d = W_centered @ Vt[:3].T  # (n_features, 3)
+var_ratio = S[:3] ** 2 / (S**2).sum()
 
-fig = px.scatter(
-    x=W_2d[:, 0],
-    y=W_2d[:, 1],
-    color=in_deg,
+fig = px.scatter_3d(
+    x=W_3d[:, 0],
+    y=W_3d[:, 1],
+    z=W_3d[:, 2],
+    color=weighted_in_deg,
     hover_name=[f"node {i}" for i in node_ids],
     color_continuous_scale="Plasma",
     labels=dict(
-        x=f"PC1 ({var_ratio[0]:.1%})", y=f"PC2 ({var_ratio[1]:.1%})", color="in-degree"
+        x=f"PC1 ({var_ratio[0]:.1%})",
+        y=f"PC2 ({var_ratio[1]:.1%})",
+        z=f"PC3 ({var_ratio[2]:.1%})",
+        color="weighted in-deg",
     ),
     title="PCA of W columns  (each point = one feature vector in hidden space)",
 )
-fig.update_traces(marker=dict(size=8))
+fig.update_traces(marker=dict(size=4))
 fig.show()
 
 # %%  ── interference vs correlation comparison ─────────────────────────────
@@ -579,203 +591,205 @@ fig = px.scatter(
 )
 fig.show()
 
-# %% ── ego-graph: centre node and its direct neighbourhood ───────────────────
-# adj_np[j, i] > 0  ⟹  directed edge j → i
-# Layout: parents left, centre middle, children right.
-CENTER = 3  # node 0 has the highest expected in-degree by construction
+# %%  ── per-edge: p_child vs interference ────────────────────────────────────
+edge_j, edge_i = np.where(adj_bool)  # j → i for each edge
+edge_p_child = _p_child_matrix[edge_j, edge_i]
+edge_interf = imat[edge_j, edge_i]
 
-parents = [j for j in range(N_FEATURES) if adj_np[j, CENTER] and j != CENTER]
-children = [i for i in range(N_FEATURES) if adj_np[CENTER, i] and i != CENTER]
-
-print(f"Node {CENTER}: {len(parents)} parents  |  {len(children)} children")
-
-all_ego_nodes = [CENTER] + parents + children
-
-role_of = {CENTER: "centre"}
-role_of.update({p: "parent" for p in parents})
-role_of.update({c: "child" for c in children})
-
-
-def _column(nodes, x):
-    """Evenly-spaced y-positions for a column of nodes at a fixed x."""
-    ys = np.linspace(1, -1, len(nodes)) if len(nodes) > 1 else [0.0]
-    return {nd: (float(x), float(y)) for nd, y in zip(nodes, ys)}
-
-
-pos = {CENTER: (0.0, 0.0), **_column(parents, -2.0), **_column(children, 2.0)}
-
-# ── ALL directed edges within the neighbourhood ───────────────────────────────
-edge_data = []
-for u in all_ego_nodes:
-    for v in all_ego_nodes:
-        if u != v and adj_np[u, v]:
-            edge_data.append((u, v, float(imat[u, v]), f"{role_of[u]}→{role_of[v]}"))
-
-interf_vals = (
-    np.array([v for _, _, v, _ in edge_data]) if edge_data else np.array([0.0])
-)
-vmax_e = max(np.abs(interf_vals).max(), 1e-8)
-
-
-def _clr_rgba(val, alpha=0.85):
-    rgb = pc.sample_colorscale("RdBu_r", [(val + vmax_e) / (2 * vmax_e)])[0]
-    r, g, b = pc.unlabel_rgb(rgb)
-    return f"rgba({int(r)},{int(g)},{int(b)},{alpha})"
-
-
-def _lw(val):
-    return 0.5 + 4.5 * abs(val) / vmax_e
-
-
-def _arrow_endpoints(x0, y0, x1, y1, r=0.12):
-    """Shorten both ends of an edge by r data-units so arrows land at node border."""
-    dx, dy = x1 - x0, y1 - y0
-    L = np.sqrt(dx**2 + dy**2) or 1e-8
-    return x0 + r * dx / L, y0 + r * dy / L, x1 - r * dx / L, y1 - r * dy / L
-
-
-# ── build figure ──────────────────────────────────────────────────────────────
-fig = go.Figure()
-
-# Arrows: one annotation per edge, plus an invisible midpoint marker for hover.
-for s, d, val, label in edge_data:
-    x0, y0 = pos[s]
-    x1, y1 = pos[d]
-    ax, ay, x1a, y1a = _arrow_endpoints(x0, y0, x1, y1)
-    color = _clr_rgba(val)
-    fig.add_annotation(
-        x=x1a,
-        y=y1a,
-        ax=ax,
-        ay=ay,
-        xref="x",
-        yref="y",
-        axref="x",
-        ayref="y",
-        showarrow=True,
-        arrowhead=2,
-        arrowsize=1.0,
-        arrowwidth=_lw(val),
-        arrowcolor=color,
-        text="",
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=[(x0 + x1) / 2],
-            y=[(y0 + y1) / 2],
-            mode="markers",
-            marker=dict(size=12, opacity=0),
-            customdata=[[s, d, val, label]],
-            hovertemplate=(
-                "<b>%{customdata[3]}</b><br>"
-                "imat[%{customdata[0]:.0f} → %{customdata[1]:.0f}]"
-                " = %{customdata[2]:.4f}<extra></extra>"
-            ),
-            showlegend=False,
-        )
-    )
-
-# Nodes — single trace so the colorscale maps correctly across all nodes.
-norm_min_ego = min(norms[n] for n in all_ego_nodes)
-norm_max_ego = max(norms[n] for n in all_ego_nodes)
-indeg_min_ego = min(in_deg[n] for n in all_ego_nodes)
-indeg_max_ego = max(in_deg[n] for n in all_ego_nodes) + 1e-8
-
-border_color = {"centre": "black", "parent": "#4e79a7", "child": "#e15759"}
-border_width = {"centre": 3, "parent": 1.5, "child": 1.5}
-base_size = {"centre": 30, "parent": 18, "child": 18}
-
-node_sizes = [
-    base_size[role_of[nd]]
-    + 12 * (in_deg[nd] - indeg_min_ego) / (indeg_max_ego - indeg_min_ego)
-    for nd in all_ego_nodes
-]
-fig.add_trace(
-    go.Scatter(
-        x=[pos[nd][0] for nd in all_ego_nodes],
-        y=[pos[nd][1] for nd in all_ego_nodes],
-        mode="markers+text",
-        marker=dict(
-            size=node_sizes,
-            color=[norms[nd] for nd in all_ego_nodes],
-            colorscale="plasma",
-            cmin=norm_min_ego,
-            cmax=norm_max_ego,
-            showscale=True,
-            colorbar=dict(title="feature norm", x=1.0, thickness=14),
-            line=dict(
-                width=[border_width[role_of[nd]] for nd in all_ego_nodes],
-                color=[border_color[role_of[nd]] for nd in all_ego_nodes],
-            ),
-        ),
-        text=[str(nd) for nd in all_ego_nodes],
-        textposition="middle center",
-        textfont=dict(size=9, color="white"),
-        customdata=[
-            [nd, in_deg[nd], out_deg[nd], norms[nd], role_of[nd]]
-            for nd in all_ego_nodes
-        ],
-        hovertemplate=(
-            "<b>node %{customdata[0]:.0f}</b>  (%{customdata[4]})<br>"
-            "in-degree: %{customdata[1]:.0f}<br>"
-            "out-degree: %{customdata[2]:.0f}<br>"
-            "norm: %{customdata[3]:.3f}<extra></extra>"
-        ),
-        showlegend=False,
-    )
-)
-
-# Dummy trace for the edge interference colorbar.
-fig.add_trace(
-    go.Scatter(
-        x=[None],
-        y=[None],
-        mode="markers",
-        marker=dict(
-            colorscale="RdBu_r",
-            showscale=True,
-            cmin=-vmax_e,
-            cmax=vmax_e,
-            colorbar=dict(title="interference<br>imat[src→dst]", x=1.12, thickness=14),
-        ),
-        hoverinfo="none",
-        showlegend=False,
-    )
-)
-
-# Column header annotations.
-for label, x in [
-    (f"parents  (j → {CENTER})", -2.0),
-    (f"node {CENTER}", 0.0),
-    (f"children  ({CENTER} → i)", 2.0),
-]:
-    fig.add_annotation(
-        x=x,
-        y=1.05,
-        text=f"<b>{label}</b>",
-        showarrow=False,
-        font=dict(size=12),
-        xref="x",
-        yref="paper",
-    )
-
-n_rows = max(len(parents), len(children), 1)
-fig.update_layout(
-    title=(
-        f"Ego-graph — node {CENTER}  "
-        f"({len(parents)} parents, {len(children)} children)<br>"
-        "<sup>Node colour = feature norm  |  Node size ∝ in-degree  |  "
-        "Edge colour = imat[src→dst]  (blue < 0, red > 0)  |  "
-        "Edge width = |interference|  |  "
-        "Border: blue = parent, coral = child</sup>"
-    ),
-    xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-2.8, 2.8]),
-    yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-1.2, 1.2]),
-    plot_bgcolor="white",
-    hovermode="closest",
-    width=1000,
-    height=max(500, 60 * n_rows),
+fig = px.scatter(
+    x=edge_p_child,
+    y=edge_interf,
+    opacity=0.3,
+    labels=dict(x="p_child (edge j→i)", y="Interference  imat[j,i]"),
+    title="Per-edge: p_child vs interference",
+    trendline="ols",
+    trendline_color_override="black",
 )
 fig.show()
+
+# %%  ── SAE training ───────────────────────────────────────────
+N_DICT = N_FEATURES + 4
+SAE_STEPS = 100_000
+SAE_BATCH = 1024
+SAE_LR = 3e-4
+SAE_L1 = 0.05
+
+print("Training SAE on TiedLinearRelu...")
+sae = SAESimple(
+    n_latent=N_HIDDEN,
+    n_dict=N_DICT,
+    l1_coef=SAE_L1,
+    device=DEVICE,
+).to(DEVICE)
+
+
+def sae_data_fn(n: int) -> torch.Tensor:
+    x = dist.sample(n).to(DEVICE)
+    return tm.ae.encode(x)
+
+
+sae_losses = sae.train_sae(
+    data_fn=sae_data_fn,
+    n_steps=SAE_STEPS,
+    batch_size=SAE_BATCH,
+    lr=SAE_LR,
+)
+
+# %%  ── SAE metrics ──────────────────────────────────────────────────────────
+with torch.no_grad():
+    test_x = dist.sample(10_000).to(DEVICE)
+    test_hidden = tm.ae.encode(test_x)
+    test_z = sae.encode(test_hidden)
+    test_recon = sae.decode(test_z)
+
+    l0 = (test_z > 0).float().sum(dim=-1).mean().item()
+    ever_active = (test_z > 0).any(dim=0)
+    n_dead = int((~ever_active).sum().item())
+    n_alive = int(ever_active.sum().item())
+    recon_mse = (test_hidden - test_recon).pow(2).sum(dim=-1).mean().item()
+
+    total_var = test_hidden.var(dim=0).sum().item()
+    residual_var = (test_hidden - test_recon).var(dim=0).sum().item()
+    explained_var = 1 - residual_var / total_var
+
+print(
+    f"L0={l0:.1f}  Dead={n_dead}/{N_DICT}  MSE={recon_mse:.6f}  ExplVar={explained_var:.4f}"
+)
+
+# %%  ── SAE loss curve ───────────────────────────────────────────────────────
+fig = go.Figure()
+fig.add_trace(go.Scatter(y=sae_losses, mode="lines", name="SAE loss", opacity=0.8))
+fig.update_layout(
+    title="SAE Training Loss",
+    xaxis_title="Step",
+    yaxis_title="Loss",
+    yaxis_type="log",
+)
+fig.show()
+
+# %%  ── SAE one-hot activations (Hungarian matched) ──────────────────────────
+with torch.no_grad():
+    eye = torch.eye(N_FEATURES, device=DEVICE)
+    sae_acts = sae.encode(tm.ae.encode(eye)).cpu().numpy()  # (N_FEATURES, N_DICT)
+
+cost = -sae_acts
+feat_idx, dict_idx = linear_sum_assignment(cost)
+
+matched_feats = set(feat_idx)
+matched_dicts = set(dict_idx)
+unmatched_feats = [f for f in range(N_FEATURES) if f not in matched_feats]
+unmatched_dicts = [d for d in range(N_DICT) if d not in matched_dicts]
+
+row_order = list(feat_idx) + unmatched_feats
+col_order = list(dict_idx) + unmatched_dicts
+sae_acts_matched = sae_acts[np.ix_(row_order, col_order)]
+
+n_matched = len(feat_idx)
+diag_sum = sum(sae_acts_matched[i, i] for i in range(n_matched))
+total_sum = sae_acts_matched.sum()
+diagonality = diag_sum / total_sum if total_sum > 0 else 0.0
+print(
+    f"Diagonality = {diagonality:.4f} (diag_sum={diag_sum:.2f}, total={total_sum:.2f})"
+)
+
+row_labels = [f"f{f}" for f in row_order]
+col_labels = [f"d{d}" for d in col_order]
+fig = px.imshow(
+    sae_acts_matched,
+    labels=dict(x="SAE dict element (matched)", y="Feature (matched)"),
+    x=col_labels,
+    y=row_labels,
+    title=f"SAE one-hot activations (Hungarian matched, diag={diagonality:.3f})",
+    aspect="auto",
+    color_continuous_scale="ylgnbu_r",
+)
+fig.show()
+
+# %%  ── SAE MCC & detection metrics ─────────────────────────────────────────
+with torch.no_grad():
+    D = tm.W.detach()  # (N_HIDDEN, N_FEATURES)
+    W_dec_t = sae.W_dec.detach().T  # (N_HIDDEN, N_DICT)
+    D_norm = D / D.norm(dim=0, keepdim=True).clamp(min=1e-8)
+    W_norm = W_dec_t / W_dec_t.norm(dim=0, keepdim=True).clamp(min=1e-8)
+    cos_sim = (D_norm.T @ W_norm).abs().cpu().numpy()  # (N_FEATURES, N_DICT)
+    mcc_feat_idx, mcc_dict_idx = linear_sum_assignment(-cos_sim)
+    mcc = float(cos_sim[mcc_feat_idx, mcc_dict_idx].mean())
+
+    det_x = dist.sample(50_000).to(DEVICE)
+    det_hidden = tm.ae.encode(det_x)
+    det_z = sae.encode(det_hidden)
+
+    gt_active = det_x[:, mcc_feat_idx] > 0
+    pred_active = det_z[:, mcc_dict_idx] > 0
+
+    tp = (gt_active & pred_active).float().sum(dim=0).cpu().numpy()
+    fp = (~gt_active & pred_active).float().sum(dim=0).cpu().numpy()
+    fn = (gt_active & ~pred_active).float().sum(dim=0).cpu().numpy()
+    tn = (~gt_active & ~pred_active).float().sum(dim=0).cpu().numpy()
+
+    precision_per = tp / (tp + fp + 1e-8)
+    recall_per = tp / (tp + fn + 1e-8)
+    f1_per = 2 * precision_per * recall_per / (precision_per + recall_per + 1e-8)
+    fpr_per = fp / (fp + tn + 1e-8)
+
+print(
+    f"MCC={mcc:.4f}  Prec={precision_per.mean():.4f}  "
+    f"Rec={recall_per.mean():.4f}  F1={f1_per.mean():.4f}  FPR={fpr_per.mean():.4f}"
+)
+
+# %%  ── SAE per-feature detection metrics (sorted by weighted in-degree) ────
+feat_weighted_indeg = weighted_in_deg[mcc_feat_idx]
+feat_order = np.argsort(-feat_weighted_indeg)
+x_rank = np.arange(len(feat_order))
+
+fig = make_subplots(
+    rows=1,
+    cols=4,
+    subplot_titles=["Precision", "Recall (TPR)", "F1 Score", "FPR"],
+)
+fig.add_trace(
+    go.Scatter(x=x_rank, y=precision_per[feat_order], mode="lines", name="Precision"),
+    row=1,
+    col=1,
+)
+fig.add_trace(
+    go.Scatter(x=x_rank, y=recall_per[feat_order], mode="lines", showlegend=False),
+    row=1,
+    col=2,
+)
+fig.add_trace(
+    go.Scatter(x=x_rank, y=f1_per[feat_order], mode="lines", showlegend=False),
+    row=1,
+    col=3,
+)
+fig.add_trace(
+    go.Scatter(x=x_rank, y=fpr_per[feat_order], mode="lines", showlegend=False),
+    row=1,
+    col=4,
+)
+fig.update_layout(
+    title="SAE Per-Feature Detection Metrics (sorted by weighted in-degree)",
+    height=400,
+    width=1400,
+)
+for col in range(1, 5):
+    fig.update_xaxes(
+        title_text="Feature rank (highest weighted in-deg → lowest)", row=1, col=col
+    )
+fig.show()
+
+# %%  ── SAE summary ─────────────────────────────────────────────────────────
+print("\n=== SAE Summary ===")
+print(f"  Dict size: {N_DICT}   L1: {SAE_L1}   Steps: {SAE_STEPS}")
+print(f"  L0:            {l0:.1f}")
+print(f"  Dead features: {n_dead}/{N_DICT}")
+print(f"  Recon MSE:     {recon_mse:.6f}")
+print(f"  Explained var: {explained_var:.4f}")
+print(f"  Diagonality:   {diagonality:.4f}")
+print(f"  MCC:           {mcc:.4f}")
+print(f"  Precision:     {precision_per.mean():.4f}")
+print(f"  Recall:        {recall_per.mean():.4f}")
+print(f"  F1:            {f1_per.mean():.4f}")
+print(f"  FPR:           {fpr_per.mean():.4f}")
 
 # %%

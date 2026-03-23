@@ -154,9 +154,11 @@ class ToyModel:
                 # Move samples to the ae device; distribution may be on a different device.
                 if isinstance(raw_buffer, tuple):
                     raw_buffer = tuple(
-                        t.to(ae_device, non_blocking=True)
-                        if isinstance(t, Tensor)
-                        else t
+                        (
+                            t.to(ae_device, non_blocking=True)
+                            if isinstance(t, Tensor)
+                            else t
+                        )
                         for t in raw_buffer
                     )
                 else:

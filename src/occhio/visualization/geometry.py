@@ -703,18 +703,22 @@ def plot_feature_geometry(
 
     feature_probabilities = [
         # [10.02.26 | OliverSieweke] TODO: fix below once distributions updated
-        model.distribution.p_active[0]
-        if hasattr(model.distribution.p_active, "__getitem__")
-        and hasattr(model.distribution.p_active, "shape")
-        and len(model.distribution.p_active.shape) > 0
-        else model.distribution.p_active
-        if isinstance(model.distribution, SparseUniform)
-        or isinstance(model.distribution, CorrelatedPairs)
-        or isinstance(model.distribution, HierarchicalPairs)
-        else (_ for _ in ()).throw(
-            UserWarning(
-                "plot_geometry currently expects ToyModel.distribution to be SparseUniform "
-                "(or at least to expose .p_active with the same meaning)."
+        (
+            model.distribution.p_active[0]
+            if hasattr(model.distribution.p_active, "__getitem__")
+            and hasattr(model.distribution.p_active, "shape")
+            and len(model.distribution.p_active.shape) > 0
+            else (
+                model.distribution.p_active
+                if isinstance(model.distribution, SparseUniform)
+                or isinstance(model.distribution, CorrelatedPairs)
+                or isinstance(model.distribution, HierarchicalPairs)
+                else (_ for _ in ()).throw(
+                    UserWarning(
+                        "plot_geometry currently expects ToyModel.distribution to be SparseUniform "
+                        "(or at least to expose .p_active with the same meaning)."
+                    )
+                )
             )
         )
         for model in models
@@ -905,10 +909,12 @@ def plot_feature_geometry(
                     marker=dict(
                         size=7,
                         color="black",
-                        opacity=feature_dimensionalities[active_feature_indices]
-                        / max_dimensionality
-                        if max_dimensionality > 0
-                        else 1.0,
+                        opacity=(
+                            feature_dimensionalities[active_feature_indices]
+                            / max_dimensionality
+                            if max_dimensionality > 0
+                            else 1.0
+                        ),
                     ),
                     text=[
                         f"Feature {i}<br>Dimensionality: {feature_dimensionalities[i]:.3f}"

@@ -22,6 +22,9 @@ class SparseAutoEncoderBase(nn.Module, ABC):
     def resample_weights(self):
         """Reset / resample all weights"""
 
+    def constrain_weights(self) -> None:
+        """Apply post-step weight constraints (e.g. unit-norm decoder rows)."""
+
     def forward(self, x: Tensor) -> tuple[Tensor, Tensor]:
         z = self.encode(x)
         x_hat = self.decode(z)
@@ -69,6 +72,7 @@ class SparseAutoEncoderBase(nn.Module, ABC):
             loss = self.loss(x, x_hat, z)
             loss.backward()
             optimizer.step()
+            self.constrain_weights()
 
             loss_buffer[step] = loss.detach()
             if (step + 1) % 5000 == 0:
@@ -116,9 +120,13 @@ class SAESimple(SparseAutoEncoderBase):
         nn.init.xavier_normal_(self.W_dec, generator=self.generator)
         nn.init.zeros_(self.b_enc)
         nn.init.zeros_(self.b_dec)
+        self.constrain_weights()
+
+    def constrain_weights(self) -> None:
+        self.W_dec.data = self.W_dec.data / self.W_dec.data.norm(dim=1, keepdim=True)
 
     def encode(self, x: Tensor) -> Tensor:
-        return torch.relu(x @ self.W_enc + self.b_enc)
+        return torch.relu((x - self.b_dec) @ self.W_enc + self.b_enc)
 
     def decode(self, z: Tensor) -> Tensor:
         if self.dec_bias:
@@ -159,6 +167,10 @@ class TopKIgnoreSAE(SparseAutoEncoderBase):
         nn.init.xavier_normal_(self.W_enc, generator=self.generator)
         nn.init.xavier_normal_(self.W_dec, generator=self.generator)
         nn.init.zeros_(self.b_enc)
+        self.constrain_weights()
+
+    def constrain_weights(self) -> None:
+        self.W_dec.data = self.W_dec.data / self.W_dec.data.norm(dim=1, keepdim=True)
 
     def encode(self, x: Tensor) -> Tensor:
         return torch.relu(x @ self.W_enc + self.b_enc)
@@ -215,6 +227,10 @@ class CausalSAE(SparseAutoEncoderBase):
         nn.init.xavier_normal_(self.W_dec, generator=self.generator)
         nn.init.zeros_(self.b_enc)
         nn.init.zeros_(self.causal)
+        self.constrain_weights()
+
+    def constrain_weights(self) -> None:
+        self.W_dec.data = self.W_dec.data / self.W_dec.data.norm(dim=1, keepdim=True)
 
     def loss(self, x_true: Tensor, x_hat: Tensor, intermediate: Tensor) -> Tensor:
 

@@ -69,19 +69,23 @@ def plot_embedding(
     fig = make_subplots(
         rows=n_rows,
         cols=n_cols,
-        subplot_titles=[]
-        if n_axes == 0
-        else [
-            f"{model_grid.axes[0].label}: {model_grid.axes[0].values[i]}"
-            for i in range(n_cols)
-        ]
-        if n_axes == 1
-        else [
-            f"{model_grid.axes[0].label}: {model_grid.axes[0].values[row]}, "
-            f"{model_grid.axes[1].label}: {model_grid.axes[1].values[col]}"
-            for row in range(n_rows)
-            for col in range(n_cols)
-        ],
+        subplot_titles=(
+            []
+            if n_axes == 0
+            else (
+                [
+                    f"{model_grid.axes[0].label}: {model_grid.axes[0].values[i]}"
+                    for i in range(n_cols)
+                ]
+                if n_axes == 1
+                else [
+                    f"{model_grid.axes[0].label}: {model_grid.axes[0].values[row]}, "
+                    f"{model_grid.axes[1].label}: {model_grid.axes[1].values[col]}"
+                    for row in range(n_rows)
+                    for col in range(n_cols)
+                ]
+            )
+        ),
         horizontal_spacing=0.05,
         vertical_spacing=0.1,
     )

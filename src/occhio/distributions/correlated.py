@@ -20,7 +20,7 @@ class HierarchicalPairs(Distribution):
         p_follow: Conditional probability that the secondary feature (2i+1)
             activates given that the primary feature is active. Defaults to 0.5.
             Scalar or per-feature.
-        beta: Optional magnitude coupling factor in [0, 1]. When set, the
+        beta: Optional magnitude coupling factor in [0, 1]. Scalar or per-feature. When set, the
             secondary feature's value is tied to the primary's:
             ``v_child = v_parent * (beta + (1 - beta) * U)`` where
             ``U ~ Uniform(0, 1)``. At ``beta=1.0`` the child copies the
@@ -49,14 +49,14 @@ class HierarchicalPairs(Distribution):
         n_features: int,
         p_active: float | list[float] | Tensor,
         p_follow: float | list[float] | Tensor = 0.5,
-        beta: float | None = None,
+        beta: float | list[float] | Tensor | None = None,
         **kwargs,
     ):
         assert n_features % 2 == 0, "Need even `n_features` for pairs."
         super().__init__(n_features, **kwargs)
         self.p_active = self._broadcast(p_active)
         self.p_follow = self._broadcast(p_follow)
-        self.beta = beta
+        self.beta = self._broadcast(beta) if beta is not None else None
 
     def sample(self, batch_size: int) -> Tensor:
         n_pairs = self.n_features // 2
@@ -68,8 +68,9 @@ class HierarchicalPairs(Distribution):
         primary_values = self._rand(batch_size, n_pairs)
 
         if self.beta is not None:
+            beta = self.beta[1::2]
             secondary_values = primary_values * (
-                self.beta + (1.0 - self.beta) * self._rand(batch_size, n_pairs)
+                beta + (1.0 - beta) * self._rand(batch_size, n_pairs)
             )
         else:
             secondary_values = self._rand(batch_size, n_pairs)

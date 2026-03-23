@@ -226,12 +226,12 @@ class CompositePlot:
                 rows=phys_rows,
                 cols=phys_cols,
                 specs=self._tile_specs(n_model_cols, n_model_rows),
-                column_widths=self._column_widths * n_model_cols
-                if self._column_widths
-                else None,
-                row_heights=self._row_heights * n_model_rows
-                if self._row_heights
-                else None,
+                column_widths=(
+                    self._column_widths * n_model_cols if self._column_widths else None
+                ),
+                row_heights=(
+                    self._row_heights * n_model_rows if self._row_heights else None
+                ),
             )
 
             legend_registry = set()

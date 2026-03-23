@@ -32,8 +32,8 @@ from occhio.toy_model import ToyModel
 # --- Configuration ---
 DEVICE = "mps"
 SEED = 42
-N_FEATURES = 100
-D_HIDDEN = 24
+N_FEATURES = 200
+D_HIDDEN = 40
 N_EPOCHS = 30_000
 BATCH_SIZE = 512
 EVAL_SAMPLES = 2**14
@@ -69,7 +69,7 @@ def build_hierarchy(
     return roots, idx
 
 
-hierarchy_roots, _ = build_hierarchy(start_idx=0, n_roots=8, branching=4)
+hierarchy_roots, _ = build_hierarchy(start_idx=0, n_roots=16, branching=5)
 # 8 roots with 4 children each = 40 features in hierarchy, 60 free
 
 # %%
@@ -80,7 +80,7 @@ config = SyntheticDataConfig(
     firing_prob_distribution="zipfian",
     p_max=0.4,
     p_min=0.5 / N_FEATURES,
-    alpha=0.5,
+    alpha=0.8,
     # Magnitudes — linear mean, folded-normal stdev
     mean_distribution="linear",
     mean_high=3.0,
@@ -95,7 +95,7 @@ config = SyntheticDataConfig(
     hierarchy=hierarchy_roots,
     compensate_probabilities=True,
     # Runtime
-    device=DEVICE,
+    device="cpu",
 )
 
 dist = SyntheticDataModel(config, seed=SEED)
@@ -169,14 +169,14 @@ ae_synth_ortho = SynthAE(
     N_FEATURES,
     D_HIDDEN,
     orthogonalize=True,
-    ortho_steps=2_000,
+    ortho_steps=100,
     ortho_lr=3e-4,
     device=DEVICE,
     generator=gen3,
 )
 tm_synth_ortho = ToyModel(distribution=dist, ae=ae_synth_ortho, device=DEVICE)
 
-N_EPOCHS_SYNTH = 10_000
+N_EPOCHS_SYNTH = 15_000
 _, hook_results_synth = tm_synth_ortho.fit(
     N_EPOCHS_SYNTH,
     batch_size=BATCH_SIZE,
@@ -221,26 +221,25 @@ sort_idx = np.argsort(-firing_probs)
 
 fig = go.Figure()
 fig.add_trace(
-    go.Bar(
+    go.Scatter(
         x=np.arange(N_FEATURES),
         y=final_tied[sort_idx],
+        mode="lines",
         name="TiedLinearRelu",
-        opacity=0.7,
     )
 )
 fig.add_trace(
-    go.Bar(
+    go.Scatter(
         x=np.arange(N_FEATURES),
         y=pf_synth_ortho[sort_idx],
+        mode="lines",
         name="SynthAE (ortho)",
-        opacity=0.7,
     )
 )
 fig.update_layout(
     title="Per-Feature Reconstruction MSE (sorted by firing probability)",
     xaxis_title="Feature rank (most frequent → rarest)",
     yaxis_title="MSE",
-    barmode="group",
 )
 fig.show()
 
@@ -425,10 +424,10 @@ for name, eval_loss, pf in [
 
 # %% --- SAE training on both models ---
 N_DICT = N_FEATURES + 4
-SAE_STEPS = 65_000
+SAE_STEPS = 50_000
 SAE_BATCH = 1024
 SAE_LR = 3e-4
-SAE_L1 = 0.05
+SAE_L1 = 0.2
 
 sae_results = {}
 
@@ -487,6 +486,7 @@ for name, tm in [("TiedLinearRelu", tm_tied), ("SynthAE (ortho)", tm_synth_ortho
 
     sae_results[name] = {
         "sae": sae,
+        "tm": tm,
         "losses": sae_losses,
         "l0": l0,
         "n_dead": n_dead,
@@ -581,28 +581,226 @@ for name in names:
         color_continuous_scale="ylgnbu_r",
     ).show()
 
+# %% --- Compare matching methods: activation-based vs cosine similarity ---
+print("=== Matching comparison: activation-based vs cosine-similarity ===\n")
+
+for name in names:
+    sae = sae_results[name]["sae"]
+    tm_ref = tm_tied if name == "TiedLinearRelu" else tm_synth_ortho
+
+    with torch.no_grad():
+        eye = torch.eye(N_FEATURES, device=DEVICE)
+
+        # Ground-truth feature directions in hidden space (normalized)
+        D = tm_ref.ae.encode(eye)  # (N_FEATURES, D_HIDDEN)
+        D_normed = D / D.norm(dim=1, keepdim=True)
+
+        # SAE decoder columns (normalized). W_dec: (n_dict, n_latent)
+        W_dec = sae.W_dec.data  # (N_DICT, D_HIDDEN)
+        W_dec_normed = W_dec / W_dec.norm(dim=1, keepdim=True)
+
+        # Method 1: activation-based (current code)
+        sae_acts = sae.encode(tm_ref.ae.encode(eye)).cpu().numpy()
+        cost_act = -sae_acts
+        feat_idx_act, dict_idx_act = linear_sum_assignment(cost_act)
+
+        # Method 2: absolute cosine similarity (O'Neill et al.)
+        cosine_sim = (
+            (D_normed @ W_dec_normed.T).abs().cpu().numpy()
+        )  # (N_FEATURES, N_DICT)
+        cost_cos = -cosine_sim
+        feat_idx_cos, dict_idx_cos = linear_sum_assignment(cost_cos)
+
+    # Compare matchings
+    matching_act = set(zip(feat_idx_act, dict_idx_act))
+    matching_cos = set(zip(feat_idx_cos, dict_idx_cos))
+    overlap = matching_act & matching_cos
+    agreement = len(overlap) / len(matching_act) * 100
+
+    mean_cosine_matched = cosine_sim[feat_idx_cos, dict_idx_cos].mean()
+    mean_act_matched = sae_acts[feat_idx_act, dict_idx_act].mean()
+
+    # Cross-evaluate: how does each matching score under the other's metric?
+    cosine_of_act_matching = cosine_sim[feat_idx_act, dict_idx_act].mean()
+    act_of_cos_matching = sae_acts[feat_idx_cos, dict_idx_cos].mean()
+
+    print(f"--- {name} ---")
+    print(
+        f"  Matching agreement: {len(overlap)}/{len(matching_act)} ({agreement:.1f}%)"
+    )
+    print(
+        f"  Activation matching:  mean_act={mean_act_matched:.4f}  mean_cosine={cosine_of_act_matching:.4f}"
+    )
+    print(
+        f"  Cosine matching:      mean_act={act_of_cos_matching:.4f}  mean_cosine={mean_cosine_matched:.4f}"
+    )
+    print()
+
+    # Reorder cosine similarity matrix by cosine matching
+    matched_feats_cos = set(feat_idx_cos)
+    matched_dicts_cos = set(dict_idx_cos)
+    unmatched_feats_cos = [f for f in range(N_FEATURES) if f not in matched_feats_cos]
+    unmatched_dicts_cos = [d for d in range(N_DICT) if d not in matched_dicts_cos]
+
+    row_order_cos = list(feat_idx_cos) + unmatched_feats_cos
+    col_order_cos = list(dict_idx_cos) + unmatched_dicts_cos
+
+    cosine_matched = cosine_sim[np.ix_(row_order_cos, col_order_cos)]
+    row_labels_cos = [f"f{f}" for f in row_order_cos]
+    col_labels_cos = [f"d{d}" for d in col_order_cos]
+
+    n_matched_cos = len(feat_idx_cos)
+    diag_sum_cos = sum(cosine_matched[i, i] for i in range(n_matched_cos))
+    total_sum_cos = cosine_matched.sum()
+    diagonality_cos = diag_sum_cos / total_sum_cos if total_sum_cos > 0 else 0.0
+
+    px.imshow(
+        cosine_matched,
+        labels=dict(x="SAE dict element (matched)", y="Feature (matched)"),
+        x=col_labels_cos,
+        y=row_labels_cos,
+        title=f"Cosine similarity (cosine matched, diag={diagonality_cos:.3f}) — {name}",
+        aspect="auto",
+        color_continuous_scale="ylgnbu_r",
+    ).show()
+
+    # SAE one-hot activations reordered by cosine matching
+    sae_acts_cos_order = sae_acts[np.ix_(row_order_cos, col_order_cos)]
+    diag_sum_acts_cos = sum(sae_acts_cos_order[i, i] for i in range(n_matched_cos))
+    total_sum_acts_cos = sae_acts_cos_order.sum()
+    diag_acts_cos = (
+        diag_sum_acts_cos / total_sum_acts_cos if total_sum_acts_cos > 0 else 0.0
+    )
+
+    px.imshow(
+        sae_acts_cos_order,
+        labels=dict(
+            x="SAE dict element (cosine matched)", y="Feature (cosine matched)"
+        ),
+        x=col_labels_cos,
+        y=row_labels_cos,
+        title=f"SAE one-hot activations (cosine matched, diag={diag_acts_cos:.3f}) — {name}",
+        aspect="auto",
+        color_continuous_scale="ylgnbu_r",
+    ).show()
+
+# %% --- SAE evaluation: MCC, detection metrics (both matchings) ---
+
+
+def compute_detection_metrics(
+    sae, tm, feat_idx, dict_idx, dist, device, n_samples=50_000
+):
+    """Compute detection metrics for a given feature-to-dict matching."""
+    with torch.no_grad():
+        det_x = dist.sample(n_samples).to(device)
+        det_hidden = tm.ae.encode(det_x)
+        det_z = sae.encode(det_hidden)
+
+        gt_active = det_x[:, feat_idx] > 0
+        pred_active = det_z[:, dict_idx] > 0
+
+        tp = (gt_active & pred_active).float().sum(dim=0).cpu().numpy()
+        fp = (~gt_active & pred_active).float().sum(dim=0).cpu().numpy()
+        fn = (gt_active & ~pred_active).float().sum(dim=0).cpu().numpy()
+        tn = (~gt_active & ~pred_active).float().sum(dim=0).cpu().numpy()
+
+    precision_per = tp / (tp + fp + 1e-8)
+    recall_per = tp / (tp + fn + 1e-8)
+    f1_per = 2 * precision_per * recall_per / (precision_per + recall_per + 1e-8)
+    fpr_per = fp / (fp + tn + 1e-8)
+
+    return {
+        "precision_per": precision_per,
+        "recall_per": recall_per,
+        "f1_per": f1_per,
+        "fpr_per": fpr_per,
+        "precision": float(precision_per.mean()),
+        "recall": float(recall_per.mean()),
+        "f1": float(f1_per.mean()),
+        "fpr": float(fpr_per.mean()),
+        "confusion": np.array([[tn.sum(), fp.sum()], [fn.sum(), tp.sum()]]),
+    }
+
+
+for name, res in sae_results.items():
+    sae = res["sae"]
+    tm = res["tm"]
+
+    with torch.no_grad():
+        D = tm.W.detach()  # (D_HIDDEN, N_FEATURES)
+        W_dec_t = sae.W_dec.detach().T  # (D_HIDDEN, N_DICT)
+        D_norm = D / D.norm(dim=0, keepdim=True).clamp(min=1e-8)
+        W_norm = W_dec_t / W_dec_t.norm(dim=0, keepdim=True).clamp(min=1e-8)
+        cos_sim = (D_norm.T @ W_norm).abs().cpu().numpy()  # (N_FEATURES, N_DICT)
+
+        # Matching 1: cosine similarity (O'Neill et al.)
+        cos_feat_idx, cos_dict_idx = linear_sum_assignment(-cos_sim)
+
+        # Matching 2: activation-based
+        eye = torch.eye(N_FEATURES, device=DEVICE)
+        sae_acts = sae.encode(tm.ae.encode(eye)).cpu().numpy()
+        act_feat_idx, act_dict_idx = linear_sum_assignment(-sae_acts)
+
+    # MCC under both matchings
+    res["mcc_cos"] = float(cos_sim[cos_feat_idx, cos_dict_idx].mean())
+    res["mcc_act"] = float(cos_sim[act_feat_idx, act_dict_idx].mean())
+
+    # Keep the cosine matching as the primary (for downstream use)
+    res["mcc"] = res["mcc_cos"]
+    res["mcc_feat_idx"] = cos_feat_idx
+    res["mcc_dict_idx"] = cos_dict_idx
+
+    # Detection metrics under both matchings
+    cos_metrics = compute_detection_metrics(
+        sae, tm, cos_feat_idx, cos_dict_idx, dist, DEVICE
+    )
+    act_metrics = compute_detection_metrics(
+        sae, tm, act_feat_idx, act_dict_idx, dist, DEVICE
+    )
+
+    # Store cosine matching metrics as primary
+    for k, v in cos_metrics.items():
+        res[k] = v
+
+    # Store activation matching metrics with _act suffix
+    for k, v in act_metrics.items():
+        res[f"{k}_act"] = v
+
+    print(f"--- {name} ---")
+    print(
+        f"  Cosine matching:     MCC={res['mcc_cos']:.4f}  Prec={cos_metrics['precision']:.4f}  "
+        f"Rec={cos_metrics['recall']:.4f}  F1={cos_metrics['f1']:.4f}  FPR={cos_metrics['fpr']:.4f}"
+    )
+    print(
+        f"  Activation matching: MCC={res['mcc_act']:.4f}  Prec={act_metrics['precision']:.4f}  "
+        f"Rec={act_metrics['recall']:.4f}  F1={act_metrics['f1']:.4f}  FPR={act_metrics['fpr']:.4f}"
+    )
+
 # %% --- SAE summary print ---
 print("\n=== SAE Summary ===")
 print(
-    f"{'Model':25s}  {'MSE':>10s}  {'L0':>6s}  {'Dead':>6s}  {'Alive':>6s}  {'ExplVar':>8s}  {'Diag':>6s}"
+    f"{'Model':25s}  {'MSE↓':>10s}  {'L0↓':>6s}  {'Dead↓':>6s}  {'Alive↑':>6s}  "
+    f"{'ExplVar↑':>8s}  {'Diag↑':>6s}  {'MCC↑':>6s}  {'Prec↑':>6s}  {'Rec↑':>6s}  {'F1↑':>6s}  {'FPR↓':>6s}"
 )
 for name, res in sae_results.items():
     print(
         f"{name:25s}  {res['recon_mse']:10.6f}  {res['l0']:6.1f}  "
         f"{res['n_dead']:6d}  {res['n_alive']:6d}  {res['explained_var']:8.4f}  "
-        f"{res.get('diagonality', 0):6.4f}"
+        f"{res.get('diagonality', 0):6.4f}  {res.get('mcc', 0):6.4f}  "
+        f"{res['precision']:6.4f}  {res['recall']:6.4f}  {res['f1']:6.4f}  {res['fpr']:6.4f}"
     )
 
 # %% --- SAE summary comparison ---
 fig = make_subplots(
     rows=1,
-    cols=5,
+    cols=6,
     subplot_titles=[
         "Recon MSE",
         "Mean L0",
         "Dead Features",
         "Explained Variance",
         "Diagonality",
+        "MCC",
     ],
 )
 
@@ -640,10 +838,128 @@ for i, (name, color) in enumerate(zip(names, colors)):
         row=1,
         col=5,
     )
+    fig.add_trace(
+        go.Bar(
+            x=[name],
+            y=[res.get("mcc", 0)],
+            marker_color=color,
+            showlegend=False,
+        ),
+        row=1,
+        col=6,
+    )
 
 fig.update_layout(
-    title=f"SAE Comparison (dict={N_DICT}, L1={SAE_L1})", height=400, width=1400
+    title=f"SAE Comparison (dict={N_DICT}, L1={SAE_L1})", height=400, width=1600
 )
+fig.show()
+
+# %% --- Confusion matrices ---
+fig = make_subplots(
+    rows=1,
+    cols=len(names),
+    subplot_titles=names,
+)
+for i, name in enumerate(names):
+    cm = sae_results[name]["confusion"]
+    # Normalize to rates
+    cm_norm = cm / cm.sum()
+    labels = ["Inactive", "Active"]
+    text = [
+        [f"{cm[r, c]:.0f}<br>({cm_norm[r, c]:.3f})" for c in range(2)] for r in range(2)
+    ]
+    fig.add_trace(
+        go.Heatmap(
+            z=cm_norm,
+            x=labels,
+            y=labels,
+            text=text,
+            texttemplate="%{text}",
+            colorscale="Blues",
+            showscale=(i == len(names) - 1),
+        ),
+        row=1,
+        col=i + 1,
+    )
+    fig.update_yaxes(title_text="Ground Truth" if i == 0 else None, row=1, col=i + 1)
+    fig.update_xaxes(title_text="SAE Prediction", row=1, col=i + 1)
+
+fig.update_layout(
+    title="Confusion Matrices (aggregated over matched features)", height=400, width=800
+)
+fig.show()
+
+# %% --- Per-feature detection metrics (sorted by firing probability) ---
+fig = make_subplots(
+    rows=1,
+    cols=4,
+    subplot_titles=["Precision", "Recall (TPR)", "F1 Score", "FPR"],
+)
+
+model_colors = {"TiedLinearRelu": "blue", "SynthAE (ortho)": "green"}
+for name in names:
+    res = sae_results[name]
+    # The per-feature arrays are indexed by matched order (mcc_feat_idx).
+    # Re-sort by firing probability for display.
+    feat_order = np.argsort(-firing_probs[res["mcc_feat_idx"]])
+    color = model_colors[name]
+    x = np.arange(len(feat_order))
+
+    fig.add_trace(
+        go.Scatter(
+            x=x,
+            y=res["precision_per"][feat_order],
+            name=name,
+            mode="lines",
+            line=dict(color=color),
+        ),
+        row=1,
+        col=1,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=x,
+            y=res["recall_per"][feat_order],
+            name=name,
+            mode="lines",
+            showlegend=False,
+            line=dict(color=color),
+        ),
+        row=1,
+        col=2,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=x,
+            y=res["f1_per"][feat_order],
+            name=name,
+            mode="lines",
+            showlegend=False,
+            line=dict(color=color),
+        ),
+        row=1,
+        col=3,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=x,
+            y=res["fpr_per"][feat_order],
+            name=name,
+            mode="lines",
+            showlegend=False,
+            line=dict(color=color),
+        ),
+        row=1,
+        col=4,
+    )
+
+fig.update_layout(
+    title="Per-Feature Detection Metrics (sorted by firing probability)",
+    height=400,
+    width=1400,
+)
+for col in range(1, 5):
+    fig.update_xaxes(title_text="Feature rank", row=1, col=col)
 fig.show()
 
 # %%
