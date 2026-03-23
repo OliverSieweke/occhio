@@ -1,6 +1,8 @@
 # ABOUTME: Tests for AutoEncoderBase.save_weights / load_weights (safetensors).
 # ABOUTME: Covers round-trip correctness, class validation, strict mode, and edge cases.
 
+import json
+
 import pytest
 import torch
 from safetensors.torch import save_file
@@ -278,3 +280,85 @@ class TestFileHandling:
         model = _make_tied_linear_relu()
         result = model.save_weights(tmp_path / "out")
         assert result == tmp_path / "out.safetensors"
+
+
+# ── JSON companion file ─────────────────────────────────────────────────────
+
+
+class TestJsonInfo:
+    def test_json_created_alongside_safetensors(self, tmp_path):
+        model = _make_tied_linear_relu()
+        path = model.save_weights(tmp_path / "model")
+        json_path = path.with_suffix(".json")
+        assert json_path.exists()
+
+    def test_json_is_valid(self, tmp_path):
+        model = _make_tied_linear_relu()
+        path = model.save_weights(tmp_path / "model")
+        info = json.loads(path.with_suffix(".json").read_text())
+        assert isinstance(info, dict)
+
+    def test_json_has_class_name(self, tmp_path):
+        model = _make_tied_linear_relu()
+        path = model.save_weights(tmp_path / "model")
+        info = json.loads(path.with_suffix(".json").read_text())
+        assert info["class"] == "TiedLinearRelu"
+
+    def test_json_has_dimensions_in_attributes(self, tmp_path):
+        model = _make_tied_linear_relu()
+        path = model.save_weights(tmp_path / "model")
+        info = json.loads(path.with_suffix(".json").read_text())
+        assert info["attributes"]["n_features"] == N_FEATURES
+        assert info["attributes"]["n_hidden"] == N_HIDDEN
+
+    def test_json_has_parameter_shapes(self, tmp_path):
+        model = _make_tied_linear_relu()
+        path = model.save_weights(tmp_path / "model")
+        info = json.loads(path.with_suffix(".json").read_text())
+        assert info["parameters"]["W"]["shape"] == [N_HIDDEN, N_FEATURES]
+        assert info["parameters"]["b"]["shape"] == [N_FEATURES]
+
+    def test_json_has_total_params(self, tmp_path):
+        model = _make_tied_linear_relu()
+        path = model.save_weights(tmp_path / "model")
+        info = json.loads(path.with_suffix(".json").read_text())
+        expected = N_HIDDEN * N_FEATURES + N_FEATURES  # W + b
+        assert info["total_params"] == expected
+
+    @pytest.mark.parametrize("factory", ALL_FACTORIES)
+    def test_json_attributes_capture_subclass_specifics(self, factory, tmp_path):
+        """Each subclass's non-private, JSON-serializable attrs are captured."""
+        model = factory()
+        path = model.save_weights(tmp_path / "model")
+        info = json.loads(path.with_suffix(".json").read_text())
+        assert isinstance(info["attributes"], dict)
+
+    def test_mlp_json_has_layer_dims(self, tmp_path):
+        model = _make_mlp_encoder()
+        path = model.save_weights(tmp_path / "model")
+        info = json.loads(path.with_suffix(".json").read_text())
+        assert info["attributes"]["embedding_dims"] == [N_FEATURES, 6, N_HIDDEN]
+        assert info["attributes"]["unembedding_dims"] == [N_HIDDEN, 6, N_FEATURES]
+
+    def test_json_has_device_in_attributes(self, tmp_path):
+        model = _make_tied_linear_relu()
+        path = model.save_weights(tmp_path / "model")
+        info = json.loads(path.with_suffix(".json").read_text())
+        assert info["attributes"]["_init_device"] == "cpu"
+
+    def test_json_has_generator_info(self, tmp_path):
+        model = _make_tied_linear_relu()
+        path = model.save_weights(tmp_path / "model")
+        info = json.loads(path.with_suffix(".json").read_text())
+        gen = info["attributes"]["generator"]
+        assert gen["type"] == "Generator"
+        assert gen["device"] == "cpu"
+        assert gen["initial_seed"] == 42
+
+    def test_json_captures_private_attrs(self, tmp_path):
+        """Private config attrs (like SynthAE._orthogonalize) are included."""
+        model = _make_tied_linear_relu()
+        path = model.save_weights(tmp_path / "model")
+        info = json.loads(path.with_suffix(".json").read_text())
+        # _init_device is a private attr that should be captured
+        assert "_init_device" in info["attributes"]
