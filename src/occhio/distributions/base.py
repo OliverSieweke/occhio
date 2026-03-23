@@ -4,10 +4,12 @@ from abc import ABC, abstractmethod
 from functools import cached_property
 from hashlib import sha256
 from math import prod
-from warnings import warn
+from pathlib import Path
 from typing import Literal
+from warnings import warn
 
 import torch
+from safetensors.torch import save_file
 from torch import Tensor, hash_tensor
 
 from ..utils.device import _same_device
@@ -138,6 +140,37 @@ class Distribution(ABC):
         if isinstance(x, (int, float)):
             return torch.full((self.n_features,), x, device=self.device)
         return torch.as_tensor(x, device=self.device)
+
+    def save_samples(self, n_samples: int, path: str | Path) -> Path:
+        """Sample from this distribution and save to a ``.safetensors`` file.
+
+        The file contains a single key ``"samples"`` with shape
+        ``(n_samples, n_features)`` and metadata recording the distribution
+        class and feature count.
+
+        Args:
+            n_samples: Number of samples to generate.
+            path: Destination path (``.safetensors`` extension auto-appended).
+
+        Returns:
+            The resolved :class:`~pathlib.Path` that was written.
+        """
+        path = Path(path)
+        if path.suffix != ".safetensors":
+            path = path.with_suffix(".safetensors")
+
+        raw = self.sample(n_samples)
+        samples = raw[0] if isinstance(raw, tuple) else raw
+
+        save_file(
+            {"samples": samples},
+            str(path),
+            metadata={
+                "class": type(self).__name__,
+                "n_features": str(self.n_features),
+            },
+        )
+        return path
 
     def to(self, device: torch.device | str):
         self.device = torch.device(device)

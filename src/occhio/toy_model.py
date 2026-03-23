@@ -5,10 +5,12 @@ Provides fit(), geometric analysis properties (W, feature_norms, interferences, 
 
 import warnings
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 
 import torch
 import torch.nn.functional as F
+from safetensors.torch import load_file
 from sae_lens import TrainingSAE
 from sae_lens.synthetic import (
     SyntheticDataEvalResult,
@@ -106,6 +108,42 @@ class ToyModel:
             else:
                 self.importances = torch.tensor(importances, device=ae_device)
 
+    @staticmethod
+    def _validate_data_file(path: Path, n_features: int, batch_size: int) -> None:
+        """Validate a safetensors data file for use with :meth:`fit`.
+
+        Checks that the file contains exactly one key, is 2-D, has the
+        correct feature dimension, and warns if batch_size is large relative
+        to the dataset.
+        """
+        tensors = load_file(str(path))
+        if len(tensors) != 1:
+            raise ValueError(
+                f"Expected exactly 1 tensor key in {path.name}, "
+                f"got {len(tensors)}: {list(tensors.keys())}"
+            )
+        tensor = next(iter(tensors.values()))
+        if tensor.dim() != 2:
+            raise ValueError(f"Expected a 2-D tensor, got shape {list(tensor.shape)}")
+        if tensor.shape[1] != n_features:
+            raise ValueError(
+                f"Feature dimension mismatch: file has {tensor.shape[1]}, "
+                f"model expects {n_features}"
+            )
+        n_samples = tensor.shape[0]
+        if batch_size > n_samples:
+            warnings.warn(
+                f"batch_size ({batch_size}) is >100% of dataset size ({n_samples}). "
+                f"Consider using a larger dataset or smaller batch_size to reduce "
+                f"duplicate samples across epochs.",
+                stacklevel=3,
+            )
+        print(
+            f"[ToyModel.fit] Using precomputed data from {path.name} "
+            f"({n_samples} samples, {n_features} features). "
+            f"Distribution sampling is disabled."
+        )
+
     # If you change the signature or implementation here, make sure you keep it
     # consistent with ModelGrid.fit()
     def fit(
@@ -120,9 +158,24 @@ class ToyModel:
         hook_freq: int = 1,
         verbose: bool = False,
         sample_every: int = 25,
+        precomputed_data: str | Path | None = None,
     ) -> tuple[list[float], list]:
         if sample_every < 1:
             raise ValueError(f"sample_every must be positive, got {sample_every}")
+
+        # --- Precomputed data overrides Distribution sampling ---
+        # When precomputed_data is provided, the Distribution is NOT used at all.
+        # Instead, each epoch takes the next sequential batch from the dataset,
+        # wrapping around when exhausted. This is fully deterministic and does
+        # not involve any random number generation.
+        precomputed: Tensor | None = None
+        if precomputed_data is not None:
+            data_path = Path(precomputed_data)
+            if data_path.suffix != ".safetensors":
+                data_path = data_path.with_suffix(".safetensors")
+            self._validate_data_file(data_path, self.ae.n_features, batch_size)
+            loaded = load_file(str(data_path))
+            precomputed = next(iter(loaded.values())).to(self.ae.device)
 
         if optimizer is None:
             optimizer = AdamW(
@@ -144,35 +197,48 @@ class ToyModel:
         raw_buffer: Tensor | tuple[Any, ...] | None = None
 
         for ep in range(n_epochs):
-            buf_offset = ep % sample_every
-            if buf_offset == 0:
-                # Determine how many epochs remain to avoid over-sampling
-                epochs_left = min(sample_every, n_epochs - ep)
-                total_samples = epochs_left * batch_size
-
-                raw_buffer = self.distribution.sample(total_samples)
-                # Move samples to the ae device; distribution may be on a different device.
-                if isinstance(raw_buffer, tuple):
-                    raw_buffer = tuple(
-                        t.to(ae_device, non_blocking=True)
-                        if isinstance(t, Tensor)
-                        else t
-                        for t in raw_buffer
-                    )
+            if precomputed is not None:
+                # Deterministic sequential iteration: cycle through the dataset
+                # in fixed order. Wraps around when n_epochs * batch_size > N.
+                n_total = precomputed.shape[0]
+                start = (ep * batch_size) % n_total
+                end = start + batch_size
+                if end <= n_total:
+                    raw = precomputed[start:end]
                 else:
-                    raw_buffer = raw_buffer.to(ae_device, non_blocking=True)
-
-            assert raw_buffer is not None  # Always set on first iter (0 % n == 0)
-            start = buf_offset * batch_size
-            end = start + batch_size
-            if isinstance(raw_buffer, tuple):
-                raw = tuple(
-                    t[start:end] if isinstance(t, Tensor) else t for t in raw_buffer
-                )
-                x = raw[0]
-            else:
-                raw = raw_buffer[start:end]
+                    # Wrap around the end of the dataset
+                    raw = torch.cat([precomputed[start:], precomputed[: end - n_total]])
                 x = raw
+            else:
+                buf_offset = ep % sample_every
+                if buf_offset == 0:
+                    # Determine how many epochs remain to avoid over-sampling
+                    epochs_left = min(sample_every, n_epochs - ep)
+                    total_samples = epochs_left * batch_size
+
+                    raw_buffer = self.distribution.sample(total_samples)
+                    # Move samples to the ae device; distribution may be on a different device.
+                    if isinstance(raw_buffer, tuple):
+                        raw_buffer = tuple(
+                            t.to(ae_device, non_blocking=True)
+                            if isinstance(t, Tensor)
+                            else t
+                            for t in raw_buffer
+                        )
+                    else:
+                        raw_buffer = raw_buffer.to(ae_device, non_blocking=True)
+
+                assert raw_buffer is not None  # Always set on first iter (0 % n == 0)
+                start = buf_offset * batch_size
+                end = start + batch_size
+                if isinstance(raw_buffer, tuple):
+                    raw = tuple(
+                        t[start:end] if isinstance(t, Tensor) else t for t in raw_buffer
+                    )
+                    x = raw[0]
+                else:
+                    raw = raw_buffer[start:end]
+                    x = raw
 
             optimizer.zero_grad(set_to_none=True)
             x_hat = self.ae(x)[0]  # Only take x_hat
