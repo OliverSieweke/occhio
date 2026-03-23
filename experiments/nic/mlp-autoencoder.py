@@ -312,10 +312,10 @@ fig.show()
 
 # %% --- SAE training ---
 import importlib
-import occhio.sae.sae
+import occhio.sae
 
-importlib.reload(occhio.sae.sae)
-from occhio.sae.sae import SAESimple
+importlib.reload(occhio.sae)
+from occhio.sae import SAESimple
 
 N_DICT = 2 * N_FEATURES  # overcomplete dictionary
 SAE_STEPS = 50_000

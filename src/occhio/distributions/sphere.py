@@ -223,9 +223,10 @@ class SparseSpheres(Distribution):
             )
             for i in range(self.n_spheres):
                 A = self._randn(self.ambient_dim, n_plus_1)
-                Q, R = torch.linalg.qr(A)
+                # QR is unsupported on MPS — compute on CPU, move back
+                Q, R = torch.linalg.qr(A.cpu())
                 # Fix sign ambiguity for deterministic QR
-                Q = Q * torch.sign(torch.diag(R))
+                Q = (Q * torch.sign(torch.diag(R))).to(self.device)
                 tilts[i] = Q
             return tilts
 

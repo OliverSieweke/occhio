@@ -20,7 +20,7 @@ from occhio.distributions.dag import DAGDistribution
 from occhio.distributions.base import Distribution
 from occhio.autoencoder import TiedLinearRelu
 from occhio.toy_model import ToyModel
-from occhio.sae.sae import SAESimple, CausalSAE, SparseAutoEncoderBase
+from occhio.sae import SAESimple, CausalSAE, SparseAutoEncoderBase
 
 # %%
 

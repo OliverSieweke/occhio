@@ -104,8 +104,9 @@ class Distribution(ABC):
     def _rand_On(self, num_feat) -> Tensor:
         """Random O(n) generator respecting self.generator"""
         mat = self._randn(num_feat, num_feat)
-        q, r = torch.linalg.qr(mat)
-        return q * torch.sign(torch.diag(r))
+        # QR is unsupported on MPS — compute on CPU, move back
+        q, r = torch.linalg.qr(mat.cpu())
+        return (q * torch.sign(torch.diag(r))).to(self.device)
 
     def _randint(
         self, low: int, high: int, shape: tuple[int, ...], p: Tensor | None = None

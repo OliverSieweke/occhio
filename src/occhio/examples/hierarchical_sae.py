@@ -19,7 +19,7 @@ import matplotlib.pyplot as plt
 from occhio.distributions.correlated import ScaledHierarchicalPairs
 from occhio.autoencoder import TiedLinearRelu
 from occhio.toy_model import ToyModel
-from occhio.sae.sae import SAESimple, CausalSAE, SparseAutoEncoderBase
+from occhio.sae import SAESimple, CausalSAE, SparseAutoEncoderBase
 
 # %%
 
