@@ -1,5 +1,6 @@
 """Implements simple"""
 
+import datetime
 import functools
 import json
 import math
@@ -100,7 +101,7 @@ class AutoEncoderBase(nn.Module, ABC):
         except StopIteration:
             return self._init_device
 
-    def save_weights(self, path: str | Path) -> Path:
+    def save_weights(self, path: str | Path | None = None) -> Path:
         """Save model weights to a ``.safetensors`` file and a companion ``.json``.
 
         The ``.safetensors`` file contains the full ``state_dict`` plus a
@@ -110,8 +111,20 @@ class AutoEncoderBase(nn.Module, ABC):
         name, constructor-relevant attributes, and per-parameter shapes/dtypes.
         It is *not* used by :meth:`load_weights` — it exists purely so users
         can inspect what a saved file contains without loading it.
+
+        Args:
+            path: Destination path (``.safetensors`` extension auto-appended).
+                If ``None``, defaults to
+                ``<ClassName>_<n_features>x<n_hidden>_<YYYYMMDD_HHMMSS>.safetensors``.
         """
-        path = Path(path)
+        if path is None:
+            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            path = Path(
+                f"{type(self).__name__}_{self.n_features}x{self.n_hidden}_{ts}"
+                ".safetensors"
+            )
+        else:
+            path = Path(path)
         if path.suffix != ".safetensors":
             path = path.with_suffix(".safetensors")
 

@@ -281,6 +281,15 @@ class TestFileHandling:
         result = model.save_weights(tmp_path / "out")
         assert result == tmp_path / "out.safetensors"
 
+    def test_default_filename(self, tmp_path, monkeypatch):
+        """When no path is given, defaults to <Class>_<f>x<h>_<timestamp>.safetensors."""
+        monkeypatch.chdir(tmp_path)
+        model = _make_tied_linear_relu()
+        result = model.save_weights()
+        assert result.suffix == ".safetensors"
+        assert result.exists()
+        assert result.name.startswith(f"TiedLinearRelu_{N_FEATURES}x{N_HIDDEN}_")
+
 
 # ── JSON companion file ─────────────────────────────────────────────────────
 

@@ -1,8 +1,10 @@
-"""Tests for ToyModel.fit(data=...) and Distribution.save_samples()."""
+"""Tests for ToyModel.fit(precomputed_data=...) and Distribution.save_samples()."""
+
+import json
 
 import pytest
 import torch
-from safetensors.torch import save_file
+from safetensors.torch import load_file, save_file
 
 from occhio.autoencoder import TiedLinearRelu
 from occhio.distributions.sparse import SparseUniform
@@ -107,14 +109,14 @@ class TestFitDataValidation:
             tm.fit(n_epochs=1, precomputed_data=path)
 
     def test_batch_size_warning(self, tmp_path):
-        """Warn when batch_size > 10% of dataset."""
+        """Warn when batch_size > dataset size."""
         tm = _make_model()
         data = torch.rand(50, N_FEATURES)
         path = tmp_path / "small.safetensors"
         save_file({"samples": data}, str(path))
 
-        with pytest.warns(UserWarning, match="batch_size.*>10%"):
-            tm.fit(n_epochs=1, batch_size=10, precomputed_data=path)
+        with pytest.warns(UserWarning, match="batch_size.*>100%"):
+            tm.fit(n_epochs=1, batch_size=60, precomputed_data=path)
 
 
 # ── Distribution.save_samples() ─────────────────────────────────────────────
@@ -122,7 +124,7 @@ class TestFitDataValidation:
 
 class TestSaveSamples:
     def test_round_trip(self, tmp_path):
-        """save_samples → fit(data=...) works end-to-end."""
+        """save_samples → fit(precomputed_data=...) works end-to-end."""
         dist = SparseUniform(n_features=N_FEATURES, p_active=0.5, device=DEVICE)
         path = dist.save_samples(500, tmp_path / "data")
         assert path.suffix == ".safetensors"
@@ -144,12 +146,61 @@ class TestSaveSamples:
         path = dist.save_samples(100, tmp_path / "out.safetensors")
         assert path.name == "out.safetensors"
 
+    def test_default_filename(self, tmp_path, monkeypatch):
+        """When no path is given, defaults to <Class>_<f>f_<s>s_<timestamp>.safetensors."""
+        monkeypatch.chdir(tmp_path)
+        dist = SparseUniform(n_features=N_FEATURES, p_active=0.5, device=DEVICE)
+        path = dist.save_samples(50)
+        assert path.suffix == ".safetensors"
+        assert path.exists()
+        assert path.name.startswith(f"SparseUniform_{N_FEATURES}f_50s_")
+
     def test_saved_shape(self, tmp_path):
         dist = SparseUniform(n_features=N_FEATURES, p_active=0.5, device=DEVICE)
         path = dist.save_samples(200, tmp_path / "data")
 
-        from safetensors.torch import load_file
-
         tensors = load_file(str(path))
         assert "samples" in tensors
         assert tensors["samples"].shape == (200, N_FEATURES)
+
+
+# ── JSON companion file ─────────────────────────────────────────────────────
+
+
+class TestSaveSamplesJson:
+    def test_json_created_alongside_safetensors(self, tmp_path):
+        dist = SparseUniform(n_features=N_FEATURES, p_active=0.5, device=DEVICE)
+        path = dist.save_samples(100, tmp_path / "data")
+        json_path = path.with_suffix(".json")
+        assert json_path.exists()
+
+    def test_json_is_valid(self, tmp_path):
+        dist = SparseUniform(n_features=N_FEATURES, p_active=0.5, device=DEVICE)
+        path = dist.save_samples(100, tmp_path / "data")
+        info = json.loads(path.with_suffix(".json").read_text())
+        assert isinstance(info, dict)
+
+    def test_json_has_class_name(self, tmp_path):
+        dist = SparseUniform(n_features=N_FEATURES, p_active=0.5, device=DEVICE)
+        path = dist.save_samples(100, tmp_path / "data")
+        info = json.loads(path.with_suffix(".json").read_text())
+        assert info["class"] == "SparseUniform"
+
+    def test_json_has_sample_metadata(self, tmp_path):
+        dist = SparseUniform(n_features=N_FEATURES, p_active=0.5, device=DEVICE)
+        path = dist.save_samples(200, tmp_path / "data")
+        info = json.loads(path.with_suffix(".json").read_text())
+        assert info["samples"]["n_samples"] == 200
+        assert info["samples"]["n_features"] == N_FEATURES
+        assert info["samples"]["shape"] == [200, N_FEATURES]
+        assert "dtype" in info["samples"]
+
+    def test_json_has_distribution_attributes(self, tmp_path):
+        dist = SparseUniform(n_features=N_FEATURES, p_active=0.5, device=DEVICE)
+        path = dist.save_samples(100, tmp_path / "data")
+        info = json.loads(path.with_suffix(".json").read_text())
+        attrs = info["attributes"]
+        assert attrs["n_features"] == N_FEATURES
+        # Tensor attrs are serialized as shape/dtype dicts (same as AutoEncoderBase)
+        assert "p_active" in attrs
+        assert attrs["p_active"]["shape"] == [N_FEATURES]

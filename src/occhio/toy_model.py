@@ -109,14 +109,18 @@ class ToyModel:
                 self.importances = torch.tensor(importances, device=ae_device)
 
     @staticmethod
-    def _validate_data_file(path: Path, n_features: int, batch_size: int) -> None:
-        """Validate a safetensors data file for use with :meth:`fit`.
+    def _validate_data_file(
+        tensors: dict[str, Tensor],
+        path: Path,
+        n_features: int,
+        batch_size: int,
+    ) -> None:
+        """Validate an already-loaded safetensors dict for use with :meth:`fit`.
 
-        Checks that the file contains exactly one key, is 2-D, has the
-        correct feature dimension, and warns if batch_size is large relative
-        to the dataset.
+        Checks that the dict contains exactly one key, is 2-D, has the
+        correct feature dimension, and warns if batch_size exceeds the
+        dataset size.
         """
-        tensors = load_file(str(path))
         if len(tensors) != 1:
             raise ValueError(
                 f"Expected exactly 1 tensor key in {path.name}, "
@@ -173,8 +177,8 @@ class ToyModel:
             data_path = Path(precomputed_data)
             if data_path.suffix != ".safetensors":
                 data_path = data_path.with_suffix(".safetensors")
-            self._validate_data_file(data_path, self.ae.n_features, batch_size)
             loaded = load_file(str(data_path))
+            self._validate_data_file(loaded, data_path, self.ae.n_features, batch_size)
             precomputed = next(iter(loaded.values())).to(self.ae.device)
 
         if optimizer is None:
