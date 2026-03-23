@@ -4,11 +4,14 @@ import functools
 import math
 from abc import ABC, abstractmethod
 from math import sqrt
+from pathlib import Path
 from typing import Callable, Literal
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from safetensors import safe_open
+from safetensors.torch import load_file, save_file
 from torch import Tensor
 
 from .utils.device import _same_device
@@ -91,6 +94,58 @@ class AutoEncoderBase(nn.Module, ABC):
             return next(self.parameters()).device
         except StopIteration:
             return self._init_device
+
+    def save_weights(
+        self, path: str | Path = "autoencoder_weights.safetensors"
+    ) -> Path:
+        """Save model weights to a .safetensors file.
+
+        Stores the full ``state_dict`` plus a ``class`` metadata field
+        so that :meth:`load_weights` can verify the correct subclass.
+        """
+        path = Path(path)
+        if path.suffix != ".safetensors":
+            path = path.with_suffix(".safetensors")
+        save_file(self.state_dict(), str(path), metadata={"class": type(self).__name__})
+        return path
+
+    def load_weights(self, path: str | Path, *, strict: bool = True) -> None:
+        """Load weights from a .safetensors file into this model.
+
+        Validates that the file was saved from the same ``AutoEncoderBase``
+        subclass before loading.  The model must already be constructed
+        with the desired architecture — this method only overwrites
+        parameter data in-place.
+
+        Parameters
+        ----------
+        path : str | Path
+            Path to a ``.safetensors`` file (extension auto-appended).
+        strict : bool
+            Passed to ``nn.Module.load_state_dict``.  When *True* (default),
+            raises on missing or unexpected keys.
+        """
+        path = Path(path)
+        if path.suffix != ".safetensors":
+            path = path.with_suffix(".safetensors")
+        if not path.exists():
+            raise FileNotFoundError(f"No such file: {path}")
+
+        with safe_open(str(path), framework="pt") as f:
+            metadata = f.metadata()
+
+        saved_class = metadata.get("class") if metadata else None
+        if saved_class is None:
+            raise ValueError(
+                f"File {path} has no 'class' metadata. Was it saved with save_weights()?"
+            )
+        if saved_class != type(self).__name__:
+            raise TypeError(
+                f"Weights were saved from {saved_class}, "
+                f"but this model is {type(self).__name__}"
+            )
+
+        self.load_state_dict(load_file(str(path)), strict=strict)
 
     def __init_subclass__(cls, **kwargs):
         """This ensures that `n_features` and `n_hidden` are defined at creation"""
