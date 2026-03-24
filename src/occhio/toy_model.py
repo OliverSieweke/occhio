@@ -582,19 +582,19 @@ class ToyModel:
         }
 
     @property
-    def saes_l0(self) -> dict[str, float]:
-        """L0 sparsity for evaluated SAEs."""
+    def saes_mcc(self) -> dict[str, float]:
+        """Mean Correlation Coefficient between SAE decoder and ground truth features."""
         return {
-            label: sae_record.results.sae_l0
+            label: sae_record.results.mcc
             for label, sae_record in self.saes.items()
             if sae_record.results is not None
         }
 
     @property
-    def saes_dead_latents(self) -> dict[str, int]:
-        """Dead latent count for evaluated SAEs."""
+    def saes_l0(self) -> dict[str, float]:
+        """L0 sparsity for evaluated SAEs."""
         return {
-            label: sae_record.results.dead_latents
+            label: sae_record.results.sae_l0
             for label, sae_record in self.saes.items()
             if sae_record.results is not None
         }
@@ -609,19 +609,19 @@ class ToyModel:
         }
 
     @property
-    def saes_shrinkage(self) -> dict[str, float]:
-        """Shrinkage (ratio of SAE output norm to input norm) for evaluated SAEs."""
+    def saes_dead_latents(self) -> dict[str, int]:
+        """Dead latent count for evaluated SAEs."""
         return {
-            label: sae_record.results.shrinkage
+            label: sae_record.results.dead_latents
             for label, sae_record in self.saes.items()
             if sae_record.results is not None
         }
 
     @property
-    def saes_mcc(self) -> dict[str, float]:
-        """Mean Correlation Coefficient between SAE decoder and ground truth features."""
+    def saes_shrinkage(self) -> dict[str, float]:
+        """Shrinkage (ratio of SAE output norm to input norm) for evaluated SAEs."""
         return {
-            label: sae_record.results.mcc
+            label: sae_record.results.shrinkage
             for label, sae_record in self.saes.items()
             if sae_record.results is not None
         }
@@ -634,3 +634,150 @@ class ToyModel:
             for label, sae_record in self.saes.items()
             if sae_record.results is not None
         }
+
+    @property
+    @torch.no_grad()
+    def saes_feature_similarity(self) -> dict[str, Tensor]:
+        """Cosine similarity between SAE decoder weights and true feature embeddings.
+
+        For each SAE, computes the cosine similarity matrix between SAE decoder
+        weight vectors and ground-truth feature embedding vectors.
+
+        Returns:
+            Dict mapping SAE label to tensor of shape (n_sae_latents, n_features)
+            with values in [-1, 1].
+        """
+        true_features = self.W.T  # (n_features, n_hidden)
+        return {
+            label: F.normalize(sae_record.sae.W_dec, dim=1)
+            @ F.normalize(true_features, dim=1).T
+            for label, sae_record in self.saes.items()
+        }
+
+    @property
+    @torch.no_grad()
+    def saes_feature_similarity_ordering(self) -> dict[str, Tensor]:
+        """Indices to reorder SAE latents for diagonal alignment with true features.
+
+        For each SAE latent, finds the best-matching true feature (by absolute
+        cosine similarity), then sorts latents by that feature index. This produces
+        a reordering where the diagonal of the similarity matrix shows the best
+        matches.
+
+        Returns:
+            Dict mapping SAE label to tensor of shape (n_sae_latents,) containing
+            indices that reorder the SAE latents.
+        """
+        from scipy.optimize import linear_sum_assignment
+
+        result = {}
+        for label, cos_sim in self.saes_feature_similarity.items():
+            # cos_sim: (n_sae_latents, n_features)
+            # Use Hungarian algorithm to find optimal assignment maximizing similarity
+            cost_matrix = -cos_sim.abs().cpu().numpy()
+            row_ind, col_ind = linear_sum_assignment(cost_matrix)
+            # row_ind[i] is the SAE latent assigned to true feature col_ind[i]
+            # We want to reorder SAE latents so latent matching feature 0 comes first, etc.
+            # Create ordering: for each feature index (sorted), get the matched SAE latent
+            ordering = np.empty(len(row_ind), dtype=np.int64)
+            ordering[col_ind] = row_ind
+            result[label] = torch.from_numpy(ordering).to(cos_sim.device)
+        return result
+
+    @property
+    def saes_per_feature_f1(self) -> dict[str, np.ndarray]:
+        """Per-ground-truth-feature F1 scores for each SAE.
+
+        For each ground-truth feature, finds the best-matching SAE latent (by
+        decoder cosine similarity) and computes F1 for that latent as a detector
+        of that feature.
+
+        Returns:
+            Dict mapping SAE label to a 1D array of shape (n_features,)
+            where entry i is the F1 score for ground-truth feature i.
+        """
+        return {
+            label: sae_record.per_feature_metrics.f1_score
+            for label, sae_record in self.saes.items()
+            if sae_record.per_feature_metrics is not None
+        }
+
+    @property
+    def saes_macro_f1(self) -> dict[str, float]:
+        """Macro-averaged F1: unweighted mean of per-feature F1 scores.
+
+        Each ground-truth feature contributes equally regardless of activation
+        frequency. Compare with saes_f1_score to diagnose whether rare features
+        are being recovered.
+
+        Returns:
+            Dict mapping SAE label to macro F1 score.
+        """
+        return {
+            label: float(np.mean(per_feature_f1))
+            for label, per_feature_f1 in self.saes_per_feature_f1.items()
+        }
+
+    @property
+    def saes_per_feature_precision(self) -> dict[str, np.ndarray]:
+        """Per-ground-truth-feature precision for each SAE.
+
+        Returns:
+            Dict mapping SAE label to a 1D array of shape (n_features,).
+        """
+        return {
+            label: sae_record.per_feature_metrics.precision
+            for label, sae_record in self.saes.items()
+            if sae_record.per_feature_metrics is not None
+        }
+
+    @property
+    def saes_per_feature_recall(self) -> dict[str, np.ndarray]:
+        """Per-ground-truth-feature recall for each SAE.
+
+        Returns:
+            Dict mapping SAE label to a 1D array of shape (n_features,).
+        """
+        return {
+            label: sae_record.per_feature_metrics.recall
+            for label, sae_record in self.saes.items()
+            if sae_record.per_feature_metrics is not None
+        }
+
+    @property
+    def feature_frequencies(self) -> Tensor:
+        """Activation frequency per ground-truth feature.
+
+        Returns the fraction of samples where each feature is active.
+        If the distribution has a `p_active` attribute (e.g., SparseUniform),
+        uses that directly. Otherwise, computes empirically over 10,000 samples.
+
+        Returns:
+            Tensor of shape (n_features,) with values in [0, 1].
+        """
+        # Try to get analytical probabilities from distribution
+        if hasattr(self.distribution, "p_active"):
+            p_active = self.distribution.p_active
+            if isinstance(p_active, Tensor):
+                return p_active.detach().clone()
+            return torch.tensor(p_active, device=self.device)
+
+        # Compute empirically
+        return self._compute_feature_frequencies(num_samples=10_000)
+
+    @torch.no_grad()
+    def _compute_feature_frequencies(
+        self, num_samples: int = 10_000, batch_size: int = 2048
+    ) -> Tensor:
+        """Compute empirical feature activation frequencies."""
+        activations_gen = ActivationGeneratorWrapper(self.distribution)
+        counts = torch.zeros(self.n_features, device=self.device)
+
+        num_processed = 0
+        while num_processed < num_samples:
+            current_batch = min(batch_size, num_samples - num_processed)
+            feature_acts = activations_gen.sample(current_batch)
+            counts += (feature_acts > 0).float().sum(dim=0).to(self.device)
+            num_processed += current_batch
+
+        return counts / num_samples

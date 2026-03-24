@@ -16,6 +16,7 @@ dependencies = [
     "tqdm>=4.67.3",
     "ipython>=8.38.0",
     "sae-lens>=6.38.0",
+    "dill>=0.4.0",
     "safetensors>=0.4.0",
 ]
 

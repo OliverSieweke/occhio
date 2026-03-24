@@ -6,16 +6,17 @@ Uses torch.vmap + torch.compile for fast parallel training across grid points.
 from __future__ import annotations
 
 import datetime
-import pickle
 from collections.abc import Iterable, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from functools import cached_property
 from inspect import signature
 from itertools import product
+from pathlib import Path
 from typing import Any, Callable
 from warnings import warn
 
+import dill
 import numpy as np
 import torch
 from numpy.typing import NDArray
@@ -933,6 +934,38 @@ class ModelGrid:
             broadcast_samples=self.broadcast_samples,
             _models=result,
         )
+
+    def save(self, path: str | Path) -> None:
+        """Save grid to disk using dill.
+
+        Args:
+            path: File path to save to (will be created/overwritten).
+
+        Example::
+            grid.save("my_grid.pkl")
+
+        Warning:
+            Uses dill/pickle. If you refactor code (rename classes, change imports),
+            old saves may fail to load. Just re-save after refactoring.
+        """
+        with open(path, "wb") as file:
+            dill.dump(self, file)
+
+    @classmethod
+    def load(cls, path: str | Path) -> ModelGrid:
+        """Load a ModelGrid from disk.
+
+        Args:
+            path: File path to load from.
+
+        Returns:
+            A fully reconstructed ModelGrid.
+
+        Example::
+            grid = ModelGrid.load("my_grid.pkl")
+        """
+        with open(path, "rb") as file:
+            return dill.load(file)
 
     def train_saes(
         self,
