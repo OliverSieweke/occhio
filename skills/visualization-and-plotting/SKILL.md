@@ -9,7 +9,7 @@ Create Plotly-based visualizations for `ToyModel` and `ModelGrid` objects using 
 
 ## Golden Rules
 
-1. **Never modify `core/`** — The `visualization_2/core/` directory contains stable base classes. If the framework doesn't support your use case, explain the blocker to the user and ask permission before proposing changes.
+1. **Ask before modifying `core/`** — The `visualization_2/core/` directory contains base classes shared by all plots. If the framework doesn't support your use case, explain the blocker to the user and ask permission before proposing changes.
 
 2. **Read data from `ToyModel` properties** — Don't invent complex computation inside plots. If a needed metric doesn't exist, propose adding it as a `ToyModel` property first, and confirm with the user.
 
@@ -21,16 +21,16 @@ Create Plotly-based visualizations for `ToyModel` and `ModelGrid` objects using 
 
 ```
 src/occhio/visualization_2/
-├── core/                       # DO NOT MODIFY
-│   ├── __init__.py             # Exports: SinglePlot, CompositePlot
-│   ├── base_plot.py            # Plot (ABC), SinglePlot (ABC)
+├── core/                       # Base classes (ask before modifying)
+│   ├── __init__.py             # Exports: SinglePlot, CompositePlot, Plot
+│   ├── base_plot.py            # PlotRenderer (ABC), BasePlot, Plot/SinglePlot aliases
 │   ├── composite_plot.py       # CompositePlot, Span, SubplotSpec
 │   ├── figure_wrappers.py      # FigureProxy, InteractiveFigure
 │   └── plotting_utils.py       # add_grid_headers, model_domain_center
 └── plots/                      # ADD NEW PLOTS HERE
     ├── __init__.py             # Export all plot classes/instances
     ├── embedding.py            # EmbeddingPlot
-    ├── feature_representation.py
+    ├── feature_representation.py  # SuperpositionIndicatorPlot, feature metric plots
     ├── representation.py       # RepresentationPlot
     ├── sae_classification_metric.py   # SAEClassificationMetricPlot, etc.
     └── sae_classification_metrics.py  # SAEClassificationMetricsPlot
@@ -138,6 +138,38 @@ class MetricOverGridPlot(SinglePlot):
         ))
         fig.update_xaxes(title_text=axis.label)
 ```
+
+### `subplot_type` — Non-Cartesian Plots
+
+For trace types that don't use x/y axes (e.g., `go.Indicator`, `go.Pie`), set `subplot_type = "domain"`:
+
+```python
+class MyIndicatorPlot(SinglePlot):
+    """Gauge indicator for a scalar metric."""
+
+    n_render_axes = 0
+    subplot_type = "domain"  # Required for go.Indicator
+
+    def render(self, fig: FigureProxy, model: ToyModel) -> None:
+        value = model.superposition.detach().cpu().item()
+        fig.add_trace(
+            go.Indicator(
+                mode="gauge+number",
+                value=value,
+                title={"text": "Superposition"},
+                gauge={"axis": {"range": [0, 1]}},
+            )
+        )
+```
+
+| `subplot_type` | Trace types | Description |
+|----------------|-------------|-------------|
+| `"xy"` (default) | `Scatter`, `Bar`, `Heatmap`, etc. | Standard cartesian plots |
+| `"domain"` | `Indicator`, `Pie`, `Sunburst`, etc. | Traces that fill their subplot domain |
+| `"scene"` | `Scatter3d`, `Surface`, `Mesh3d` | 3D plots |
+| `"polar"` | `Scatterpolar`, `Barpolar` | Polar coordinate plots |
+
+When `subplot_type != "xy"`, `CompositePlot` automatically sets the correct spec type, and `FigureProxy` skips axis-related operations (tick label deduplication, axis matching).
 
 ### Error Handling
 
@@ -311,14 +343,15 @@ for model in grid  # iterate over all models (flattened)
 
 These are the current plots — read their source for patterns and conventions.
 
-| Class | File | `n_render_axes` | Description |
-|-------|------|-----------------|-------------|
-| `EmbeddingPlot` | `embedding.py` | 0 | Arrow plot of 2D feature embeddings from origin |
-| `RepresentationPlot` | `representation.py` | 0 | W^T W heatmap |
-| `SAEClassificationMetricPlot` | `sae_classification_metric.py` | 1 | Line chart of one metric across a grid axis |
-| `SAEMetricsComparisonPlot` | `sae_classification_metric.py` | 1 | Multiple metrics for one SAE across a grid |
-| `SAEClassificationMetricsPlot` | `sae_classification_metrics.py` | 0 | Grouped bar chart of classification metrics per model |
-| `plot_sae_classification_metrics` | `sae_classification_metric.py` | (composite) | 2x2 CompositePlot of precision/recall/accuracy/F1 |
+| Class | File | `n_render_axes` | `subplot_type` | Description |
+|-------|------|-----------------|----------------|-------------|
+| `EmbeddingPlot` | `embedding.py` | 0 | xy | Arrow plot of 2D feature embeddings from origin |
+| `RepresentationPlot` | `representation.py` | 0 | xy | W^T W heatmap |
+| `SuperpositionIndicatorPlot` | `feature_representation.py` | 0 | domain | Gauge indicator for superposition (ρmm) |
+| `SAEClassificationMetricPlot` | `sae_classification_metric.py` | 1 | xy | Line chart of one metric across a grid axis |
+| `SAEMetricsComparisonPlot` | `sae_classification_metric.py` | 1 | xy | Multiple metrics for one SAE across a grid |
+| `SAEClassificationMetricsPlot` | `sae_classification_metrics.py` | 0 | xy | Grouped bar chart of classification metrics per model |
+| `plot_sae_classification_metrics` | `sae_classification_metric.py` | - | - | 2x2 CompositePlot of precision/recall/accuracy/F1 |
 
 ## Workflow Summary
 

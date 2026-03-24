@@ -39,7 +39,7 @@ class PlotRenderer(ABC):
     """
 
     subplot_type: Literal[
-        "xy", "scene", "polar", "ternary", "map", "mapbox", "domain"
+        "xy", "scene", "polar", "ternary", "map", "mapbox", "domain", "table"
     ] = "xy"
 
     @abstractmethod
@@ -354,7 +354,7 @@ class PlotOrchestrator(ABC):
             first_frame_index[non_slider_axes] = slice(None)
 
         fig = self._render_static_subplots(
-            grid,
+            grid[tuple(first_frame_index)],
             render_axes=remapped_render_indices,
             facet_axes=remapped_facet_indices,
         )
@@ -380,7 +380,7 @@ class PlotOrchestrator(ABC):
             # would push more complexity onto the user. This seems an ok tradeoff at the
             # moment]
             temp_fig = self._render_static_subplots(
-                cast(ModelGrid, grid[tuple(frame_index)]),
+                grid[tuple(frame_index)],
                 facet_axes=remapped_facet_indices,
                 render_axes=remapped_render_indices,
             )
@@ -482,7 +482,7 @@ class SinglePlot(PlotRenderer, PlotOrchestrator, ABC):
         legend_registry: set[str] = set()
 
         if isinstance(grid, ToyModel):
-            fig = make_subplots(rows=1, cols=1)
+            fig = make_subplots(rows=1, cols=1, specs=[[{"type": self.subplot_type}]])
             self.render(
                 FigureProxy(fig, row=1, col=1, legend_registry=legend_registry),
                 grid,
@@ -501,7 +501,14 @@ class SinglePlot(PlotRenderer, PlotOrchestrator, ABC):
             n_cols = grid.shape[facet_axes[0]] if len(facet_axes) >= 1 else 1
             n_rows = grid.shape[facet_axes[1]] if len(facet_axes) >= 2 else 1
 
-            fig = make_subplots(rows=n_rows, cols=n_cols)
+            fig = make_subplots(
+                rows=n_rows,
+                cols=n_cols,
+                specs=[
+                    [{"type": self.subplot_type} for _ in range(n_cols)]
+                    for _ in range(n_rows)
+                ],
+            )
 
             for row_idx, col_idx in itertools.product(range(n_rows), range(n_cols)):
                 grid_index: list[int | slice] = [0] * len(grid.shape)
