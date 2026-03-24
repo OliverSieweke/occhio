@@ -10,7 +10,7 @@ import torch
 from huggingface_hub import hf_hub_download
 from safetensors.torch import load_file
 
-REPO_ID = "kaushikreddyxyz/toy-model-distributions"
+REPO_ID = "kaushikreddyxyz/occhio-distributions"
 
 DISTRIBUTIONS = [
     "sparse_uniform",
@@ -26,7 +26,8 @@ DISTRIBUTIONS = [
 
 def inspect(name: str) -> None:
     path = hf_hub_download(
-        REPO_ID, f"SyntheticToyModels/{name}/samples/samples.safetensors"
+        REPO_ID,
+        f"{name}/samples/samples.safetensors",
     )
     data = load_file(path)
     samples = data["samples"]

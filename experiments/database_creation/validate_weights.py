@@ -17,7 +17,8 @@ from safetensors.torch import load_file
 
 from occhio.autoencoder import TiedLinearRelu
 
-REPO_ID = "kaushikreddyxyz/toy-model-distributions"
+DATASET_REPO = "kaushikreddyxyz/occhio-distributions"
+MODEL_REPO = "kaushikreddyxyz/occhio-models"
 N_HIDDEN = 64
 DEVICE = "mps"
 
@@ -35,11 +36,10 @@ DISTRIBUTIONS = [
 
 def validate(name: str) -> None:
     # --- Download ---
-    weights_path = hf_hub_download(
-        REPO_ID, f"SyntheticToyModels/{name}/weights/weights.safetensors"
-    )
+    weights_path = hf_hub_download(MODEL_REPO, f"{name}/weights/weights.safetensors")
     samples_path = hf_hub_download(
-        REPO_ID, f"SyntheticToyModels/{name}/samples/samples.safetensors"
+        DATASET_REPO,
+        f"{name}/samples/samples.safetensors",
     )
 
     # --- Load samples (first 10K on CPU for stats) ---
