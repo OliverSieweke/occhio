@@ -133,11 +133,15 @@ class Distribution(ABC):
     def _broadcast(self, x: float | list[float] | Tensor) -> Tensor:
         if isinstance(x, Tensor):
             if x.dim() == 0:
-                return x.expand(self.n_features).clone().to(self.device)
-            return x.to(self.device)
+                return (
+                    x.expand(self.n_features)
+                    .clone()
+                    .to(device=self.device, dtype=torch.float32)
+                )
+            return x.to(device=self.device, dtype=torch.float32)
         if isinstance(x, (int, float)):
             return torch.full((self.n_features,), x, device=self.device)
-        return torch.as_tensor(x, device=self.device)
+        return torch.as_tensor(x, dtype=torch.float32, device=self.device)
 
     def to(self, device: torch.device | str):
         self.device = torch.device(device)

@@ -23,7 +23,7 @@ DEVICE = "mps"
 gen = torch.Generator(DEVICE)
 gen.manual_seed(42)
 
-N_FEAT = 2000
+N_FEAT = 1000
 N_HIDDEN = 64
 FACE_DIM = 16
 N_FACES = 10 * (N_FEAT // FACE_DIM)

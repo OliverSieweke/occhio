@@ -32,8 +32,8 @@ from occhio.toy_model import ToyModel
 # --- Configuration ---
 DEVICE = "mps"
 SEED = 42
-N_FEATURES = 200
-D_HIDDEN = 40
+N_FEATURES = 500
+D_HIDDEN = 64
 N_EPOCHS = 30_000
 BATCH_SIZE = 512
 EVAL_SAMPLES = 2**14
@@ -78,9 +78,9 @@ config = SyntheticDataConfig(
     n_features=N_FEATURES,
     # Firing probabilities
     firing_prob_distribution="zipfian",
-    p_max=0.4,
+    p_max=0.3,
     p_min=0.5 / N_FEATURES,
-    alpha=0.8,
+    alpha=0.7,
     # Magnitudes — linear mean, folded-normal stdev
     mean_distribution="linear",
     mean_high=3.0,
@@ -409,7 +409,7 @@ fig.show()
 
 # %%
 # --- Summary statistics ---
-print("\n=== Summary ===")
+print(f"\n=== Summary === ")
 for name, eval_loss, pf in [
     ("TiedLinearRelu", eval_losses_tied[-1], per_feature_tied[-1]),
     ("SynthAE (ortho)", loss_synth_ortho, pf_synth_ortho),
@@ -423,11 +423,11 @@ for name, eval_loss, pf in [
     )
 
 # %% --- SAE training on both models ---
-N_DICT = N_FEATURES + 4
-SAE_STEPS = 50_000
+N_DICT = N_FEATURES
+SAE_STEPS = 25_000
 SAE_BATCH = 1024
 SAE_LR = 3e-4
-SAE_L1 = 0.2
+SAE_L1 = 1.0
 
 sae_results = {}
 
@@ -777,7 +777,7 @@ for name, res in sae_results.items():
     )
 
 # %% --- SAE summary print ---
-print("\n=== SAE Summary ===")
+print(f"\n=== SAE Summary === L1 = {SAE_L1}")
 print(
     f"{'Model':25s}  {'MSE↓':>10s}  {'L0↓':>6s}  {'Dead↓':>6s}  {'Alive↑':>6s}  "
     f"{'ExplVar↑':>8s}  {'Diag↑':>6s}  {'MCC↑':>6s}  {'Prec↑':>6s}  {'Rec↑':>6s}  {'F1↑':>6s}  {'FPR↓':>6s}"

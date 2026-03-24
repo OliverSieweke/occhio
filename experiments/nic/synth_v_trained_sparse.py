@@ -22,7 +22,7 @@ from occhio.toy_model import ToyModel
 # --- Configuration ---
 DEVICE = "mps"
 SEED = 42
-N_FEATURES = 1000
+N_FEATURES = 500
 D_HIDDEN = 64
 N_EPOCHS = 30_000
 BATCH_SIZE = 512
@@ -550,6 +550,21 @@ for name in names:
         color_continuous_scale="ylgnbu_r",
     ).show()
 
+    cosine_sim_matched = cosine_sim[np.ix_(row_order, col_order)]
+    px.imshow(
+        cosine_sim_matched,
+        labels=dict(
+            x="SAE dict element (cosine matched)", y="Feature (cosine matched)"
+        ),
+        x=col_labels,
+        y=row_labels,
+        title=f"Cosine similarity (matched, mean={mean_cosine:.3f}) — {name}",
+        aspect="auto",
+        color_continuous_scale="RdBu",
+        zmin=-1,
+        zmax=1,
+    ).show()
+
 # %% --- SAE evaluation: MCC, detection metrics ---
 for name, res in sae_results.items():
     sae = res["sae"]
@@ -629,88 +644,24 @@ for name, res in sae_results.items():
     )
 
 # %% --- SAE summary print ---
-_summary_header = (
-    f"{'Model':25s}  {'MSE↓':>10s}  {'L0↓':>6s}  {'Dead↓':>6s}  {'Alive↑':>6s}  "
-    f"{'ExplVar↑':>8s}  {'Diag↑':>6s}  {'MCC_abs↑':>8s}  {'MCC_cos↑':>8s}  "
-    f"{'Prec↑':>6s}  {'Rec↑':>6s}  {'F1↑':>6s}  {'FPR↓':>6s}"
-)
+_hdr1 = f"{'Model':25s}  {'MSE↓':>10s}  {'L0↓':>6s}  {'Dead↓':>6s}  {'Alive↑':>6s}  {'ExplVar↑':>8s}  {'Diag↑':>6s}"
+_hdr2 = f"{'':25s}  {'MCC_abs↑':>8s}  {'MCC_cos↑':>8s}  {'Prec↑':>6s}  {'Rec↑':>6s}  {'F1↑':>6s}  {'FPR↓':>6s}"
 
 for match_label, sfx in [("abs cos-sim", "_abs"), ("cos-sim", "_cos")]:
     print(f"\n|| SAE Summary (matched on {match_label}) || L1 = {SAE_L1}")
-    print(_summary_header)
+    print(_hdr1)
+    print(_hdr2)
     for name, res in sae_results.items():
         print(
             f"{name:25s}  {res['recon_mse']:10.6f}  {res['l0']:6.1f}  "
             f"{res['n_dead']:6d}  {res['n_alive']:6d}  {res['explained_var']:8.4f}  "
-            f"{res.get('diagonality', 0):6.4f}  "
-            f"{res.get(f'mcc{sfx}_abs', 0):8.4f}  {res.get(f'mcc{sfx}_cos', 0):8.4f}  "
+            f"{res.get('diagonality', 0):6.4f}"
+        )
+        print(
+            f"{'':25s}  {res.get(f'mcc{sfx}_abs', 0):8.4f}  {res.get(f'mcc{sfx}_cos', 0):8.4f}  "
             f"{res[f'precision{sfx}']:6.4f}  {res[f'recall{sfx}']:6.4f}  "
             f"{res[f'f1{sfx}']:6.4f}  {res[f'fpr{sfx}']:6.4f}"
         )
-
-# %% --- SAE summary comparison ---
-fig = make_subplots(
-    rows=1,
-    cols=6,
-    subplot_titles=[
-        "Recon MSE",
-        "Mean L0",
-        "Dead Features",
-        "Explained Variance",
-        "Diagonality",
-        "MCC",
-    ],
-)
-
-for i, (name, color) in enumerate(zip(names, colors)):
-    res = sae_results[name]
-    fig.add_trace(
-        go.Bar(x=[name], y=[res["recon_mse"]], marker_color=color, showlegend=False),
-        row=1,
-        col=1,
-    )
-    fig.add_trace(
-        go.Bar(x=[name], y=[res["l0"]], marker_color=color, showlegend=False),
-        row=1,
-        col=2,
-    )
-    fig.add_trace(
-        go.Bar(x=[name], y=[res["n_dead"]], marker_color=color, showlegend=False),
-        row=1,
-        col=3,
-    )
-    fig.add_trace(
-        go.Bar(
-            x=[name], y=[res["explained_var"]], marker_color=color, showlegend=False
-        ),
-        row=1,
-        col=4,
-    )
-    fig.add_trace(
-        go.Bar(
-            x=[name],
-            y=[res.get("diagonality", 0)],
-            marker_color=color,
-            showlegend=False,
-        ),
-        row=1,
-        col=5,
-    )
-    fig.add_trace(
-        go.Bar(
-            x=[name],
-            y=[res.get("mcc", 0)],
-            marker_color=color,
-            showlegend=False,
-        ),
-        row=1,
-        col=6,
-    )
-
-fig.update_layout(
-    title=f"SAE Comparison (dict={N_DICT}, L1={SAE_L1})", height=400, width=1600
-)
-fig.show()
 
 
 # %% --- Per-feature detection metrics (sorted by firing probability) ---

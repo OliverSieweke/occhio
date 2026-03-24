@@ -111,10 +111,7 @@ class AutoEncoderBase(nn.Module, ABC):
 
 class TiedLinear(AutoEncoderBase):
     def __init__(self, n_features: int, n_hidden: int, **kwargs) -> None:
-        super().__init__(**kwargs)
-
-        self.n_features = n_features
-        self.n_hidden = n_hidden
+        super().__init__(n_features, n_hidden, **kwargs)
 
         self.resample_weights()
 
@@ -176,8 +173,6 @@ class MLPEncoder(AutoEncoderBase):
         tied_initialization: bool = False,
         **kwargs,
     ):
-        super().__init__(**kwargs)
-
         assert len(embedding) >= 2, "embedding must have at least [input, latent]"
         assert len(unembedding) >= 2, "unembedding must have at least [latent, output]"
         assert embedding[-1] == unembedding[0], "latent dims must match"
@@ -188,8 +183,7 @@ class MLPEncoder(AutoEncoderBase):
                 f"got embedding={embedding}, unembedding={unembedding}"
             )
 
-        self.n_features = embedding[0]
-        self.n_hidden = embedding[-1]
+        super().__init__(embedding[0], embedding[-1], **kwargs)
 
         self.embedding_dims = embedding
         self.unembedding_dims = unembedding
@@ -282,21 +276,13 @@ class TiedMLPEncoder(AutoEncoderBase):
     """
 
     def __init__(self, dims: list[int], **kwargs):
-        super().__init__(**kwargs)
-
         assert len(dims) >= 2, "dims must have at least [input, latent]"
 
         self.dims = dims
 
+        super().__init__(dims[0], dims[-1], **kwargs)
+
         self._build_layers()
-
-    @property
-    def n_features(self) -> int:
-        return self.dims[0]
-
-    @property
-    def n_hidden(self) -> int:
-        return self.dims[-1]
 
     def _build_layers(self):
         self.encoder_weights = nn.ParameterList()
@@ -374,9 +360,7 @@ class ComputeAutoEncoder(AutoEncoderBase):
         seed: int = 10,
         **kwargs,
     ):
-        super().__init__(**kwargs)
-        self.n_features = N
-        self.n_hidden = k
+        super().__init__(N, k, **kwargs)
         self.decode_activation = decode_activation
 
         gen = torch.Generator().manual_seed(seed)
@@ -471,15 +455,12 @@ class AttnLinearAE(AutoEncoderBase):
         dict_size: int,
         **kwargs,
     ) -> None:
-        super().__init__(**kwargs)
+        super().__init__(n_features, n_hidden, **kwargs)
 
         if n_hidden % n_heads != 0:
             raise ValueError(
                 f"n_hidden ({n_hidden}) must be divisible by n_heads ({n_heads})"
             )
-
-        self.n_features = n_features
-        self.n_hidden = n_hidden
         self.n_heads = n_heads
         self.dict_size = dict_size
         self.value_dim = n_hidden // n_heads
@@ -596,15 +577,12 @@ class AttnAttnAE(AutoEncoderBase):
         dict_size: int,
         **kwargs,
     ) -> None:
-        super().__init__(**kwargs)
+        super().__init__(n_features, n_hidden, **kwargs)
 
         if n_hidden % n_heads != 0:
             raise ValueError(
                 f"n_hidden ({n_hidden}) must be divisible by n_heads ({n_heads})"
             )
-
-        self.n_features = n_features
-        self.n_hidden = n_hidden
         self.n_heads = n_heads
         self.dict_size = dict_size
         self.value_dim = n_hidden // n_heads
@@ -722,15 +700,12 @@ class LinearAttnAE(AutoEncoderBase):
         dict_size: int,
         **kwargs,
     ) -> None:
-        super().__init__(**kwargs)
+        super().__init__(n_features, n_hidden, **kwargs)
 
         if n_hidden % n_heads != 0:
             raise ValueError(
                 f"n_hidden ({n_hidden}) must be divisible by n_heads ({n_heads})"
             )
-
-        self.n_features = n_features
-        self.n_hidden = n_hidden
         self.n_heads = n_heads
         self.dict_size = dict_size
         self.value_dim = n_hidden // n_heads
@@ -834,10 +809,8 @@ class SynthAE(AutoEncoderBase):
         ortho_chunk_size: int = 1024,
         **kwargs,
     ) -> None:
-        super().__init__(**kwargs)
+        super().__init__(n_features, n_hidden, **kwargs)
 
-        self.n_features = n_features
-        self.n_hidden = n_hidden
         self._orthogonalize = orthogonalize
         self._ortho_lambda = ortho_lambda
         self._ortho_steps = ortho_steps
