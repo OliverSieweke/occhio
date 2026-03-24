@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from safetensors.torch import load_file
@@ -683,66 +684,6 @@ class ToyModel:
             ordering[col_ind] = row_ind
             result[label] = torch.from_numpy(ordering).to(cos_sim.device)
         return result
-
-    @property
-    def saes_per_feature_f1(self) -> dict[str, np.ndarray]:
-        """Per-ground-truth-feature F1 scores for each SAE.
-
-        For each ground-truth feature, finds the best-matching SAE latent (by
-        decoder cosine similarity) and computes F1 for that latent as a detector
-        of that feature.
-
-        Returns:
-            Dict mapping SAE label to a 1D array of shape (n_features,)
-            where entry i is the F1 score for ground-truth feature i.
-        """
-        return {
-            label: sae_record.per_feature_metrics.f1_score
-            for label, sae_record in self.saes.items()
-            if sae_record.per_feature_metrics is not None
-        }
-
-    @property
-    def saes_macro_f1(self) -> dict[str, float]:
-        """Macro-averaged F1: unweighted mean of per-feature F1 scores.
-
-        Each ground-truth feature contributes equally regardless of activation
-        frequency. Compare with saes_f1_score to diagnose whether rare features
-        are being recovered.
-
-        Returns:
-            Dict mapping SAE label to macro F1 score.
-        """
-        return {
-            label: float(np.mean(per_feature_f1))
-            for label, per_feature_f1 in self.saes_per_feature_f1.items()
-        }
-
-    @property
-    def saes_per_feature_precision(self) -> dict[str, np.ndarray]:
-        """Per-ground-truth-feature precision for each SAE.
-
-        Returns:
-            Dict mapping SAE label to a 1D array of shape (n_features,).
-        """
-        return {
-            label: sae_record.per_feature_metrics.precision
-            for label, sae_record in self.saes.items()
-            if sae_record.per_feature_metrics is not None
-        }
-
-    @property
-    def saes_per_feature_recall(self) -> dict[str, np.ndarray]:
-        """Per-ground-truth-feature recall for each SAE.
-
-        Returns:
-            Dict mapping SAE label to a 1D array of shape (n_features,).
-        """
-        return {
-            label: sae_record.per_feature_metrics.recall
-            for label, sae_record in self.saes.items()
-            if sae_record.per_feature_metrics is not None
-        }
 
     @property
     def feature_frequencies(self) -> Tensor:
