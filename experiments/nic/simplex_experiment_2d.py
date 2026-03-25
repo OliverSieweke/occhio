@@ -2,6 +2,7 @@
 import torch
 import plotly.express as px
 import plotly.graph_objects as go
+import plotly.colors as pc
 
 from occhio.autoencoder import TiedLinearRelu
 from occhio.sae.sae import SAESimple
@@ -11,15 +12,15 @@ from occhio.toy_model import ToyModel
 # %%
 DEVICE = "mps"
 gen = torch.Generator(DEVICE)
-gen.manual_seed(5)
+gen.manual_seed(6)
 
-n_features = 7
+n_features = 5
 p_active = 1 / (n_features + 1)
 n_hidden = 2
 
 dist = SimplicialComplexDistribution(
     n_vertices=n_features,
-    faces=[(0, 1), (2, 3), (4, 5), (5, 6)],
+    faces=[(0, 1), (1, 2), (3, 4)],
     p_active=p_active,
     sampling_mode="sparse",
     generator=gen,
@@ -29,7 +30,7 @@ ae = TiedLinearRelu(n_features, n_hidden, generator=gen, device=DEVICE)
 tm = ToyModel(distribution=dist, ae=ae, device=DEVICE)
 
 # %%
-losses, _ = tm.fit(25_000, 512)
+losses, _ = tm.fit(30_000, 512)
 
 # %%
 px.line(y=losses, labels={"x": "Epoch", "y": "Loss"}, title="Training loss").show()
@@ -112,10 +113,10 @@ fig2.show()
 # %% --- SAE training ---
 
 N_DICT = n_features + 2
-SAE_STEPS = 50_000
+SAE_STEPS = 20_000
 SAE_BATCH = 512
 SAE_LR = 3e-4
-SAE_L1 = 0.05
+SAE_L1 = 0.1
 
 sae = SAESimple(
     n_latent=n_hidden,
@@ -146,6 +147,48 @@ px.line(
     labels={"x": "Step", "y": "Loss"},
 ).show()
 
+# %% --- Match SAE dict elements to features via cosine similarity ---
+with torch.no_grad():
+    sae_dirs = sae.W_dec.detach()  # (N_DICT, n_hidden)
+    gt_dirs = tm.W.detach().T  # (n_features, n_hidden)
+
+    # Normalise
+    sae_normed = sae_dirs / sae_dirs.norm(dim=1, keepdim=True)
+    gt_normed = gt_dirs / gt_dirs.norm(dim=1, keepdim=True)
+
+    cos_sim = sae_normed @ gt_normed.T  # (N_DICT, n_features)
+
+    # Greedy matching: for each feature pick the best unmatched dict element
+    cos_np = cos_sim.cpu().numpy()
+    from scipy.optimize import linear_sum_assignment
+
+    # Hungarian matching (maximise similarity → minimise negative)
+    row_ind, col_ind = linear_sum_assignment(-cos_np)
+    # row_ind = dict element indices, col_ind = feature indices
+    # Build ordering: matched dict elements first (sorted by feature index),
+    # then unmatched dict elements
+    matched_pairs = sorted(zip(col_ind, row_ind))  # sort by feature index
+    matched_dict_order = [d for _, d in matched_pairs]
+    unmatched = [d for d in range(N_DICT) if d not in matched_dict_order]
+    dict_order = matched_dict_order + unmatched  # reordering of dict elements
+
+    # Labels: matched get "d{i}→v{j}", unmatched get "d{i}"
+    dict_labels = [""] * N_DICT
+    feature_for_dict = {}
+    for feat, dct in matched_pairs:
+        dict_labels[dct] = f"d{dct}→v{feat}"
+        feature_for_dict[dct] = feat
+    for d in unmatched:
+        dict_labels[d] = f"d{d} (unmatched)"
+
+    reordered_labels = [dict_labels[d] for d in dict_order]
+
+print("Matching (cosine similarity):")
+for feat, dct in matched_pairs:
+    print(f"  v{feat} ↔ d{dct}  (cos={cos_np[dct, feat]:.3f})")
+for d in unmatched:
+    print(f"  d{d} unmatched (best cos={cos_np[d].max():.3f})")
+
 # %% --- Samples overlaid with SAE decoder vectors ---
 with torch.no_grad():
     samples = dist.sample(1024)
@@ -166,43 +209,67 @@ fig3.add_trace(
         x=hidden[:, 0],
         y=hidden[:, 1],
         mode="markers",
-        marker=dict(size=3, opacity=0.4, color="lightgray"),
+        marker=dict(size=3, opacity=0.4, color="gray"),
         name="Encoded samples",
     )
 )
 
-# Ground-truth feature vectors (ToyModel W columns)
+# Ground-truth feature vectors (ToyModel W columns), colored to match SAE pairing
+_colors = pc.qualitative.Plotly
 for j in range(n_features):
     fig3.add_trace(
         go.Scatter(
             x=[0, W[0, j]],
             y=[0, W[1, j]],
             mode="lines+markers",
-            line=dict(width=2, color="blue"),
+            line=dict(width=2, color=_colors[j % len(_colors)]),
             marker=dict(size=6),
-            name=f"GT v{j}" if j == 0 else None,
+            name=f"GT v{j}",
             legendgroup="gt",
-            showlegend=(j == 0),
+            showlegend=True,
             hovertext=f"GT v{j}",
             hoverinfo="text",
         )
     )
 
-# SAE decoder vectors (endpoint only, no line from origin)
+# SAE decoder vectors, colored by matched feature
+_colors = pc.qualitative.Plotly
 for d in range(N_DICT):
+    if d in feature_for_dict:
+        feat = feature_for_dict[d]
+        color = _colors[feat % len(_colors)]
+        label = f"d{d}→v{feat}"
+    else:
+        color = "gray"
+        label = f"d{d} (unmatched)"
     fig3.add_trace(
         go.Scatter(
             x=[sae_W_dec[d, 0]],
             y=[sae_W_dec[d, 1]],
             mode="markers",
-            marker=dict(size=8, symbol="diamond", color="red"),
-            name="SAE dict" if d == 0 else None,
+            marker=dict(size=8, symbol="diamond", color=color),
+            name=label,
             legendgroup="sae",
-            showlegend=(d == 0),
-            hovertext=f"SAE d{d}",
+            showlegend=True,
+            hovertext=label,
             hoverinfo="text",
         )
     )
+
+# SAE decoder bias (b_dec) in hidden space
+with torch.no_grad():
+    b_dec_np = sae.b_dec.detach().cpu().numpy()
+fig3.add_trace(
+    go.Scatter(
+        x=[b_dec_np[0]],
+        y=[b_dec_np[1]],
+        mode="markers",
+        marker=dict(size=12, symbol="star", color="green"),
+        name="b_dec",
+        hovertext=f"b_dec ({b_dec_np[0]:.3f}, {b_dec_np[1]:.3f})",
+        hoverinfo="text",
+    )
+)
 
 fig3.update_layout(
     title="Ground Truth vs SAE Decoder Directions",
@@ -256,11 +323,11 @@ with torch.no_grad():
     sae_acts = sae.encode(tm.ae.encode(eye)).cpu().numpy()  # (n_features, N_DICT)
 
 px.imshow(
-    sae_acts,
+    sae_acts[:, dict_order],
     labels=dict(x="SAE dict element", y="Feature"),
-    x=[f"d{d}" for d in range(N_DICT)],
+    x=reordered_labels,
     y=[f"v{j}" for j in range(n_features)],
-    title="SAE activations per one-hot feature",
+    title="SAE activations per one-hot feature (matched order)",
     aspect="auto",
 ).show()
 
@@ -272,11 +339,11 @@ with torch.no_grad():
     )  # (N_DICT, n_features)
 
 px.imshow(
-    decoded_features,
+    decoded_features[dict_order],
     labels=dict(x="Feature", y="SAE dict element"),
     x=[f"v{j}" for j in range(n_features)],
-    y=[f"d{d}" for d in range(N_DICT)],
-    title="SAE dict elements decoded to feature space",
+    y=reordered_labels,
+    title="SAE dict elements decoded to feature space (matched order)",
     aspect="auto",
 ).show()
 # %%

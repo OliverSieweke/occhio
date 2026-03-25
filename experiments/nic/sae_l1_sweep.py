@@ -168,7 +168,9 @@ def compute_f1_l0(sae, tm, dist, device, n_samples=DET_SAMPLES):
 # %%
 # --- L1 sweep ---
 base_models = [("TiedLinearRelu", tm_tied), ("SynthAE (ortho)", tm_synth)]
-sweep_results = {name: {"l1": [], "f1": [], "l0": []} for name, _ in base_models}
+sweep_results = {
+    name: {"l1": [], "f1": [], "l0": [], "sae": []} for name, _ in base_models
+}
 
 for l1_coef in L1_VALUES:
     for name, tm in base_models:
@@ -192,6 +194,7 @@ for l1_coef in L1_VALUES:
         sweep_results[name]["l1"].append(l1_coef)
         sweep_results[name]["f1"].append(f1)
         sweep_results[name]["l0"].append(l0)
+        sweep_results[name]["sae"].append(sae)
         print(f"    L1={l1_coef}  F1={f1:.4f}  L0={l0:.1f}")
 
 # %%
@@ -229,5 +232,73 @@ print("-" * 55)
 for name, res in sweep_results.items():
     for l1, f1, l0 in zip(res["l1"], res["f1"], res["l0"]):
         print(f"{name:25s}  {l1:6.2f}  {f1:8.4f}  {l0:8.1f}")
+
+# %%
+# --- Purity, MCC, F1 for L1=0.2 ---
+L1_EVAL = 0.2
+
+print(f"\n=== Detailed metrics for L1={L1_EVAL} ===")
+print(f"{'Model':25s}  {'MCC↑':>8s}  {'Purity↑':>8s}  {'F1↑':>8s}")
+print("-" * 55)
+
+for name, tm in base_models:
+    l1_idx = L1_VALUES.index(L1_EVAL)
+    sae = sweep_results[name]["sae"][l1_idx]
+
+    with torch.no_grad():
+        # --- MCC: cosine similarity between ground-truth W columns and SAE decoder ---
+        D = tm.W.detach()  # (D_HIDDEN, N_FEATURES)
+        W_dec_t = sae.W_dec.detach().T  # (D_HIDDEN, N_DICT)
+        D_norm = D / D.norm(dim=0, keepdim=True).clamp(min=1e-8)
+        W_norm = W_dec_t / W_dec_t.norm(dim=0, keepdim=True).clamp(min=1e-8)
+        cos_sim = (D_norm.T @ W_norm).cpu().numpy()  # (N_FEATURES, N_DICT)
+        cos_sim_abs = np.abs(cos_sim)
+
+        mcc_feat_idx, mcc_dict_idx = linear_sum_assignment(-cos_sim_abs)
+        mcc = float(cos_sim_abs[mcc_feat_idx, mcc_dict_idx].mean())
+
+        # --- Purity (diagonality): fraction of SAE activation on matched diagonal ---
+        eye = torch.eye(N_FEATURES, device=DEVICE)
+        sae_acts = sae.encode(tm.ae.encode(eye)).cpu().numpy()  # (N_FEATURES, N_DICT)
+
+        # Cosine matching for purity (same as synth_v_trained_sparse.py)
+        D_enc = tm.ae.encode(eye)
+        D_enc_normed = D_enc / D_enc.norm(dim=1, keepdim=True)
+        W_dec = sae.W_dec.data
+        W_dec_normed = W_dec / W_dec.norm(dim=1, keepdim=True)
+        cos_purity = (D_enc_normed @ W_dec_normed.T).cpu().numpy()
+        pf_idx, pd_idx = linear_sum_assignment(-cos_purity)
+
+        matched_feats = set(pf_idx)
+        matched_dicts = set(pd_idx)
+        unmatched_feats = [f for f in range(N_FEATURES) if f not in matched_feats]
+        unmatched_dicts = [d for d in range(N_DICT) if d not in matched_dicts]
+        row_order = list(pf_idx) + unmatched_feats
+        col_order = list(pd_idx) + unmatched_dicts
+        sae_acts_matched = sae_acts[np.ix_(row_order, col_order)]
+
+        n_matched = len(pf_idx)
+        diag_sum = sum(sae_acts_matched[i, i] for i in range(n_matched))
+        total_sum = sae_acts_matched.sum()
+        purity = diag_sum / total_sum if total_sum > 0 else 0.0
+
+        # --- F1 (detection) ---
+        det_x = dist.sample(DET_SAMPLES).to(DEVICE)
+        det_hidden = tm.ae.encode(det_x)
+        det_z = sae.encode(det_hidden)
+
+        gt_active = det_x[:, mcc_feat_idx] > 0
+        pred_active = det_z[:, mcc_dict_idx] > 0
+
+        tp = (gt_active & pred_active).float().sum(dim=0)
+        fp = (~gt_active & pred_active).float().sum(dim=0)
+        fn = (gt_active & ~pred_active).float().sum(dim=0)
+
+        precision = tp / (tp + fp + 1e-8)
+        recall = tp / (tp + fn + 1e-8)
+        f1_per = 2 * precision * recall / (precision + recall + 1e-8)
+        mean_f1 = f1_per.mean().item()
+
+    print(f"{name:25s}  {mcc:8.4f}  {purity:8.4f}  {mean_f1:8.4f}")
 
 # %%

@@ -19,7 +19,7 @@ gen.manual_seed(6)
 # 3 simplices of size 3 → 9 features total
 # simplex_sizes = [2, 2, 2]
 # n_features = sum(simplex_sizes)
-n_features = 10
+n_features = 6
 n_hidden = 3
 
 # dist = SimplexDistribution(simplex_sizes, p_active, generator=gen, device=DEVICE)
@@ -173,7 +173,7 @@ px.imshow(
 from occhio.sae.sae import SAESimple
 
 N_DICT = n_features + 4
-SAE_STEPS = 30_000
+SAE_STEPS = 60_000
 SAE_BATCH = 1024
 SAE_LR = 3e-4
 SAE_L1 = 0.15
@@ -277,19 +277,56 @@ px.imshow(
     color_continuous_scale="ylgnbu_r",
 ).show()
 
-# %% --- Cosine similarity matrix (matched order) ---
+# %% --- Cosine similarity matrix (matched order) + encoder bias ---
+from plotly.subplots import make_subplots
+
 cos_sim_matched = cos_sim_raw[np.ix_(row_order, col_order)]
-px.imshow(
-    cos_sim_matched,
-    labels=dict(x="SAE dict element (matched)", y="Feature (matched)"),
-    x=col_labels,
-    y=row_labels,
+
+with torch.no_grad():
+    b_enc_np = sae.b_enc.detach().cpu().numpy()[col_order]
+
+fig_cos = make_subplots(
+    rows=2,
+    cols=1,
+    row_heights=[0.85, 0.15],
+    shared_xaxes=True,
+    vertical_spacing=0.02,
+)
+
+fig_cos.add_trace(
+    go.Heatmap(
+        z=cos_sim_matched,
+        x=col_labels,
+        y=row_labels,
+        colorscale="RdBu",
+        zmin=-1,
+        zmax=1,
+        colorbar=dict(title="cos sim"),
+    ),
+    row=1,
+    col=1,
+)
+
+fig_cos.add_trace(
+    go.Bar(
+        x=col_labels,
+        y=b_enc_np,
+        marker_color="green",
+        name="b_enc",
+    ),
+    row=2,
+    col=1,
+)
+
+fig_cos.update_layout(
     title=f"Cosine similarity (matched, mean={mcc_signed:.3f})",
-    aspect="auto",
-    color_continuous_scale="RdBu",
-    zmin=-1,
-    zmax=1,
-).show()
+    height=700,
+    showlegend=False,
+)
+fig_cos.update_yaxes(title_text="Feature (matched)", row=1, col=1)
+fig_cos.update_yaxes(title_text="b_enc", row=2, col=1)
+fig_cos.update_xaxes(title_text="SAE dict element (matched)", row=2, col=1)
+fig_cos.show()
 
 # %% --- Detection metrics ---
 with torch.no_grad():
@@ -368,6 +405,22 @@ fig3.add_trace(
         text=[f"d{d}→v{f}" for f, d in zip(feat_idx, dict_idx)],
         textposition="bottom center",
         name="SAE dict (matched)",
+    )
+)
+
+# SAE decoder bias
+with torch.no_grad():
+    b_dec_np = sae.b_dec.detach().cpu().numpy()
+fig3.add_trace(
+    go.Scatter3d(
+        x=[b_dec_np[0]],
+        y=[b_dec_np[1]],
+        z=[b_dec_np[2]],
+        mode="markers+text",
+        marker=dict(size=8, color="green", symbol="cross"),
+        text=["b_dec"],
+        textposition="top center",
+        name="SAE decoder bias",
     )
 )
 
