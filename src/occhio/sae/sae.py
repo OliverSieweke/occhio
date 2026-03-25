@@ -191,6 +191,248 @@ class TopKIgnoreSAE(SparseAutoEncoderBase):
         return self.l1_coef * sparsity_loss + mse_loss
 
 
+class SimplexSAE(SparseAutoEncoderBase):
+    """Sparse AutoEncoder with K local dictionaries centered at learned vantage points.
+
+    Each simplex has its own vantage point b_d^(k), encoder V^(k), decoder
+    dictionary D^(k), and an independent sigmoid gate g_k.  The reconstruction
+    is a *superposition* of local decompositions — multiple simplexes can be
+    active simultaneously.
+
+    A standard SAE is the special case K=1 with gate always ~1.
+
+    The ``encode``/``decode`` interface packs gate values onto the sparse latent:
+    ``encode`` returns ``[s^(1), …, s^(K), g_1, …, g_K]`` in R^{d_dict + K}
+    and ``decode`` splits off the last K entries as gates.
+    """
+
+    def __init__(
+        self,
+        d_input: int,
+        n_simplexes: int,
+        d_local: int | list[int],
+        lambda_1: float = 1e-3,
+        lambda_2: float = 1e-3,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+
+        self.d_input = d_input
+        self.n_simplexes = n_simplexes
+        self.lambda_1 = lambda_1
+        self.lambda_2 = lambda_2
+
+        if isinstance(d_local, int):
+            self.d_locals = [d_local] * n_simplexes
+        else:
+            if len(d_local) != n_simplexes:
+                raise ValueError(
+                    f"d_local list length ({len(d_local)}) must match "
+                    f"n_simplexes ({n_simplexes})"
+                )
+            self.d_locals = list(d_local)
+
+        self.d_dict = sum(self.d_locals)
+
+        self._init_parameters()
+
+    # -- Parameter initialization ------------------------------------------------
+
+    def _init_parameters(self) -> None:
+        dev = self.device
+        gen = self.generator
+        d = self.d_input
+
+        self.b_dec = nn.ParameterList()
+        self.b_enc = nn.ParameterList()
+        self.V = nn.ParameterList()
+        self.D = nn.ParameterList()
+        self.c = nn.ParameterList()
+
+        for k in range(self.n_simplexes):
+            d_k = self.d_locals[k]
+
+            self.b_dec.append(
+                nn.Parameter(torch.randn(d, device=dev, generator=gen) / (d**0.5))
+            )
+            self.b_enc.append(nn.Parameter(torch.zeros(d_k, device=dev)))
+            self.V.append(
+                nn.Parameter(torch.randn(d_k, d, device=dev, generator=gen) / (d**0.5))
+            )
+
+            D_k = torch.randn(d, d_k, device=dev, generator=gen) / (d_k**0.5)
+            D_k = D_k / D_k.norm(dim=0, keepdim=True)
+            self.D.append(nn.Parameter(D_k))
+
+            self.c.append(nn.Parameter(torch.zeros(1, device=dev)))
+
+    def resample_weights(self) -> None:
+        self._init_parameters()
+
+    def constrain_weights(self) -> None:
+        """Normalize columns of each D^(k) to unit norm."""
+        for k in range(self.n_simplexes):
+            self.D[k].data = self.D[k].data / self.D[k].data.norm(dim=0, keepdim=True)
+
+    def initialize_from_data(self, data: Tensor) -> None:
+        """Set vantage points b_d^(k) via k-means on *data*."""
+        K = self.n_simplexes
+        n = data.shape[0]
+
+        indices = torch.randperm(n, generator=self.generator)[:K]
+        centroids = data[indices].clone()
+
+        for _ in range(100):
+            dists = torch.cdist(data, centroids)
+            assignments = dists.argmin(dim=1)
+
+            new_centroids = torch.zeros_like(centroids)
+            for k in range(K):
+                mask = assignments == k
+                if mask.any():
+                    new_centroids[k] = data[mask].mean(dim=0)
+                else:
+                    new_centroids[k] = centroids[k]
+
+            if torch.allclose(centroids, new_centroids, atol=1e-6):
+                break
+            centroids = new_centroids
+
+        with torch.no_grad():
+            for k in range(K):
+                self.b_dec[k].copy_(centroids[k])
+
+    # -- Forward pass ------------------------------------------------------------
+
+    def get_gates(self, x: Tensor) -> Tensor:
+        """Gate activations g in R^{B x K}."""
+        gates = []
+        for k in range(self.n_simplexes):
+            g_k = torch.sigmoid(x @ self.b_dec[k] + self.c[k])
+            gates.append(g_k)
+        return torch.stack(gates, dim=-1)
+
+    def get_local_latents(self, x: Tensor) -> list[Tensor]:
+        """Per-simplex latents [s^(1), …, s^(K)]."""
+        g = self.get_gates(x)
+        latents = []
+        for k in range(self.n_simplexes):
+            residual = x - self.b_dec[k]
+            pre_act = residual @ self.V[k].T + self.b_enc[k]
+            s_k = g[:, k : k + 1] * torch.relu(pre_act)
+            latents.append(s_k)
+        return latents
+
+    def encode(self, x: Tensor) -> Tensor:
+        """Returns [s^(1), …, s^(K), g_1, …, g_K] in R^{d_dict + K}."""
+        g = self.get_gates(x)
+        parts: list[Tensor] = []
+        for k in range(self.n_simplexes):
+            residual = x - self.b_dec[k]
+            pre_act = residual @ self.V[k].T + self.b_enc[k]
+            s_k = g[:, k : k + 1] * torch.relu(pre_act)
+            parts.append(s_k)
+        parts.append(g)
+        return torch.cat(parts, dim=-1)
+
+    def decode(self, z: Tensor) -> Tensor:
+        """Reconstruct from [s | g] latent (last K entries are gates)."""
+        K = self.n_simplexes
+        g = z[:, -K:]
+        s = z[:, :-K]
+
+        x_hat = torch.zeros(z.shape[0], self.d_input, device=z.device)
+        offset = 0
+        for k in range(K):
+            d_k = self.d_locals[k]
+            s_k = s[:, offset : offset + d_k]
+            x_hat = x_hat + s_k @ self.D[k].T + g[:, k : k + 1] * self.b_dec[k]
+            offset += d_k
+        return x_hat
+
+    def forward(self, x: Tensor) -> tuple[Tensor, Tensor, Tensor]:  # ty:ignore
+        """Returns (x_hat, s, g)."""
+        g = self.get_gates(x)
+
+        latents = []
+        for k in range(self.n_simplexes):
+            residual = x - self.b_dec[k]
+            pre_act = residual @ self.V[k].T + self.b_enc[k]
+            s_k = g[:, k : k + 1] * torch.relu(pre_act)
+            latents.append(s_k)
+        s = torch.cat(latents, dim=-1)
+
+        x_hat = torch.zeros_like(x)
+        offset = 0
+        for k in range(self.n_simplexes):
+            d_k = self.d_locals[k]
+            s_k = s[:, offset : offset + d_k]
+            x_hat = x_hat + s_k @ self.D[k].T + g[:, k : k + 1] * self.b_dec[k]
+            offset += d_k
+
+        return x_hat, s, g
+
+    # -- Loss --------------------------------------------------------------------
+
+    def compute_loss(self, x: Tensor, x_hat: Tensor, s: Tensor, g: Tensor) -> Tensor:
+        """Full loss: reconstruction + gate sparsity + within-simplex sparsity."""
+        recon = torch.mean(torch.sum(torch.square(x - x_hat), dim=-1))
+        gate_sparse = torch.mean(torch.sum(g, dim=-1))
+        latent_sparse = torch.mean(torch.sum(torch.abs(s), dim=-1))
+        return recon + self.lambda_1 * gate_sparse + self.lambda_2 * latent_sparse
+
+    def loss(self, x_true: Tensor, x_hat: Tensor, intermediate: Tensor) -> Tensor:
+        """SparseAutoEncoderBase-compatible loss (intermediate = [s | g])."""
+        K = self.n_simplexes
+        g = intermediate[:, -K:]
+        s = intermediate[:, :-K]
+        return self.compute_loss(x_true, x_hat, s, g)
+
+    # -- Training ----------------------------------------------------------------
+
+    def train_sae(
+        self,
+        data_fn,
+        n_steps: int = 10_000,
+        batch_size: int = 1024,
+        lr: float = 3e-4,
+        sample_every: int = 25,
+    ) -> list[float]:
+        """Train loop using the 3-tuple forward."""
+        if sample_every < 1:
+            raise ValueError(f"sample_every must be positive, got {sample_every}")
+
+        optimizer = AdamW(self.parameters(), lr=lr)
+        sae_device = next(self.parameters()).device
+        loss_buffer = torch.empty(n_steps, device=sae_device)
+        raw_buffer: Tensor | None = None
+
+        for step in range(n_steps):
+            buf_offset = step % sample_every
+            if buf_offset == 0:
+                steps_left = min(sample_every, n_steps - step)
+                total_samples = steps_left * batch_size
+                raw_buffer = data_fn(total_samples).detach()
+
+            assert raw_buffer is not None
+            start = buf_offset * batch_size
+            end = start + batch_size
+            x = raw_buffer[start:end]
+
+            optimizer.zero_grad()
+            x_hat, s, g = self.forward(x)
+            cur_loss = self.compute_loss(x, x_hat, s, g)
+            cur_loss.backward()
+            optimizer.step()
+            self.constrain_weights()
+
+            loss_buffer[step] = cur_loss.detach()
+            if (step + 1) % 5000 == 0:
+                print(f"  SAE step {step + 1}/{n_steps}  loss={cur_loss.item():.4f}")
+
+        return loss_buffer.cpu().tolist()
+
+
 class CausalSAE(SparseAutoEncoderBase):
     def __init__(
         self,

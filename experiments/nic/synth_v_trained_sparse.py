@@ -22,7 +22,7 @@ from occhio.toy_model import ToyModel
 # --- Configuration ---
 DEVICE = "mps"
 SEED = 42
-N_FEATURES = 500
+N_FEATURES = 1000
 D_HIDDEN = 64
 N_EPOCHS = 30_000
 BATCH_SIZE = 512
@@ -378,11 +378,11 @@ for name, eval_loss, pf in [
     )
 
 # %% --- SAE training on both models ---
-N_DICT = N_FEATURES + 4
+N_DICT = N_FEATURES // 2
 SAE_STEPS = 50_000
 SAE_BATCH = 1024
 SAE_LR = 3e-4
-SAE_L1 = 0.15
+SAE_L1 = 0.3
 
 sae_results = {}
 

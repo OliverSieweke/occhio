@@ -20,13 +20,13 @@ gen = torch.Generator()
 gen.manual_seed(3)
 
 N_FEAT = 8
-N_HIDDEN = 4
+N_HIDDEN = 5
 
 dist = HierarchicalPairs(
     n_features=N_FEAT,
-    p_active=0.3,
+    p_active=0.2,
     p_follow=0.8,
-    beta=0.0,
+    beta=0.5,
     generator=gen,
 )
 
@@ -274,7 +274,7 @@ fig
 
 BETA_VALUES = torch.linspace(0.0, 1.0, 9)
 P_FOLLOW_VALUES = torch.linspace(0.05, 0.95, 9)
-TRAINING_SEEDS = [1, 2, 3, 4, 5, 6, 7, 8]
+TRAINING_SEEDS = [1, 2]
 
 n_pairs = N_FEAT // 2
 n_pf = len(P_FOLLOW_VALUES)

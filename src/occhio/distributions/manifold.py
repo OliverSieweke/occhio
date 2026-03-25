@@ -128,13 +128,13 @@ class TorusDistribution(Distribution):
 
     where d(θ, φ) is the geodesic (flat-torus) distance and ℓ is the length-scale.
 
-    For ``torus_dim > 1`` the number of features must be a perfect
-    ``torus_dim``-th power so that a regular grid can be formed (e.g. 16 features
-    on T² → 4 × 4 grid).
+    When ``n_features`` is a perfect ``torus_dim``-th power, a regular grid is
+    used (e.g. 16 features on T² → 4 × 4 grid).  Otherwise features are placed
+    at random angles sampled uniformly on [0, 2π)^d.
 
     Args:
-        n_features: Number of features. Must be a perfect ``torus_dim``-th power
-            when ``torus_dim > 1``.
+        n_features: Number of features. When not a perfect ``torus_dim``-th
+            power, features are placed randomly instead of on a grid.
         length_scale: Controls the width of the cosine bump. Smaller values
             give sparser activations.
         torus_dim: Number of circular factors (1 → circle, 2 → T², etc.).
@@ -155,20 +155,22 @@ class TorusDistribution(Distribution):
         self.torus_dim = torus_dim
         self.magnitude_range = magnitude_range
 
-        # Validate and compute grid size
+        # Check whether a regular grid is possible
         k = round(n_features ** (1.0 / torus_dim))
-        if k**torus_dim != n_features:
-            raise ValueError(
-                f"n_features={n_features} is not a perfect {torus_dim}-th power. "
-                f"Closest valid count is {k**torus_dim}."
-            )
-        self.grid_size = k
+        self.grid_size: int | None = k if k**torus_dim == n_features else None
 
         # Place features on the torus: (n_features, torus_dim) angles in [0, 2π)
         self.feature_angles = self._place_features()
 
     def _place_features(self) -> Tensor:
-        """Place features on a uniform grid on T^d."""
+        """Place features on a uniform grid on T^d, or randomly if no grid fits."""
+        if self.grid_size is None:
+            return (
+                2
+                * math.pi
+                * torch.rand(self.n_features, self.torus_dim, device=self.device)
+            )
+
         angles_per_dim = torch.linspace(
             0, 2 * math.pi, self.grid_size + 1, device=self.device
         )[:-1]
@@ -231,13 +233,13 @@ class HypercubeDistribution(Distribution):
     In 1-D this reduces to a triangle bump: features at 0, 1/(n−1), …, 1
     activate as ``max(1 − |U − x| / ℓ, 0)``.
 
-    For ``cube_dim > 1`` the number of features must be a perfect
-    ``cube_dim``-th power so that a regular grid can be formed (e.g. 9 features
-    on [0,1]² → 3×3 grid).
+    When ``n_features`` is a perfect ``cube_dim``-th power, a regular grid is
+    used (e.g. 9 features on [0,1]² → 3x3 grid).  Otherwise features are placed
+    at random positions sampled uniformly in [0, 1]^d.
 
     Args:
-        n_features: Number of features. Must be a perfect ``cube_dim``-th power
-            when ``cube_dim > 1``.
+        n_features: Number of features. When not a perfect ``cube_dim``-th
+            power, features are placed randomly instead of on a grid.
         length_scale: Controls the width of the tent bump.  Smaller values give
             sparser activations.
         cube_dim: Dimension of the hypercube (1 → interval, 2 → square, etc.).
@@ -258,20 +260,18 @@ class HypercubeDistribution(Distribution):
         self.cube_dim = cube_dim
         self.magnitude_range = magnitude_range
 
-        # Validate and compute grid size
+        # Check whether a regular grid is possible
         k = round(n_features ** (1.0 / cube_dim))
-        if k**cube_dim != n_features:
-            raise ValueError(
-                f"n_features={n_features} is not a perfect {cube_dim}-th power. "
-                f"Closest valid count is {k**cube_dim}."
-            )
-        self.grid_size = k
+        self.grid_size: int | None = k if k**cube_dim == n_features else None
 
         # Place features on the grid: (n_features, cube_dim) in [0, 1]
         self.feature_positions = self._place_features()
 
     def _place_features(self) -> Tensor:
-        """Place features on an evenly spaced grid in [0, 1]^d."""
+        """Place features on an evenly spaced grid in [0, 1]^d, or randomly if no grid fits."""
+        if self.grid_size is None:
+            return torch.rand(self.n_features, self.cube_dim, device=self.device)
+
         if self.grid_size == 1:
             coords = torch.tensor([0.5], device=self.device)
         else:

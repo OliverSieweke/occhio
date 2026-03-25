@@ -69,8 +69,8 @@ class HierarchicalPairs(Distribution):
 
         if self.beta is not None:
             beta = self.beta[1::2]
-            secondary_values = primary_values * (
-                beta + (1.0 - beta) * self._rand(batch_size, n_pairs)
+            secondary_values = primary_values * beta + (1.0 - beta) * self._rand(
+                batch_size, n_pairs
             )
         else:
             secondary_values = self._rand(batch_size, n_pairs)
