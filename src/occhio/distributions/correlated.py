@@ -1,6 +1,7 @@
 """Simple correlation structures."""
 
 import torch
+import numpy as np
 from torch import Tensor
 from .base import Distribution
 
@@ -69,8 +70,8 @@ class HierarchicalPairs(Distribution):
 
         if self.beta is not None:
             beta = self.beta[1::2]
-            secondary_values = primary_values * beta + (1.0 - beta) * self._rand(
-                batch_size, n_pairs
+            secondary_values = primary_values * (
+                beta + (1.0 - beta) * self._rand(batch_size, n_pairs)
             )
         else:
             secondary_values = self._rand(batch_size, n_pairs)
@@ -184,10 +185,10 @@ class CorrelatedPairs(Distribution):
     def __init__(
         self,
         n_features: int,
-        p_active: float | list[float] | Tensor | None = None,
-        p_individual: float | list[float] | Tensor | None = None,
-        correlation: float | list[float] | Tensor | None = None,
-        density: float | list[float] | Tensor | None = None,
+        p_active: float | list[float] | np.ndarray | Tensor | None = None,
+        p_individual: float | list[float] | np.ndarray | Tensor | None = None,
+        correlation: float | list[float] | np.ndarray | Tensor | None = None,
+        density: float | list[float] | np.ndarray | Tensor | None = None,
         **kwargs,
     ):
         assert n_features % 2 == 0, "Need even `n_features` for pairs."

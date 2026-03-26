@@ -6,6 +6,7 @@ from hashlib import sha256
 from math import prod
 from warnings import warn
 from typing import Literal
+import numpy as np
 
 import torch
 from torch import Tensor, hash_tensor
@@ -130,7 +131,7 @@ class Distribution(ABC):
                 )
             ).reshape(shape)
 
-    def _broadcast(self, x: float | list[float] | Tensor) -> Tensor:
+    def _broadcast(self, x: float | list[float] | np.ndarray | Tensor) -> Tensor:
         if isinstance(x, Tensor):
             if x.dim() == 0:
                 return (

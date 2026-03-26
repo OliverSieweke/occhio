@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 from scipy.optimize import linear_sum_assignment
 
 from occhio.autoencoder import TiedLinearRelu
-from occhio.distributions import SimplexDistribution, SimplicialComplexDistribution
+from occhio.distributions import SimplicialComplexDistribution
 from occhio.toy_model import ToyModel
 
 # %%
@@ -16,18 +16,15 @@ DEVICE = "mps"
 gen = torch.Generator(DEVICE)
 gen.manual_seed(6)
 
-# 3 simplices of size 3 → 9 features total
-# simplex_sizes = [2, 2, 2]
-# n_features = sum(simplex_sizes)
 n_features = 9
 n_hidden = 3
-
 
 random.seed(7)
 FACE_DIM = 1
 N_FACES = n_features
 p_active = 1 / (N_FACES)
-faces = [(0, 1, 2), (1, 2, 3), (4, 5, 6), (6, 7, 8)]
+
+faces = [(0, 1, 2), (3, 4, 5), (6, 7, 8)]
 
 dist = SimplicialComplexDistribution(
     n_vertices=n_features,
@@ -143,23 +140,20 @@ px.imshow(
 ).show()
 
 # %% --- SAE training ---
-from occhio.sae.sae import SAESimple
+from occhio.sae.sae import SimplexSAE
 
-N_DICT = 5
-SAE_STEPS = 20_000
+SAE_STEPS = 25_000
 SAE_BATCH = 1024
 SAE_LR = 3e-4
 SAE_L1 = 0.15
 
-gen_sae = torch.Generator()
-gen_sae.manual_seed(0)
-
-sae = SAESimple(
-    n_latent=n_hidden,
-    n_dict=N_DICT,
-    l1_coef=SAE_L1,
+sae = SimplexSAE(
+    d_input=n_hidden,
+    n_simplexes=3,
+    d_local=3,
+    lambda_1=0.1,
+    lambda_2=0.1,
     device=DEVICE,
-    generator=gen_sae,
 ).to(DEVICE)
 
 
@@ -193,8 +187,10 @@ with torch.no_grad():
     test_z = sae.encode(test_hidden)
     test_recon = sae.decode(test_z)
 
-    l0 = (test_z > 0).float().sum(dim=-1).mean().item()
-    ever_active = (test_z > 0).any(dim=0)
+    # Strip gate entries (last K) to get only dictionary activations
+    test_s = test_z[:, : -sae.n_simplexes]
+    l0 = (test_s > 0).float().sum(dim=-1).mean().item()
+    ever_active = (test_s > 0).any(dim=0)
     n_dead = int((~ever_active).sum().item())
     n_alive = int(ever_active.sum().item())
     recon_mse = (test_hidden - test_recon).pow(2).sum(dim=-1).mean().item()
@@ -204,13 +200,15 @@ with torch.no_grad():
     explained_var = 1 - residual_var / total_var
 
 print(
-    f"L0={l0:.1f}  Dead={n_dead}/{N_DICT}  MSE={recon_mse:.6f}  ExplVar={explained_var:.4f}"
+    f"L0={l0:.1f}  Dead={n_dead}/{sae.d_dict}  MSE={recon_mse:.6f}  ExplVar={explained_var:.4f}"
 )
 
 # %% --- MCC: cosine similarity matching between SAE decoder and ground-truth features ---
 with torch.no_grad():
     D = tm.W.detach()  # (n_hidden, n_features) — columns are feature directions
-    W_dec_t = sae.W_dec.detach().T  # (n_hidden, N_DICT)
+    W_dec_t = torch.cat(
+        [sae.D[k].detach() for k in range(sae.n_simplexes)], dim=1
+    )  # (d_input, d_dict)
     D_norm = D / D.norm(dim=0, keepdim=True).clamp(min=1e-8)
     W_norm = W_dec_t / W_dec_t.norm(dim=0, keepdim=True).clamp(min=1e-8)
     cos_sim_raw = (D_norm.T @ W_norm).cpu().numpy()  # (n_features, N_DICT)
@@ -224,12 +222,13 @@ print(f"MCC (|cos|)={mcc:.4f}  MCC (cos)={mcc_signed:.4f}")
 # %% --- SAE activations on one-hot features (cosine-matched) ---
 with torch.no_grad():
     eye = torch.eye(n_features, device=DEVICE)
-    sae_acts = sae.encode(tm.ae.encode(eye)).cpu().numpy()  # (n_features, N_DICT)
+    full_z = sae.encode(tm.ae.encode(eye))
+    sae_acts = full_z[:, : -sae.n_simplexes].cpu().numpy()  # (n_features, d_dict)
 
 matched_feats = set(feat_idx)
 matched_dicts = set(dict_idx)
 unmatched_feats = [f for f in range(n_features) if f not in matched_feats]
-unmatched_dicts = [d for d in range(N_DICT) if d not in matched_dicts]
+unmatched_dicts = [d for d in range(sae.d_dict) if d not in matched_dicts]
 
 row_order = list(feat_idx) + unmatched_feats
 col_order = list(dict_idx) + unmatched_dicts
@@ -254,76 +253,17 @@ px.imshow(
     color_continuous_scale="ylgnbu_r",
 ).show()
 
-# %% --- Dual: one-hot SAE latents → decoded feature activations (unmatched) ---
-with torch.no_grad():
-    eye_dict = torch.eye(N_DICT, device=DEVICE) * torch.tensor(
-        [0.4, 0.4, 0.7, 0.7, 0.4], device="mps"
-    )
-    decoded_acts = (
-        tm.ae.decode(sae.decode(eye_dict)).cpu().numpy()
-    )  # (N_DICT, n_features)
-    decoded_acts = np.maximum(decoded_acts, 0)
-
-px.imshow(
-    decoded_acts,
-    labels=dict(x="Feature", y="SAE dict element"),
-    x=[f"v{f}" for f in range(n_features)],
-    y=[f"d{d}" for d in range(N_DICT)],
-    title="Dual: one-hot SAE latent → ae.decode(sae.decode(·))",
-    aspect="auto",
-    color_continuous_scale="Blues",
-).show()
-
-# %% --- Activation-based matching (Hungarian on one-hot SAE activations) ---
-feat_idx_act, dict_idx_act = linear_sum_assignment(-sae_acts)
-
-matched_feats_act = set(feat_idx_act)
-matched_dicts_act = set(dict_idx_act)
-unmatched_feats_act = [f for f in range(n_features) if f not in matched_feats_act]
-unmatched_dicts_act = [d for d in range(N_DICT) if d not in matched_dicts_act]
-
-row_order_act = list(feat_idx_act) + unmatched_feats_act
-col_order_act = list(dict_idx_act) + unmatched_dicts_act
-
-sae_acts_matched_act = sae_acts[np.ix_(row_order_act, col_order_act)]
-row_labels_act = [f"v{f}" for f in row_order_act]
-col_labels_act = [f"d{d}" for d in col_order_act]
-
-n_matched_act = len(feat_idx_act)
-diag_sum_act = sum(sae_acts_matched_act[i, i] for i in range(n_matched_act))
-total_sum_act = sae_acts_matched_act.sum()
-diagonality_act = diag_sum_act / total_sum_act if total_sum_act > 0 else 0.0
-
-# Also compute MCC using activation-based matching on the cosine matrix for comparison
-cos_mcc_act = float(np.abs(cos_sim_raw)[feat_idx_act, dict_idx_act].mean())
-cos_mcc_act_signed = float(cos_sim_raw[feat_idx_act, dict_idx_act].mean())
-
-print(f"[Activation matching] Diagonality={diagonality_act:.4f}")
-print(
-    f"[Activation matching] MCC (|cos|)={cos_mcc_act:.4f}  MCC (cos)={cos_mcc_act_signed:.4f}"
-)
-print(f"[Cosine matching]     Diagonality={diagonality:.4f}")
-print(f"[Cosine matching]     MCC (|cos|)={mcc:.4f}  MCC (cos)={mcc_signed:.4f}")
-
-px.imshow(
-    sae_acts_matched_act,
-    labels=dict(
-        x="SAE dict element (activation matched)", y="Feature (activation matched)"
-    ),
-    x=col_labels_act,
-    y=row_labels_act,
-    title=f"SAE one-hot activations (activation matched, diag={diagonality_act:.3f})",
-    aspect="auto",
-    color_continuous_scale="ylgnbu_r",
-).show()
-
 # %% --- Cosine similarity matrix (matched order) + encoder bias ---
 from plotly.subplots import make_subplots
 
 cos_sim_matched = cos_sim_raw[np.ix_(row_order, col_order)]
 
 with torch.no_grad():
-    b_enc_np = sae.b_enc.detach().cpu().numpy()[col_order]
+    b_enc_np = (
+        torch.cat([sae.b_enc[k].detach() for k in range(sae.n_simplexes)])
+        .cpu()
+        .numpy()[col_order]
+    )
 
 fig_cos = make_subplots(
     rows=2,
@@ -368,69 +308,15 @@ fig_cos.update_yaxes(title_text="b_enc", row=2, col=1)
 fig_cos.update_xaxes(title_text="SAE dict element (matched)", row=2, col=1)
 fig_cos.show()
 
-# %% --- Cosine similarity matrix (activation-matched order) + encoder bias ---
-cos_sim_matched_act = cos_sim_raw[np.ix_(row_order_act, col_order_act)]
-
-with torch.no_grad():
-    b_enc_np_act = sae.b_enc.detach().cpu().numpy()[col_order_act]
-
-fig_cos_act = make_subplots(
-    rows=2,
-    cols=1,
-    row_heights=[0.85, 0.15],
-    shared_xaxes=True,
-    vertical_spacing=0.02,
-)
-
-fig_cos_act.add_trace(
-    go.Heatmap(
-        z=cos_sim_matched_act,
-        x=col_labels_act,
-        y=row_labels_act,
-        colorscale="RdBu",
-        zmin=-1,
-        zmax=1,
-        colorbar=dict(title="cos sim"),
-    ),
-    row=1,
-    col=1,
-)
-
-fig_cos_act.add_trace(
-    go.Bar(
-        x=col_labels_act,
-        y=b_enc_np_act,
-        marker_color="green",
-        name="b_enc",
-    ),
-    row=2,
-    col=1,
-)
-
-fig_cos_act.update_layout(
-    title=f"Cosine similarity (activation matched, mean={cos_mcc_act_signed:.3f})",
-    height=700,
-    showlegend=False,
-)
-fig_cos_act.update_yaxes(title_text="Feature (activation matched)", row=1, col=1)
-fig_cos_act.update_yaxes(title_text="b_enc", row=2, col=1)
-fig_cos_act.update_xaxes(
-    title_text="SAE dict element (activation matched)", row=2, col=1
-)
-fig_cos_act.show()
-
-# %% --- Detection metrics (both matchings) ---
+# %% --- Detection metrics ---
 with torch.no_grad():
     det_x = dist.sample(50_000).to(DEVICE)
     det_hidden = tm.ae.encode(det_x)
     det_z = sae.encode(det_hidden)
+    det_s = det_z[:, : -sae.n_simplexes]  # strip gates
 
-for label, fi, di in [
-    ("Cosine", feat_idx, dict_idx),
-    ("Activation", feat_idx_act, dict_idx_act),
-]:
-    gt_active = det_x[:, fi] > 0
-    pred_active = det_z[:, di] > 0
+    gt_active = det_x[:, feat_idx] > 0
+    pred_active = det_s[:, dict_idx] > 0
 
     tp = (gt_active & pred_active).float().sum(dim=0).cpu().numpy()
     fp = (~gt_active & pred_active).float().sum(dim=0).cpu().numpy()
@@ -440,13 +326,15 @@ for label, fi, di in [
     rec = tp / (tp + fn + 1e-8)
     f1 = 2 * prec * rec / (prec + rec + 1e-8)
 
-    print(
-        f"[{label:10s}] Precision={prec.mean():.4f}  Recall={rec.mean():.4f}  F1={f1.mean():.4f}"
-    )
+print(f"Precision={prec.mean():.4f}  Recall={rec.mean():.4f}  F1={f1.mean():.4f}")
 
 # %% --- Plot W embedding + matched SAE decoder dictionary ---
 with torch.no_grad():
-    W_dec_np = sae.W_dec.detach().cpu().numpy()  # (N_DICT, n_hidden)
+    W_dec_np = (
+        torch.cat([sae.D[k].detach() for k in range(sae.n_simplexes)], dim=1)
+        .T.cpu()
+        .numpy()
+    )  # (d_dict, n_hidden)
 
 # Only keep matched dictionary elements
 matched_W_dec = W_dec_np[dict_idx]  # (n_matched, n_hidden)
@@ -505,19 +393,23 @@ fig3.add_trace(
     )
 )
 
-# SAE decoder bias
+# SAE decoder biases (vantage points)
 with torch.no_grad():
-    b_dec_np = sae.b_dec.detach().cpu().numpy()
+    b_dec_all = (
+        torch.stack([sae.b_dec[k].detach() for k in range(sae.n_simplexes)])
+        .cpu()
+        .numpy()
+    )  # (K, n_hidden)
 fig3.add_trace(
     go.Scatter3d(
-        x=[b_dec_np[0]],
-        y=[b_dec_np[1]],
-        z=[b_dec_np[2]],
+        x=b_dec_all[:, 0],
+        y=b_dec_all[:, 1],
+        z=b_dec_all[:, 2],
         mode="markers+text",
         marker=dict(size=8, color="green", symbol="cross"),
-        text=["b_dec"],
+        text=[f"b_dec[{k}]" for k in range(sae.n_simplexes)],
         textposition="top center",
-        name="SAE decoder bias",
+        name="SAE vantage points",
     )
 )
 
@@ -547,88 +439,5 @@ fig3.update_layout(
     height=700,
 )
 fig3.show()
-
-# %% --- Plot W embedding + activation-matched SAE decoder dictionary ---
-matched_W_dec_act = W_dec_np[dict_idx_act]  # (n_matched, n_hidden)
-
-fig4 = go.Figure()
-
-fig4.add_trace(
-    go.Scatter3d(
-        x=hidden[:, 0],
-        y=hidden[:, 1],
-        z=hidden[:, 2],
-        mode="markers",
-        marker=dict(size=2, opacity=0.3, color="gray"),
-        text=active_verts,
-        hovertemplate="Active vertices: %{text}<extra></extra>",
-        name="Encoded samples",
-    )
-)
-
-fig4.add_trace(
-    go.Scatter3d(
-        x=W[0],
-        y=W[1],
-        z=W[2],
-        mode="markers+text",
-        marker=dict(size=6, color="blue"),
-        text=[f"v{j}" for j in range(n_features)],
-        textposition="top center",
-        name="AE features (W)",
-    )
-)
-
-fig4.add_trace(
-    go.Scatter3d(
-        x=matched_W_dec_act[:, 0],
-        y=matched_W_dec_act[:, 1],
-        z=matched_W_dec_act[:, 2],
-        mode="markers+text",
-        marker=dict(size=6, symbol="diamond", color="red"),
-        text=[f"d{d}→v{f}" for f, d in zip(feat_idx_act, dict_idx_act)],
-        textposition="bottom center",
-        name="SAE dict (activation matched)",
-    )
-)
-
-fig4.add_trace(
-    go.Scatter3d(
-        x=[b_dec_np[0]],
-        y=[b_dec_np[1]],
-        z=[b_dec_np[2]],
-        mode="markers+text",
-        marker=dict(size=8, color="green", symbol="cross"),
-        text=["b_dec"],
-        textposition="top center",
-        name="SAE decoder bias",
-    )
-)
-
-for i in range(len(feat_idx_act)):
-    f, d = feat_idx_act[i], dict_idx_act[i]
-    fig4.add_trace(
-        go.Scatter3d(
-            x=[W[0, f], matched_W_dec_act[i, 0]],
-            y=[W[1, f], matched_W_dec_act[i, 1]],
-            z=[W[2, f], matched_W_dec_act[i, 2]],
-            mode="lines",
-            line=dict(width=1, color="rgba(255,0,0,0.3)"),
-            showlegend=False,
-            hoverinfo="skip",
-        )
-    )
-
-fig4.update_layout(
-    title="AE embedding (W) vs activation-matched SAE decoder dictionary",
-    scene=dict(
-        xaxis_title="h₀",
-        yaxis_title="h₁",
-        zaxis_title="h₂",
-        aspectmode="cube",
-    ),
-    height=700,
-)
-fig4.show()
 
 # %%
