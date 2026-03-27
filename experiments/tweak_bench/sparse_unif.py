@@ -17,13 +17,13 @@ DEVICE = "mps"
 SEED = 42
 N_FEATURES = 1296
 D_HIDDEN = 100
-N_EPOCHS = 10_000
+N_EPOCHS = 20_000
 BATCH_SIZE = 512
 
 # %%
 # --- Distribution ---
-high = 0.416
-low = 1.0 / N_FEATURES
+high = 0.3
+low = 1.28 / N_FEATURES
 alpha = np.log(high / low) / np.log(N_FEATURES)
 print(f"{alpha=}")
 firing_probs = [high / (i + 1) ** alpha for i in range(N_FEATURES)]
@@ -90,7 +90,7 @@ N_DICT = N_FEATURES // 2
 SAE_STEPS = 15_000
 SAE_BATCH = 1024
 SAE_LR = 3e-4
-SAE_L1 = 0.25
+SAE_L1 = 0.3
 
 sae_gen = torch.Generator().manual_seed(4)
 
@@ -162,6 +162,8 @@ with torch.no_grad():
     total_sum = sae_acts_matched.sum()
     purity = diag_sum / total_sum if total_sum > 0 else 0.0
 
+print(f"L1={SAE_L1}, batch={SAE_BATCH}, LR={SAE_LR}")
+print(f"prec={prec.mean():.4f}, reca={rec.mean():.4f}")
 print(f"L0={l0:.1f}  MCC={mcc:.4f}  F1={f1:.4f}  R²={r2:.4f}  Purity={purity:.4f}")
 
 # %%
