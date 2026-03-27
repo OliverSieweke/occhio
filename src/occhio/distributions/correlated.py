@@ -49,8 +49,8 @@ class HierarchicalPairs(Distribution):
         self,
         n_features: int,
         p_active: float | list[float] | Tensor,
-        p_follow: float | list[float] | Tensor = 0.5,
-        beta: float | list[float] | Tensor | None = None,
+        p_follow: float | list[float] | np.ndarray | Tensor = 0.5,
+        beta: float | list[float] | np.ndarray | Tensor | None = None,
         **kwargs,
     ):
         assert n_features % 2 == 0, "Need even `n_features` for pairs."

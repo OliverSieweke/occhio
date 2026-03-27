@@ -10,7 +10,7 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 
 from occhio.autoencoder import TiedLinearRelu
-from occhio.distributions.correlated import CorrelatedPairs
+from occhio.distributions.correlated import HierarchicalPairs
 from occhio.toy_model import ToyModel
 
 # %%
@@ -26,15 +26,15 @@ BATCH_SIZE = 512
 # --- Distribution ---
 np.random.seed(8)
 
-high = 0.5
-low = 1.22 / N_FEATURES
+high = 0.45
+low = 1.3 / N_FEATURES
 alpha = np.log(high / low) / np.log(N_FEATURES)
 print(f"{alpha=}")
 firing_probs = [high / (i + 1) ** alpha for i in range(N_FEATURES)]
-corrs = 0.5 + 0.5 * np.random.random(N_FEATURES)
+betas = np.random.random(N_FEATURES)
 
-dist = CorrelatedPairs(
-    N_FEATURES, p_active=firing_probs, p_individual=corrs, device=DEVICE
+dist = HierarchicalPairs(
+    N_FEATURES, p_active=firing_probs, p_follow=0.6, beta=betas, device=DEVICE
 )
 
 # Average L0
@@ -192,5 +192,37 @@ px.imshow(
     aspect="auto",
     color_continuous_scale="ylgnbu_r",
 ).show()
+
+# %%
+# --- SAE Absorption Test ---
+PROBE_F0 = 0
+PROBE_F1 = 1
+
+fa_match_pos = int((feat_idx == PROBE_F0).nonzero()[0][0])
+fb_match_pos = int((feat_idx == PROBE_F1).nonzero()[0][0])
+da = dict_idx[fa_match_pos]  # SAE latent matched to PROBE_F0
+db = dict_idx[fb_match_pos]  # SAE latent matched to PROBE_F1
+
+print(f"f{PROBE_F0} → SAE latent d{da}   |   f{PROBE_F1} → SAE latent d{db}")
+
+with torch.no_grad():
+    # Fire PROBE_F0 alone
+    x_fa = torch.zeros(1, N_FEATURES, device=DEVICE)
+    x_fa[0, PROBE_F0] = 1.0
+    z_fa = sae.encode(tm.ae.encode(x_fa))
+
+    # Fire PROBE_F0 + PROBE_F1
+    x_fab = torch.zeros(1, N_FEATURES, device=DEVICE)
+    x_fab[0, PROBE_F0] = 1.0
+    x_fab[0, PROBE_F1] = 1.0
+    z_fab = sae.encode(tm.ae.encode(x_fab))
+
+print(f"\n=== Fire f{PROBE_F0} only ===")
+print(f"  SAE latent d{da} (matched f{PROBE_F0}): {z_fa[0, da].item():.4f}")
+print(f"  SAE latent d{db} (matched f{PROBE_F1}): {z_fa[0, db].item():.4f}")
+
+print(f"\n=== Fire f{PROBE_F0} + f{PROBE_F1} ===")
+print(f"  SAE latent d{da} (matched f{PROBE_F0}): {z_fab[0, da].item():.4f}")
+print(f"  SAE latent d{db} (matched f{PROBE_F1}): {z_fab[0, db].item():.4f}")
 
 # %%
