@@ -1,0 +1,228 @@
+# %%
+"""TiedLinearRelu on CorrelatedPairs — basic experiment boilerplate."""
+
+from sae_lens import SAE
+
+import torch
+import numpy as np
+import plotly.graph_objects as go
+import plotly.express as px
+from plotly.subplots import make_subplots
+
+from occhio.autoencoder import TiedLinearRelu
+from occhio.distributions.correlated import HierarchicalPairs
+from occhio.toy_model import ToyModel
+
+# %%
+# --- Configuration ---
+DEVICE = "mps"
+SEED = 42
+N_FEATURES = 1296
+D_HIDDEN = 100
+N_EPOCHS = 15_000
+BATCH_SIZE = 512
+
+# %%
+# --- Distribution ---
+np.random.seed(8)
+
+high = 0.45
+low = 1.3 / N_FEATURES
+alpha = np.log(high / low) / np.log(N_FEATURES)
+print(f"{alpha=}")
+firing_probs = [high / (i + 1) ** alpha for i in range(N_FEATURES)]
+betas = np.random.random(N_FEATURES)
+
+dist = HierarchicalPairs(
+    N_FEATURES, p_active=firing_probs, p_follow=0.6, beta=betas, device=DEVICE
+)
+
+# Average L0
+samples = dist.sample(100_000)
+mean_l0 = (samples > 0).float().sum(dim=-1).mean().item()
+print(f"Average L0: {mean_l0:.2f}")
+
+# %%
+# --- Train ---
+gen = torch.Generator(DEVICE).manual_seed(SEED)
+ae = TiedLinearRelu(N_FEATURES, D_HIDDEN, device=DEVICE, generator=gen)
+tm = ToyModel(distribution=dist, ae=ae, device=DEVICE)
+
+losses, _ = tm.fit(N_EPOCHS, batch_size=BATCH_SIZE, verbose=True)
+
+# %%
+# --- Plot losses ---
+px.line(losses)
+
+# %%
+# --- Plot: Feature Norms and Feature Dimensionalities ---
+fn = tm.feature_norms.detach().cpu().numpy()
+fd = tm.feature_dimensionalities.detach().cpu().numpy()
+
+fig = make_subplots(
+    rows=1,
+    cols=2,
+    subplot_titles=["Feature Norms", "Feature Dimensionalities"],
+)
+
+fig.add_trace(
+    go.Scatter(x=np.arange(N_FEATURES), y=fn, mode="lines", name="Norms"),
+    row=1,
+    col=1,
+)
+fig.add_trace(
+    go.Scatter(
+        x=np.arange(N_FEATURES),
+        y=fd,
+        mode="lines",
+        name="Dimensionalities",
+    ),
+    row=1,
+    col=2,
+)
+
+fig.update_xaxes(title_text="Feature index", row=1, col=1)
+fig.update_xaxes(title_text="Feature index", row=1, col=2)
+fig.update_yaxes(title_text="‖w‖", row=1, col=1)
+fig.update_yaxes(title_text="Dimensionality", row=1, col=2)
+fig.update_layout(
+    title=f"TiedLinearRelu — CorrelatedPairs (N={N_FEATURES}, D={D_HIDDEN})",
+    height=400,
+    width=900,
+)
+fig.show()
+
+
+# %%
+# --- SAE Training ---
+from scipy.optimize import linear_sum_assignment
+from occhio.sae.sae import SAESimple
+
+N_DICT = N_FEATURES // 2
+SAE_STEPS = 15_000
+SAE_BATCH = 1024
+SAE_LR = 3e-4
+SAE_L1 = 0.3
+
+sae_gen = torch.Generator().manual_seed(4)
+
+sae = SAESimple(n_latent=D_HIDDEN, n_dict=N_DICT, l1_coef=SAE_L1, device=DEVICE).to(
+    DEVICE
+)
+
+
+def data_fn(n: int) -> torch.Tensor:
+    x = dist.sample(n).to(DEVICE)
+    return tm.ae.encode(x)
+
+
+sae_losses = sae.train_sae(
+    data_fn=data_fn, n_steps=SAE_STEPS, batch_size=SAE_BATCH, lr=SAE_LR
+)
+# %%
+px.line(sae_losses)
+
+# %%
+# --- SAE Metrics ---
+with torch.no_grad():
+    test_x = dist.sample(50_000).to(DEVICE)
+    test_hidden = tm.ae.encode(test_x)
+    test_z = sae.encode(test_hidden)
+    test_recon = sae.decode(test_z)
+
+    # L0
+    l0 = (test_z > 0).float().sum(dim=-1).mean().item()
+
+    # R² (explained variance)
+    total_var = test_hidden.var(dim=0).sum().item()
+    residual_var = (test_hidden - test_recon).var(dim=0).sum().item()
+    r2 = 1 - residual_var / total_var
+
+    # MCC matching (cosine similarity, no abs)
+    D = tm.W.detach()  # (D_HIDDEN, N_FEATURES)
+    W_dec_t = sae.W_dec.detach().T  # (D_HIDDEN, N_DICT)
+    D_norm = D / D.norm(dim=0, keepdim=True).clamp(min=1e-8)
+    W_norm = W_dec_t / W_dec_t.norm(dim=0, keepdim=True).clamp(min=1e-8)
+    cos_sim = (D_norm.T @ W_norm).cpu().numpy()  # (N_FEATURES, N_DICT)
+
+    feat_idx, dict_idx = linear_sum_assignment(-cos_sim)
+    mcc = float(cos_sim[feat_idx, dict_idx].mean())
+
+    # F1 (detection)
+    gt_active = test_x[:, feat_idx] > 0
+    pred_active = test_z[:, dict_idx] > 0
+    tp = (gt_active & pred_active).float().sum(dim=0)
+    fp = (~gt_active & pred_active).float().sum(dim=0)
+    fn_ = (gt_active & ~pred_active).float().sum(dim=0)
+    prec = tp / (tp + fp + 1e-8)
+    rec = tp / (tp + fn_ + 1e-8)
+    f1 = (2 * prec * rec / (prec + rec + 1e-8)).mean().item()
+
+    # Purity / diagonality
+    eye = torch.eye(N_FEATURES, device=DEVICE)
+    sae_acts = sae.encode(tm.ae.encode(eye)).cpu().numpy()  # (N_FEATURES, N_DICT)
+
+    # Reorder rows/cols by MCC matching
+    matched_feats = set(feat_idx)
+    matched_dicts = set(dict_idx)
+    unmatched_feats = [f for f in range(N_FEATURES) if f not in matched_feats]
+    unmatched_dicts = [d for d in range(N_DICT) if d not in matched_dicts]
+    row_order = list(feat_idx) + unmatched_feats
+    col_order = list(dict_idx) + unmatched_dicts
+    sae_acts_matched = sae_acts[np.ix_(row_order, col_order)]
+
+    n_matched = len(feat_idx)
+    diag_sum = sum(sae_acts_matched[i, i] for i in range(n_matched))
+    total_sum = sae_acts_matched.sum()
+    purity = diag_sum / total_sum if total_sum > 0 else 0.0
+print(f"L1={SAE_L1}, batch={SAE_BATCH}, LR={SAE_LR}")
+print(f"L0={l0:.1f}  MCC={mcc:.4f}  F1={f1:.4f}  R²={r2:.4f}  Purity={purity:.4f}")
+
+# %%
+# --- Plot: SAE one-hot activations (MCC matched) ---
+row_labels = [f"f{f}" for f in row_order]
+col_labels = [f"d{d}" for d in col_order]
+
+px.imshow(
+    sae_acts_matched,
+    labels=dict(x="SAE dict element (MCC matched)", y="Feature (MCC matched)"),
+    x=col_labels,
+    y=row_labels,
+    title=f"SAE one-hot activations (MCC matched, purity={purity:.3f})",
+    aspect="auto",
+    color_continuous_scale="ylgnbu_r",
+).show()
+
+# %%
+# --- SAE Absorption Test ---
+PROBE_F0 = 0
+PROBE_F1 = 1
+
+fa_match_pos = int((feat_idx == PROBE_F0).nonzero()[0][0])
+fb_match_pos = int((feat_idx == PROBE_F1).nonzero()[0][0])
+da = dict_idx[fa_match_pos]  # SAE latent matched to PROBE_F0
+db = dict_idx[fb_match_pos]  # SAE latent matched to PROBE_F1
+
+print(f"f{PROBE_F0} → SAE latent d{da}   |   f{PROBE_F1} → SAE latent d{db}")
+
+with torch.no_grad():
+    # Fire PROBE_F0 alone
+    x_fa = torch.zeros(1, N_FEATURES, device=DEVICE)
+    x_fa[0, PROBE_F0] = 1.0
+    z_fa = sae.encode(tm.ae.encode(x_fa))
+
+    # Fire PROBE_F0 + PROBE_F1
+    x_fab = torch.zeros(1, N_FEATURES, device=DEVICE)
+    x_fab[0, PROBE_F0] = 1.0
+    x_fab[0, PROBE_F1] = 1.0
+    z_fab = sae.encode(tm.ae.encode(x_fab))
+
+print(f"\n=== Fire f{PROBE_F0} only ===")
+print(f"  SAE latent d{da} (matched f{PROBE_F0}): {z_fa[0, da].item():.4f}")
+print(f"  SAE latent d{db} (matched f{PROBE_F1}): {z_fa[0, db].item():.4f}")
+
+print(f"\n=== Fire f{PROBE_F0} + f{PROBE_F1} ===")
+print(f"  SAE latent d{da} (matched f{PROBE_F0}): {z_fab[0, da].item():.4f}")
+print(f"  SAE latent d{db} (matched f{PROBE_F1}): {z_fab[0, db].item():.4f}")
+
+# %%

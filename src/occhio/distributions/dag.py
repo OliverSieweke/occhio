@@ -238,7 +238,10 @@ class DAGRandomWalkToRoot(Distribution):
         if adjacency is None:
             self.regenerate_dag()
         else:
-            assert adjacency.shape == (n_features, n_features), (
+            assert adjacency.shape == (
+                n_features,
+                n_features,
+            ), (
                 f"adjacency shape = {adjacency.shape} needs to equal (n_features, n_features)"
             )
             self.adjacency = torch.as_tensor(adjacency)

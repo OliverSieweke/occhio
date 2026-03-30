@@ -9,7 +9,11 @@ from occhio.model_grid import ModelGrid, Axis
 from occhio.sae import SAESimple
 from occhio.autoencoder import TiedLinearRelu
 from occhio.toy_model import ToyModel
+
+import numpy as np
+from scipy.optimize import linear_sum_assignment
 import torch
+
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -19,14 +23,14 @@ torch.set_printoptions(3, sci_mode=False)
 gen = torch.Generator()
 gen.manual_seed(3)
 
-N_FEAT = 8
-N_HIDDEN = 4
+N_FEAT = 2
+N_HIDDEN = 2
 
 dist = HierarchicalPairs(
     n_features=N_FEAT,
-    p_active=0.3,
-    p_follow=0.8,
-    beta=0.0,
+    p_active=0.8,
+    p_follow=0.6,
+    beta=0.99,
     generator=gen,
 )
 
@@ -61,9 +65,9 @@ px.scatter(
 
 # %%
 gen_sae = torch.Generator()
-gen_sae.manual_seed(41)
+gen_sae.manual_seed(4)
 
-sae = SAESimple(N_HIDDEN, N_FEAT + 4, l1_coef=0.02, generator=gen_sae)
+sae = SAESimple(N_HIDDEN, N_FEAT + 4, l1_coef=0.05, generator=gen_sae)
 sae_losses = sae.train_sae(tm.sample_latent, 20_000)
 
 px.line(sae_losses, title="SAE loss")
@@ -91,6 +95,113 @@ px.imshow(
     title="Feature -> SAE Dictionary",
     labels=dict(x="Dictionary Dim", y="Feature"),
 )
+
+# %% --- Feature embeddings + matched SAE decoder + decoder bias ---
+
+feat_idx, dict_idx = linear_sum_assignment(-encoded_patterns)
+matched_W_dec = sae.W_dec.detach().numpy()[dict_idx]  # (n_matched, n_hidden)
+b_dec_np = sae.b_dec.detach().numpy()
+
+fig_match = go.Figure()
+
+# Lines from origin to feature embeddings
+for j in range(N_FEAT):
+    fig_match.add_trace(
+        go.Scatter(
+            x=[0, emb[0, j]],
+            y=[0, emb[1, j]],
+            mode="lines",
+            line=dict(width=3, color="rgba(0,0,255,0.3)"),
+            showlegend=False,
+            hoverinfo="skip",
+        )
+    )
+
+# Feature embeddings
+fig_match.add_trace(
+    go.Scatter(
+        x=emb[0],
+        y=emb[1],
+        mode="markers+text",
+        marker=dict(size=12, color="blue"),
+        text=[f"f{i}" for i in range(N_FEAT)],
+        textposition="top center",
+        name="AE features (W)",
+    )
+)
+
+# Matched SAE decoder dictionary elements
+fig_match.add_trace(
+    go.Scatter(
+        x=matched_W_dec[:, 0],
+        y=matched_W_dec[:, 1],
+        mode="markers+text",
+        marker=dict(size=12, symbol="diamond", color="red"),
+        text=[f"d{d}→f{f}" for f, d in zip(feat_idx, dict_idx)],
+        textposition="bottom center",
+        name="SAE dict (matched)",
+    )
+)
+
+# Lines connecting matched pairs
+for i in range(len(feat_idx)):
+    f = feat_idx[i]
+    fig_match.add_trace(
+        go.Scatter(
+            x=[emb[0, f], matched_W_dec[i, 0]],
+            y=[emb[1, f], matched_W_dec[i, 1]],
+            mode="lines",
+            line=dict(width=3, color="rgba(255,0,0,0.3)", dash="dot"),
+            showlegend=False,
+            hoverinfo="skip",
+        )
+    )
+
+# f0 + f1 sum vector
+f0f1_sum = emb[:, 0] + emb[:, 1]
+fig_match.add_trace(
+    go.Scatter(
+        x=[0, f0f1_sum[0]],
+        y=[0, f0f1_sum[1]],
+        mode="lines",
+        line=dict(width=3, color="rgba(128,0,128,0.3)"),
+        showlegend=False,
+        hoverinfo="skip",
+    )
+)
+fig_match.add_trace(
+    go.Scatter(
+        x=[f0f1_sum[0]],
+        y=[f0f1_sum[1]],
+        mode="markers+text",
+        marker=dict(size=12, symbol="star", color="purple"),
+        text=["f0+f1"],
+        textposition="top center",
+        name="f0 + f1",
+    )
+)
+
+# SAE decoder bias
+fig_match.add_trace(
+    go.Scatter(
+        x=[b_dec_np[0]],
+        y=[b_dec_np[1]],
+        mode="markers+text",
+        marker=dict(size=12, color="green", symbol="cross"),
+        text=["b_dec"],
+        textposition="top center",
+        name="SAE decoder bias",
+    )
+)
+
+mcc = float(np.abs(encoded_patterns)[feat_idx, dict_idx].mean())
+fig_match.update_layout(
+    title=f"Feature embeddings vs matched SAE decoder (MCC={mcc:.3f})",
+    xaxis_title="h₀",
+    yaxis_title="h₁",
+    height=600,
+)
+fig_match
 
 # %%
 n_pairs = N_FEAT // 2
@@ -125,7 +236,7 @@ px.imshow(
 # Phase transition: angle between parent-child pairs vs beta
 
 # %%
-BETA_VALUES = torch.linspace(0.0, 1.0, 17)
+BETA_VALUES = torch.linspace(0.0, 1.0, 32)
 
 
 def create_model(params: dict):
@@ -134,7 +245,7 @@ def create_model(params: dict):
     dist = HierarchicalPairs(
         n_features=N_FEAT,
         p_active=2 / (N_FEAT + 1),
-        p_follow=0.8,
+        p_follow=0.5,
         beta=params["Beta"].item(),
         generator=gen_grid,
     )
@@ -187,7 +298,7 @@ fig
 # Phase transition: angle vs beta AND p_active (2D grid)
 
 BETA_VALUES_2D = torch.linspace(0.0, 1.0, 9)
-P_ACTIVE_VALUES = torch.linspace(0.05, 0.95, 9)
+P_ACTIVE_VALUES = torch.logspace(np.log10(0.05), np.log10(0.95), 9)
 
 
 def create_model_2d(params: dict):
@@ -196,7 +307,7 @@ def create_model_2d(params: dict):
     dist = HierarchicalPairs(
         n_features=N_FEAT,
         p_active=params["p_active"].item(),
-        p_follow=0.8,
+        p_follow=0.5,
         beta=params["Beta"].item(),
         generator=gen_grid,
     )
@@ -274,7 +385,7 @@ fig
 
 BETA_VALUES = torch.linspace(0.0, 1.0, 9)
 P_FOLLOW_VALUES = torch.linspace(0.05, 0.95, 9)
-TRAINING_SEEDS = [1, 2, 3, 4, 5, 6, 7, 8]
+TRAINING_SEEDS = [1, 2]
 
 n_pairs = N_FEAT // 2
 n_pf = len(P_FOLLOW_VALUES)

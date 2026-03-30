@@ -8,6 +8,7 @@ from hashlib import sha256
 from math import prod
 from pathlib import Path
 from typing import Literal
+import numpy as np
 from warnings import warn
 
 import torch
@@ -137,14 +138,18 @@ class Distribution(ABC):
                 )
             ).reshape(shape)
 
-    def _broadcast(self, x: float | list[float] | Tensor) -> Tensor:
+    def _broadcast(self, x: float | list[float] | np.ndarray | Tensor) -> Tensor:
         if isinstance(x, Tensor):
             if x.dim() == 0:
-                return x.expand(self.n_features).clone().to(self.device)
-            return x.to(self.device)
+                return (
+                    x.expand(self.n_features)
+                    .clone()
+                    .to(device=self.device, dtype=torch.float32)
+                )
+            return x.to(device=self.device, dtype=torch.float32)
         if isinstance(x, (int, float)):
             return torch.full((self.n_features,), x, device=self.device)
-        return torch.as_tensor(x, device=self.device)
+        return torch.as_tensor(x, dtype=torch.float32, device=self.device)
 
     def save_samples(self, n_samples: int, path: str | Path | None = None) -> Path:
         """Sample from this distribution and save to a ``.safetensors`` file and a companion ``.json``.

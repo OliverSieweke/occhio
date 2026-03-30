@@ -1,6 +1,7 @@
 """Simple correlation structures."""
 
 import torch
+import numpy as np
 from torch import Tensor
 from .base import Distribution
 
@@ -20,7 +21,7 @@ class HierarchicalPairs(Distribution):
         p_follow: Conditional probability that the secondary feature (2i+1)
             activates given that the primary feature is active. Defaults to 0.5.
             Scalar or per-feature.
-        beta: Magnitude coupling factor in [0, 1]. When set, the
+        beta: Optional magnitude coupling factor in [0, 1]. Scalar or per-feature. When set, the
             secondary feature's value is tied to the primary's:
             ``v_child = v_parent * (beta + (1 - beta) * U)`` where
             ``U ~ Uniform(0, 1)``. At ``beta=1.0`` the child copies the
@@ -49,8 +50,8 @@ class HierarchicalPairs(Distribution):
         self,
         n_features: int,
         p_active: float | list[float] | Tensor,
-        p_follow: float | list[float] | Tensor = 0.5,
-        beta: float | list[float] | Tensor | None = None,
+        p_follow: float | list[float] | np.ndarray | Tensor = 0.5,
+        beta: float | list[float] | np.ndarray | Tensor | None = None,
         **kwargs,
     ):
         assert n_features % 2 == 0, "Need even `n_features` for pairs."
@@ -69,9 +70,9 @@ class HierarchicalPairs(Distribution):
         primary_values = self._rand(batch_size, n_pairs)
 
         if self.beta is not None:
-            beta_pairs = self.beta[1::2]
-            secondary_values = primary_values * (
-                beta_pairs + (1.0 - beta_pairs) * self._rand(batch_size, n_pairs)
+            beta = self.beta[1::2]
+            secondary_values = primary_values * beta + (1.0 - beta) * self._rand(
+                batch_size, n_pairs
             )
         else:
             secondary_values = self._rand(batch_size, n_pairs)
@@ -185,10 +186,10 @@ class CorrelatedPairs(Distribution):
     def __init__(
         self,
         n_features: int,
-        p_active: float | list[float] | Tensor | None = None,
-        p_individual: float | list[float] | Tensor | None = None,
-        correlation: float | list[float] | Tensor | None = None,
-        density: float | list[float] | Tensor | None = None,
+        p_active: float | list[float] | np.ndarray | Tensor | None = None,
+        p_individual: float | list[float] | np.ndarray | Tensor | None = None,
+        correlation: float | list[float] | np.ndarray | Tensor | None = None,
+        density: float | list[float] | np.ndarray | Tensor | None = None,
         **kwargs,
     ):
         assert n_features % 2 == 0, "Need even `n_features` for pairs."

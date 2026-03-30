@@ -219,12 +219,6 @@ class SimplicialComplexDistribution(Distribution):
             for j, v in enumerate(face):
                 result[fire, v] += dirichlet[:, j]
 
-        # Re-normalize rows that have any mass so active vertices sum to 1
-        row_sums = result.sum(dim=-1, keepdim=True).clamp(min=1e-10)
-        result = result / row_sums
-        # Zero out rows where nothing fired
-        result[row_sums.squeeze(-1) < 1e-9] = 0.0
-
         return result
 
     def _sample_sparse_fast(self, batch_size: int) -> Tensor:
@@ -250,10 +244,5 @@ class SimplicialComplexDistribution(Distribution):
         result.scatter_add_(
             1, indices.reshape(batch_size, -1), dirichlet.reshape(batch_size, -1)
         )
-
-        # Re-normalize rows with mass so active vertices sum to 1
-        row_sums = result.sum(dim=-1, keepdim=True).clamp(min=1e-10)
-        result = result / row_sums
-        result[row_sums.squeeze(-1) < 1e-9] = 0.0
 
         return result

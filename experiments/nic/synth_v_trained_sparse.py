@@ -22,9 +22,9 @@ from occhio.toy_model import ToyModel
 # --- Configuration ---
 DEVICE = "mps"
 SEED = 42
-N_FEATURES = 200
-D_HIDDEN = 36
-N_EPOCHS = 20_000
+N_FEATURES = 1000
+D_HIDDEN = 64
+N_EPOCHS = 30_000
 BATCH_SIZE = 512
 EVAL_SAMPLES = 2**14
 EVAL_FREQ = 250
@@ -32,14 +32,12 @@ EVAL_FREQ = 250
 # %%
 # --- Zipfian firing probabilities ---
 # Matches the SyntheticDataModel zipfian config: p_max=0.4, p_min=0.5/N, alpha=0.5
-P_MAX = 0.4
-P_MIN = 0.5 / N_FEATURES
-ALPHA = 0.5
+high = 0.2
+low = 0.5 / N_FEATURES
+alpha = np.log(high / low) / np.log(N_FEATURES)
+print(f"{alpha=}")
+firing_probs = [high / (i + 1) ** alpha for i in range(N_FEATURES)]
 
-ranks = np.arange(1, N_FEATURES + 1, dtype=np.float64)
-raw = ranks ** (-ALPHA)
-# Rescale so that rank 1 → P_MAX, rank N → P_MIN
-firing_probs = P_MIN + (P_MAX - P_MIN) * (raw - raw[-1]) / (raw[0] - raw[-1])
 firing_probs = torch.tensor(firing_probs, dtype=torch.float32)
 
 dist = SparseUniform(N_FEATURES, p_active=firing_probs, device=DEVICE)
@@ -113,13 +111,13 @@ ae_synth_ortho = SynthAE(
     N_FEATURES,
     D_HIDDEN,
     orthogonalize=True,
-    ortho_steps=2_000,
+    ortho_steps=100,
     ortho_lr=3e-4,
     device=DEVICE,
     generator=gen3,
 )
 tm_synth_ortho = ToyModel(distribution=dist, ae=ae_synth_ortho, device=DEVICE)
-
+print("Initialized")
 N_EPOCHS_SYNTH = 10_000
 _, hook_results_synth = tm_synth_ortho.fit(
     N_EPOCHS_SYNTH,
@@ -165,26 +163,25 @@ sort_idx = np.argsort(-fp_np)
 
 fig = go.Figure()
 fig.add_trace(
-    go.Bar(
+    go.Scatter(
         x=np.arange(N_FEATURES),
         y=final_tied[sort_idx],
         name="TiedLinearRelu",
-        opacity=0.7,
+        mode="lines",
     )
 )
 fig.add_trace(
-    go.Bar(
+    go.Scatter(
         x=np.arange(N_FEATURES),
         y=pf_synth_ortho[sort_idx],
         name="SynthAE (ortho)",
-        opacity=0.7,
+        mode="lines",
     )
 )
 fig.update_layout(
     title="Per-Feature Reconstruction MSE (sorted by firing probability)",
     xaxis_title="Feature rank (most frequent → rarest)",
     yaxis_title="MSE",
-    barmode="group",
 )
 fig.show()
 
@@ -381,11 +378,11 @@ for name, eval_loss, pf in [
     )
 
 # %% --- SAE training on both models ---
-N_DICT = N_FEATURES + 4
-SAE_STEPS = 100_000
+N_DICT = N_FEATURES // 2
+SAE_STEPS = 50_000
 SAE_BATCH = 1024
 SAE_LR = 3e-4
-SAE_L1 = 0.05
+SAE_L1 = 0.3
 
 sae_results = {}
 
@@ -444,6 +441,7 @@ for name, tm in [("TiedLinearRelu", tm_tied), ("SynthAE (ortho)", tm_synth_ortho
 
     sae_results[name] = {
         "sae": sae,
+        "tm": tm,
         "losses": sae_losses,
         "l0": l0,
         "n_dead": n_dead,
@@ -498,13 +496,20 @@ for name in names:
     tm_ref = tm_tied if name == "TiedLinearRelu" else tm_synth_ortho
     with torch.no_grad():
         eye = torch.eye(N_FEATURES, device=DEVICE)
+
+        # SAE activations on one-hot features
         sae_acts = (
             sae.encode(tm_ref.ae.encode(eye)).cpu().numpy()
         )  # (N_FEATURES, N_DICT)
 
-    # Hungarian matching: maximize total activation along the matched pairs
-    cost = -sae_acts  # (N_FEATURES, N_DICT)
-    feat_idx, dict_idx = linear_sum_assignment(cost)
+        # Cosine similarity matching
+        D = tm_ref.ae.encode(eye)  # (N_FEATURES, D_HIDDEN)
+        D_normed = D / D.norm(dim=1, keepdim=True)
+        W_dec = sae.W_dec.data  # (N_DICT, D_HIDDEN)
+        W_dec_normed = W_dec / W_dec.norm(dim=1, keepdim=True)
+        cosine_sim = (D_normed @ W_dec_normed.T).cpu().numpy()  # (N_FEATURES, N_DICT)
+
+    feat_idx, dict_idx = linear_sum_assignment(-cosine_sim)
 
     # Reorder both rows and columns: matched pairs form the top-left diagonal,
     # then append unmatched features (rows) and unmatched dict elements (cols)
@@ -526,84 +531,434 @@ for name in names:
     total_sum = sae_acts_matched.sum()
     diagonality = diag_sum / total_sum if total_sum > 0 else 0.0
     sae_results[name]["diagonality"] = diagonality
+
+    mean_cosine = cosine_sim[feat_idx, dict_idx].mean()
     print(
-        f"{name}: diagonality = {diagonality:.4f} (diag_sum={diag_sum:.2f}, total={total_sum:.2f})"
+        f"{name}: diagonality = {diagonality:.4f} (diag_sum={diag_sum:.2f}, total={total_sum:.2f})  "
+        f"mean_cosine = {mean_cosine:.4f}"
     )
 
     px.imshow(
         sae_acts_matched,
-        labels=dict(x="SAE dict element (matched)", y="Feature (matched)"),
+        labels=dict(
+            x="SAE dict element (cosine matched)", y="Feature (cosine matched)"
+        ),
         x=col_labels,
         y=row_labels,
-        title=f"SAE one-hot activations (Hungarian matched, diag={diagonality:.3f}) — {name}",
+        title=f"SAE one-hot activations (cosine matched, diag={diagonality:.3f}) — {name}",
         aspect="auto",
         color_continuous_scale="ylgnbu_r",
     ).show()
 
-# %% --- SAE summary print ---
-print("\n=== SAE Summary ===")
-print(
-    f"{'Model':25s}  {'MSE':>10s}  {'L0':>6s}  {'Dead':>6s}  {'Alive':>6s}  {'ExplVar':>8s}  {'Diag':>6s}"
-)
+    cosine_sim_matched = cosine_sim[np.ix_(row_order, col_order)]
+    px.imshow(
+        cosine_sim_matched,
+        labels=dict(
+            x="SAE dict element (cosine matched)", y="Feature (cosine matched)"
+        ),
+        x=col_labels,
+        y=row_labels,
+        title=f"Cosine similarity (matched, mean={mean_cosine:.3f}) — {name}",
+        aspect="auto",
+        color_continuous_scale="RdBu",
+        zmin=-1,
+        zmax=1,
+    ).show()
+
+# %% --- SAE evaluation: MCC, detection metrics ---
 for name, res in sae_results.items():
+    sae = res["sae"]
+    tm = res["tm"]
+
+    with torch.no_grad():
+        # Mean Correlation Coefficient (MCC) — O'Neill et al. (2025)
+        # Cosine similarity between SAE decoder columns and ground-truth features
+        D = tm.W.detach()  # (D_HIDDEN, N_FEATURES) — columns are feature directions
+        W_dec_t = sae.W_dec.detach().T  # (D_HIDDEN, N_DICT) — columns are decoder dirs
+        D_norm = D / D.norm(dim=0, keepdim=True).clamp(min=1e-8)
+        W_norm = W_dec_t / W_dec_t.norm(dim=0, keepdim=True).clamp(min=1e-8)
+        cos_sim_raw = (D_norm.T @ W_norm).cpu().numpy()  # (N_FEATURES, N_DICT)
+        cos_sim_abs = np.abs(cos_sim_raw)
+
+        # Matching with absolute cosine similarity (ignores sign flips)
+        mcc_feat_idx_abs, mcc_dict_idx_abs = linear_sum_assignment(-cos_sim_abs)
+        res["mcc_abs_abs"] = float(
+            cos_sim_abs[mcc_feat_idx_abs, mcc_dict_idx_abs].mean()
+        )
+        res["mcc_abs_cos"] = float(
+            cos_sim_raw[mcc_feat_idx_abs, mcc_dict_idx_abs].mean()
+        )
+
+        # Matching with cosine similarity (no abs, penalises anti-alignment)
+        mcc_feat_idx_cos, mcc_dict_idx_cos = linear_sum_assignment(-cos_sim_raw)
+        res["mcc_cos_cos"] = float(
+            cos_sim_raw[mcc_feat_idx_cos, mcc_dict_idx_cos].mean()
+        )
+        res["mcc_cos_abs"] = float(
+            cos_sim_abs[mcc_feat_idx_cos, mcc_dict_idx_cos].mean()
+        )
+
+        # Store both matchings
+        res["mcc_feat_idx_abs"] = mcc_feat_idx_abs
+        res["mcc_dict_idx_abs"] = mcc_dict_idx_abs
+        res["mcc_feat_idx_cos"] = mcc_feat_idx_cos
+        res["mcc_dict_idx_cos"] = mcc_dict_idx_cos
+
+        # Detection metrics for both matchings
+        det_x = dist.sample(50_000).to(DEVICE)
+        det_hidden = tm.ae.encode(det_x)
+        det_z = sae.encode(det_hidden)  # (50000, N_DICT)
+
+        for suffix, fi, di in [
+            ("_abs", mcc_feat_idx_abs, mcc_dict_idx_abs),
+            ("_cos", mcc_feat_idx_cos, mcc_dict_idx_cos),
+        ]:
+            gt_active = det_x[:, fi] > 0
+            pred_active = det_z[:, di] > 0
+
+            tp = (gt_active & pred_active).float().sum(dim=0).cpu().numpy()
+            fp = (~gt_active & pred_active).float().sum(dim=0).cpu().numpy()
+            fn = (gt_active & ~pred_active).float().sum(dim=0).cpu().numpy()
+            tn = (~gt_active & ~pred_active).float().sum(dim=0).cpu().numpy()
+
+            prec = tp / (tp + fp + 1e-8)
+            rec = tp / (tp + fn + 1e-8)
+            f1 = 2 * prec * rec / (prec + rec + 1e-8)
+            fpr = fp / (fp + tn + 1e-8)
+
+            res[f"precision{suffix}"] = float(prec.mean())
+            res[f"recall{suffix}"] = float(rec.mean())
+            res[f"f1{suffix}"] = float(f1.mean())
+            res[f"fpr{suffix}"] = float(fpr.mean())
+            res[f"precision_per{suffix}"] = prec
+            res[f"recall_per{suffix}"] = rec
+            res[f"f1_per{suffix}"] = f1
+            res[f"fpr_per{suffix}"] = fpr
+            res[f"confusion{suffix}"] = np.array(
+                [[tn.sum(), fp.sum()], [fn.sum(), tp.sum()]]
+            )
+
     print(
-        f"{name:25s}  {res['recon_mse']:10.6f}  {res['l0']:6.1f}  "
-        f"{res['n_dead']:6d}  {res['n_alive']:6d}  {res['explained_var']:8.4f}  "
-        f"{res.get('diagonality', 0):6.4f}"
+        f"{name}: abs_match(|cos|={res['mcc_abs_abs']:.4f}, cos={res['mcc_abs_cos']:.4f})  "
+        f"cos_match(|cos|={res['mcc_cos_abs']:.4f}, cos={res['mcc_cos_cos']:.4f})"
     )
 
-# %%
-# %% --- SAE summary comparison ---
+# %% --- SAE summary print ---
+_hdr1 = f"{'Model':25s}  {'MSE↓':>10s}  {'L0↓':>6s}  {'Dead↓':>6s}  {'Alive↑':>6s}  {'ExplVar↑':>8s}  {'Diag↑':>6s}"
+_hdr2 = f"{'':25s}  {'MCC_abs↑':>8s}  {'MCC_cos↑':>8s}  {'Prec↑':>6s}  {'Rec↑':>6s}  {'F1↑':>6s}  {'FPR↓':>6s}"
+
+for match_label, sfx in [("abs cos-sim", "_abs"), ("cos-sim", "_cos")]:
+    print(f"\n|| SAE Summary (matched on {match_label}) || L1 = {SAE_L1}")
+    print(_hdr1)
+    print(_hdr2)
+    for name, res in sae_results.items():
+        print(
+            f"{name:25s}  {res['recon_mse']:10.6f}  {res['l0']:6.1f}  "
+            f"{res['n_dead']:6d}  {res['n_alive']:6d}  {res['explained_var']:8.4f}  "
+            f"{res.get('diagonality', 0):6.4f}"
+        )
+        print(
+            f"{'':25s}  {res.get(f'mcc{sfx}_abs', 0):8.4f}  {res.get(f'mcc{sfx}_cos', 0):8.4f}  "
+            f"{res[f'precision{sfx}']:6.4f}  {res[f'recall{sfx}']:6.4f}  "
+            f"{res[f'f1{sfx}']:6.4f}  {res[f'fpr{sfx}']:6.4f}"
+        )
+
+
+# %% --- Per-feature detection metrics (sorted by firing probability) ---
 fig = make_subplots(
     rows=1,
-    cols=5,
-    subplot_titles=[
-        "Recon MSE",
-        "Mean L0",
-        "Dead Features",
-        "Explained Variance",
-        "Diagonality",
-    ],
+    cols=4,
+    subplot_titles=["Precision", "Recall (TPR)", "F1 Score", "FPR"],
 )
 
-for i, (name, color) in enumerate(zip(names, colors)):
+model_colors = {"TiedLinearRelu": "blue", "SynthAE (ortho)": "green"}
+for name in names:
     res = sae_results[name]
+    # The per-feature arrays are indexed by matched order (mcc_feat_idx).
+    # Re-sort by firing probability for display.
+    feat_order = np.argsort(-fp_np[res["mcc_feat_idx_cos"]])
+    color = model_colors[name]
+    x = np.arange(len(feat_order))
+
     fig.add_trace(
-        go.Bar(x=[name], y=[res["recon_mse"]], marker_color=color, showlegend=False),
+        go.Scatter(
+            x=x,
+            y=res["precision_per_cos"][feat_order],
+            name=name,
+            mode="lines",
+            line=dict(color=color),
+        ),
         row=1,
         col=1,
     )
     fig.add_trace(
-        go.Bar(x=[name], y=[res["l0"]], marker_color=color, showlegend=False),
+        go.Scatter(
+            x=x,
+            y=res["recall_per_cos"][feat_order],
+            name=name,
+            mode="lines",
+            showlegend=False,
+            line=dict(color=color),
+        ),
         row=1,
         col=2,
     )
     fig.add_trace(
-        go.Bar(x=[name], y=[res["n_dead"]], marker_color=color, showlegend=False),
+        go.Scatter(
+            x=x,
+            y=res["f1_per_cos"][feat_order],
+            name=name,
+            mode="lines",
+            showlegend=False,
+            line=dict(color=color),
+        ),
         row=1,
         col=3,
     )
     fig.add_trace(
-        go.Bar(
-            x=[name], y=[res["explained_var"]], marker_color=color, showlegend=False
+        go.Scatter(
+            x=x,
+            y=res["fpr_per_cos"][feat_order],
+            name=name,
+            mode="lines",
+            showlegend=False,
+            line=dict(color=color),
         ),
         row=1,
         col=4,
     )
-    fig.add_trace(
-        go.Bar(
-            x=[name],
-            y=[res.get("diagonality", 0)],
-            marker_color=color,
-            showlegend=False,
-        ),
-        row=1,
-        col=5,
-    )
 
 fig.update_layout(
-    title=f"SAE Comparison (dict={N_DICT}, L1={SAE_L1})", height=400, width=1400
+    title="Per-Feature Detection Metrics (sorted by firing probability)",
+    height=400,
+    width=1400,
 )
+for col in range(1, 5):
+    fig.update_xaxes(title_text="Feature rank", row=1, col=col)
+fig.show()
+
+# %% --- Encoder-based matching (using SAE activations on one-hot inputs) ---
+for name in names:
+    res = sae_results[name]
+    sae = res["sae"]
+    tm = res["tm"]
+
+    with torch.no_grad():
+        eye = torch.eye(N_FEATURES, device=DEVICE)
+        sae_acts = sae.encode(tm.ae.encode(eye)).cpu().numpy()  # (N_FEATURES, N_DICT)
+
+        # Match by maximizing total activation on the diagonal
+        enc_feat_idx, enc_dict_idx = linear_sum_assignment(-sae_acts)
+
+        res["enc_feat_idx"] = enc_feat_idx
+        res["enc_dict_idx"] = enc_dict_idx
+
+        # Mean activation on matched diagonal (encoder analogue of MCC)
+        res["enc_mean_act"] = float(sae_acts[enc_feat_idx, enc_dict_idx].mean())
+
+        # Also compute cosine similarity for encoder-matched pairs (for comparison)
+        D = tm.W.detach()  # (D_HIDDEN, N_FEATURES)
+        W_dec_t = sae.W_dec.detach().T  # (D_HIDDEN, N_DICT)
+        D_norm = D / D.norm(dim=0, keepdim=True).clamp(min=1e-8)
+        W_norm = W_dec_t / W_dec_t.norm(dim=0, keepdim=True).clamp(min=1e-8)
+        cos_sim_raw = (D_norm.T @ W_norm).cpu().numpy()  # (N_FEATURES, N_DICT)
+
+        res["enc_mcc_cos"] = float(cos_sim_raw[enc_feat_idx, enc_dict_idx].mean())
+        res["enc_mcc_abs"] = float(
+            np.abs(cos_sim_raw)[enc_feat_idx, enc_dict_idx].mean()
+        )
+
+        # Detection metrics for encoder matching
+        det_x = dist.sample(50_000).to(DEVICE)
+        det_hidden = tm.ae.encode(det_x)
+        det_z = sae.encode(det_hidden)  # (50000, N_DICT)
+
+        gt_active = det_x[:, enc_feat_idx] > 0
+        pred_active = det_z[:, enc_dict_idx] > 0
+
+        tp = (gt_active & pred_active).float().sum(dim=0).cpu().numpy()
+        fp = (~gt_active & pred_active).float().sum(dim=0).cpu().numpy()
+        fn = (gt_active & ~pred_active).float().sum(dim=0).cpu().numpy()
+        tn = (~gt_active & ~pred_active).float().sum(dim=0).cpu().numpy()
+
+        prec = tp / (tp + fp + 1e-8)
+        rec = tp / (tp + fn + 1e-8)
+        f1 = 2 * prec * rec / (prec + rec + 1e-8)
+        fpr = fp / (fp + tn + 1e-8)
+
+        res["precision_enc"] = float(prec.mean())
+        res["recall_enc"] = float(rec.mean())
+        res["f1_enc"] = float(f1.mean())
+        res["fpr_enc"] = float(fpr.mean())
+        res["precision_per_enc"] = prec
+        res["recall_per_enc"] = rec
+        res["f1_per_enc"] = f1
+        res["fpr_per_enc"] = fpr
+
+    # Compare encoder vs decoder matching: how many pairs agree?
+    dec_pairs = set(zip(res["mcc_feat_idx_cos"], res["mcc_dict_idx_cos"]))
+    enc_pairs = set(zip(enc_feat_idx, enc_dict_idx))
+    n_agree = len(dec_pairs & enc_pairs)
+
+    dec_pairs_abs = set(zip(res["mcc_feat_idx_abs"], res["mcc_dict_idx_abs"]))
+    n_agree_abs = len(dec_pairs_abs & enc_pairs)
+
+    res["n_agree_cos"] = n_agree
+    res["n_agree_abs"] = n_agree_abs
+
+    print(
+        f"{name}: encoder match — mean_act={res['enc_mean_act']:.4f}  "
+        f"cos={res['enc_mcc_cos']:.4f}  |cos|={res['enc_mcc_abs']:.4f}"
+    )
+    print(
+        f"  Matching agreement: {n_agree}/{N_FEATURES} with cos-sim, "
+        f"{n_agree_abs}/{N_FEATURES} with |cos-sim|"
+    )
+
+# %% --- Encoder-matched SAE activations heatmap ---
+for name in names:
+    res = sae_results[name]
+    sae = res["sae"]
+    tm = res["tm"]
+
+    with torch.no_grad():
+        eye = torch.eye(N_FEATURES, device=DEVICE)
+        sae_acts = sae.encode(tm.ae.encode(eye)).cpu().numpy()
+
+    enc_fi, enc_di = res["enc_feat_idx"], res["enc_dict_idx"]
+    matched_feats = set(enc_fi)
+    matched_dicts = set(enc_di)
+    unmatched_feats = [f for f in range(N_FEATURES) if f not in matched_feats]
+    unmatched_dicts = [d for d in range(N_DICT) if d not in matched_dicts]
+
+    row_order = list(enc_fi) + unmatched_feats
+    col_order = list(enc_di) + unmatched_dicts
+
+    sae_acts_matched = sae_acts[np.ix_(row_order, col_order)]
+    row_labels = [f"f{f}" for f in row_order]
+    col_labels = [f"d{d}" for d in col_order]
+
+    n_matched = len(enc_fi)
+    diag_sum = sum(sae_acts_matched[i, i] for i in range(n_matched))
+    total_sum = sae_acts_matched.sum()
+    diag_enc = diag_sum / total_sum if total_sum > 0 else 0.0
+    res["diagonality_enc"] = diag_enc
+
+    px.imshow(
+        sae_acts_matched,
+        labels=dict(
+            x="SAE dict element (encoder matched)", y="Feature (encoder matched)"
+        ),
+        x=col_labels,
+        y=row_labels,
+        title=f"SAE one-hot activations (encoder matched, diag={diag_enc:.3f}) — {name}",
+        aspect="auto",
+        color_continuous_scale="ylgnbu_r",
+    ).show()
+
+# %% --- Comparison table: decoder vs encoder matching ---
+print(f"\n{'=' * 90}")
+print(f"{'Matching comparison':^90s}")
+print(f"{'=' * 90}")
+
+_hdr = (
+    f"{'Model':25s}  {'Match':>8s}  {'MCC|cos|↑':>9s}  {'MCCcos↑':>8s}  "
+    f"{'Prec↑':>6s}  {'Rec↑':>6s}  {'F1↑':>6s}  {'FPR↓':>6s}  {'Diag↑':>6s}"
+)
+print(_hdr)
+print("-" * len(_hdr))
+
+for name, res in sae_results.items():
+    # Decoder matching (cosine similarity)
+    print(
+        f"{name:25s}  {'dec_cos':>8s}  {res['mcc_cos_abs']:9.4f}  {res['mcc_cos_cos']:8.4f}  "
+        f"{res['precision_cos']:6.4f}  {res['recall_cos']:6.4f}  "
+        f"{res['f1_cos']:6.4f}  {res['fpr_cos']:6.4f}  {res.get('diagonality', 0):6.4f}"
+    )
+    # Decoder matching (abs cosine similarity)
+    print(
+        f"{'':25s}  {'dec_abs':>8s}  {res['mcc_abs_abs']:9.4f}  {res['mcc_abs_cos']:8.4f}  "
+        f"{res['precision_abs']:6.4f}  {res['recall_abs']:6.4f}  "
+        f"{res['f1_abs']:6.4f}  {res['fpr_abs']:6.4f}  {'':>6s}"
+    )
+    # Encoder matching
+    print(
+        f"{'':25s}  {'encoder':>8s}  {res['enc_mcc_abs']:9.4f}  {res['enc_mcc_cos']:8.4f}  "
+        f"{res['precision_enc']:6.4f}  {res['recall_enc']:6.4f}  "
+        f"{res['f1_enc']:6.4f}  {res['fpr_enc']:6.4f}  {res.get('diagonality_enc', 0):6.4f}"
+    )
+    print(
+        f"{'':25s}  agree: {res['n_agree_cos']}/{N_FEATURES} (cos), "
+        f"{res['n_agree_abs']}/{N_FEATURES} (|cos|)"
+    )
+    print()
+
+# %% --- Per-feature detection metrics: encoder vs decoder matching ---
+fig = make_subplots(
+    rows=2,
+    cols=4,
+    subplot_titles=[
+        "Precision (dec)",
+        "Recall (dec)",
+        "F1 (dec)",
+        "FPR (dec)",
+        "Precision (enc)",
+        "Recall (enc)",
+        "F1 (enc)",
+        "FPR (enc)",
+    ],
+)
+
+model_colors = {"TiedLinearRelu": "blue", "SynthAE (ortho)": "green"}
+for name in names:
+    res = sae_results[name]
+    color = model_colors[name]
+
+    # Row 1: decoder matching (cos)
+    feat_order_dec = np.argsort(-fp_np[res["mcc_feat_idx_cos"]])
+    x = np.arange(len(feat_order_dec))
+    for col, metric in enumerate(
+        ["precision_per_cos", "recall_per_cos", "f1_per_cos", "fpr_per_cos"], 1
+    ):
+        fig.add_trace(
+            go.Scatter(
+                x=x,
+                y=res[metric][feat_order_dec],
+                name=name,
+                mode="lines",
+                line=dict(color=color),
+                showlegend=(col == 1),
+            ),
+            row=1,
+            col=col,
+        )
+
+    # Row 2: encoder matching
+    feat_order_enc = np.argsort(-fp_np[res["enc_feat_idx"]])
+    for col, metric in enumerate(
+        ["precision_per_enc", "recall_per_enc", "f1_per_enc", "fpr_per_enc"], 1
+    ):
+        fig.add_trace(
+            go.Scatter(
+                x=x,
+                y=res[metric][feat_order_enc],
+                name=name,
+                mode="lines",
+                line=dict(color=color),
+                showlegend=False,
+            ),
+            row=2,
+            col=col,
+        )
+
+fig.update_layout(
+    title="Per-Feature Detection: Decoder (top) vs Encoder (bottom) Matching",
+    height=600,
+    width=1400,
+)
+for row in range(1, 3):
+    for col in range(1, 5):
+        fig.update_xaxes(title_text="Feature rank", row=row, col=col)
 fig.show()
 
 # %%

@@ -236,6 +236,13 @@ class ToyModel:
                 start = buf_offset * batch_size
                 end = start + batch_size
                 if isinstance(raw_buffer, tuple):
+                    raw_buffer = tuple(
+                        (
+                            t.to(ae_device, non_blocking=True)
+                            if isinstance(t, Tensor)
+                            else t
+                        )
+                        for t in raw_buffer
                     raw = tuple(
                         t[start:end] if isinstance(t, Tensor) else t for t in raw_buffer
                     )
