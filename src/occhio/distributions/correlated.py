@@ -28,6 +28,7 @@ class HierarchicalPairs(Distribution):
             parent value exactly; at ``beta=0.0`` the child gets
             ``v_parent * U``. When ``None`` (default), the secondary value
             is an independent ``Uniform(0, 1)`` draw (original behaviour).
+            Scalar or per-feature (odd indices used for pairs).
         device: Torch device for all generated tensors.
         generator: Optional ``torch.Generator`` for deterministic sampling.
 

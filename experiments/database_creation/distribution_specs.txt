@@ -1,0 +1,103 @@
+List of Distributions
+Some notes on the philosophy of these distributions. Each of these should be seen as a guess of a phenomenon that might be occurring in the residual stream of a Large Language Model. They can be thought of as unit-tests for SAEs. Testing on this suite of distributions should hopefully give better insight into failure modes.
+
+For each of these distributions we provide a dataset with
+N_SAMPLES    100,000
+Features     1000
+Hidden Dim   64
+W
+b
+
+Simple Distributions
+SparseUniform (zipfian)
+This is a close analog to the original TMoS distribution, with the main difference being that each feature fires with a different frequency. The frequency follows a power-law. This is the most abstract feature distribution and purely captures frequency.
+
+high  = 0.2
+low   = 0.5 / N_FEAT
+alpha = ln(high / low) / ln(N_FEAT) ≈ 0.867
+p_active = [high / (i+1) ** alpha for i in range(N_FEAT)]
+
+CorrelatedPairs (zipfian)
+This distribution is very similar to the above, except that we group features into pairs (by $\lfloor i / 2 \rfloor$). Each pair's firing pattern is positively correlated. Here we can think of pairs that occur together often, but needn’t occur together, such as Peanutbutter and Jam. 
+
+density     = [high / (i+1) ** alpha for i in range(N_FEAT)]
+correlation = [rand() for i in range(N_FEAT)]
+
+alpha = ln(high / low) / ln(N_FEAT) ≈ 0.867
+high  = 0.2
+low   = 0.5 / N_FEAT
+
+HierarchicalPairs (zipfian)
+As above, but the pairs fire in a hierarchy instead of in a correlated manner. We have a parameter for correlating the magnitude of the firings.
+
+density   = [high / (i+1) ** alpha for i in range(N_FEAT)]
+beta      = [rand() for i in range(N_FEAT)]
+
+alpha     = ln(high / low) / ln(N_FEAT) ≈ 0.867
+high      = 0.2
+low       = 0.5 / N_FEAT
+
+Digraph (~zipfian)
+For this feature distribution we randomly sample a [0, 1]-weighted Digraph with the features as nodes. The in-degree of the nodes follows a zipfian distribution.
+
+We fire the nodes in two steps. First, each feature independently and with equal probability. Then, each of the fired features has a chance to fire each of its out-neighbors with the probability given by the arrows weight.
+
+p_active = 4.6 / N_FEAT # 1% chance of nothing firing
+alpha    = 1
+p_edge   = 10 / N_FEAT
+p_child  = (0, 0.5)
+
+
+DAGRandomWalkToRoot
+This distribution exists as a more general and difficult test of hierarchy. We envision nodes being nodes of a Directed Acyclic graph. When sampling we pick a node uniformly at random, find a path to a root node, and fire all nodes along the path. This establishes a “deeper” hierarchy than you would get with forward propagation.
+
+p_edge    = 3 / N_FEAT
+beta      = 0.8
+shrinking = True 
+
+
+Geometric Distribution
+
+SimplicialComplex
+Here we see the features as vertices of k-simplices. The simplices may be “glued”, meaning that a vertex may be included in multiple simplices. Each simplex might represent a concept like [Cold, Hot] or the RGB spectrum. 
+
+see simplex_high_dim.py
+
+FACE_DIM      = 16
+N_FACES       = 10 * (N_FEAT // FACE_DIM) 
+sampling_mode = “sparse”
+p_active      = 4.6 / N_FACES
+faces         = SEE APPENDIX
+
+Sparse Spheres
+...
+
+
+
+Spherical Distribution
+This distribution (inspired by this Chris Olah comment) imagines features living on n-spheres. To sample a feature vector we first pick a random point on the manifold (independent of the features). We then fire the features based on closeness. Features that might live on circles or spheres include time, earth coordinates, pitch-yaw-roll, but also possibly other more abstract ideas might be mapped onto manifolds.
+
+length_scale    = 0.5
+manifold_dim    = 4
+magnitude_range = (0.5, 1.0)
+
+Torus Distribution
+As above, but Tn, instead of Sn. Possibly if time is tracked as seconds x minutes x hour ~ T3. 
+
+length_scale    = 0.5
+manifold_dim    = 4
+magnitude_range = (0.5, 1.0)
+Appendix
+all_verts = list(range(N_FEAT))
+random.shuffle(all_verts)
+face_size = FACE_DIM + 1
+covering_faces = set()
+for i in range(0, N_FEAT, face_size):
+    chunk = all_verts[i : i + face_size]
+    if len(chunk) < face_size:
+        remaining = [v for v in all_verts if v not in chunk]
+        chunk += random.sample(remaining, face_size - len(chunk))
+    covering_faces.add(tuple(sorted(chunk)))
+while len(covering_faces) < N_FACES:
+    covering_faces.add(tuple(sorted(random.sample(range(N_FEAT), face_size))))
+faces = list(covering_faces)[:N_FACES]

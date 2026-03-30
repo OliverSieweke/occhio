@@ -1,17 +1,24 @@
 """The base class for distributions"""
 
+import datetime
+import json
 from abc import ABC, abstractmethod
 from functools import cached_property
 from hashlib import sha256
 from math import prod
-from warnings import warn
+from pathlib import Path
 from typing import Literal
 import numpy as np
+from warnings import warn
 
 import torch
+from safetensors.torch import save_file
 from torch import Tensor, hash_tensor
 
 from ..utils.device import _same_device
+
+# Sentinel for values that should be omitted from JSON (mirrors autoencoder._SKIP).
+_SKIP = object()
 
 
 class Distribution(ABC):
@@ -143,6 +150,108 @@ class Distribution(ABC):
         if isinstance(x, (int, float)):
             return torch.full((self.n_features,), x, device=self.device)
         return torch.as_tensor(x, dtype=torch.float32, device=self.device)
+
+    def save_samples(self, n_samples: int, path: str | Path | None = None) -> Path:
+        """Sample from this distribution and save to a ``.safetensors`` file and a companion ``.json``.
+
+        The ``.safetensors`` file contains a single key ``"samples"`` with shape
+        ``(n_samples, n_features)`` plus a ``class`` metadata field.
+
+        The ``.json`` file is a human-readable summary: distribution class,
+        constructor-relevant attributes, tensor shape/dtype, and sample count.
+        It is *not* used by :meth:`ToyModel.fit` — it exists purely so users
+        can inspect what a saved file contains without loading it.
+
+        Args:
+            n_samples: Number of samples to generate.
+            path: Destination path (``.safetensors`` extension auto-appended).
+                If ``None``, defaults to
+                ``<ClassName>_<n_features>f_<n_samples>s_<YYYYMMDD_HHMMSS>.safetensors``.
+
+        Returns:
+            The resolved :class:`~pathlib.Path` that was written.
+        """
+        if path is None:
+            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            path = Path(
+                f"{type(self).__name__}_{self.n_features}f_{n_samples}s_{ts}"
+                ".safetensors"
+            )
+        else:
+            path = Path(path)
+        if path.suffix != ".safetensors":
+            path = path.with_suffix(".safetensors")
+
+        raw = self.sample(n_samples)
+        samples = raw[0] if isinstance(raw, tuple) else raw
+
+        class_name = type(self).__name__
+        save_file(
+            {"samples": samples},
+            str(path),
+            metadata={"class": class_name},
+        )
+
+        info: dict = {
+            "class": class_name,
+            "attributes": self._collect_attrs(),
+            "samples": {
+                "shape": list(samples.shape),
+                "dtype": str(samples.dtype),
+                "n_samples": n_samples,
+                "n_features": self.n_features,
+            },
+        }
+
+        json_path = path.with_suffix(".json")
+        json_path.write_text(json.dumps(info, indent=2) + "\n")
+
+        return path
+
+    def _collect_attrs(self) -> dict:
+        """Collect instance attributes into a JSON-serializable dict.
+
+        Mirrors :meth:`AutoEncoderBase._collect_attrs`. Captures all instance
+        attributes; generator state is serialized as seed + device.
+        """
+        out = {}
+        for k, v in vars(self).items():
+            serialized = self._serialize_value(v)
+            if serialized is not _SKIP:
+                out[k] = serialized
+        return out
+
+    @staticmethod
+    def _serialize_value(v):
+        """Convert a single value to a JSON-compatible representation.
+
+        Mirrors :meth:`AutoEncoderBase._serialize_value`. Returns ``_SKIP``
+        for values that should be omitted.
+        """
+        if v is None or isinstance(v, (int, float, str, bool)):
+            return v
+        if isinstance(v, torch.device):
+            return str(v)
+        if isinstance(v, torch.Generator):
+            return {
+                "type": "Generator",
+                "device": str(v.device),
+                "initial_seed": v.initial_seed(),
+            }
+        if isinstance(v, Tensor):
+            return {"shape": list(v.shape), "dtype": str(v.dtype)}
+        if isinstance(v, (list, tuple)):
+            items = [Distribution._serialize_value(x) for x in v]
+            if any(x is _SKIP for x in items):
+                return _SKIP
+            return items
+        if isinstance(v, dict):
+            return {
+                str(dk): Distribution._serialize_value(dv)
+                for dk, dv in v.items()
+                if Distribution._serialize_value(dv) is not _SKIP
+            }
+        return repr(v)
 
     def to(self, device: torch.device | str):
         self.device = torch.device(device)
