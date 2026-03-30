@@ -50,7 +50,8 @@ dist = SimplicialComplexDistribution(
 # Average L0
 samples = dist.sample(100_000)
 mean_l0 = (samples > 0).float().sum(dim=-1).mean().item()
-print(f"Average L0: {mean_l0:.2f}")
+std_l0 = (samples > 0).float().sum(dim=-1).std().item()
+print(f"Average L0: {mean_l0:.2f} +/- {std_l0:.2f}")
 
 # %%
 # --- Train ---

@@ -1,14 +1,17 @@
 # %%
-"""TiedLinearRelu on SparseUniform — basic experiment boilerplate."""
+"""TiedLinearRelu on CorrelatedPairs — basic experiment boilerplate."""
+
+from sae_lens import SAE
 
 import torch
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
+import random
 
 from occhio.autoencoder import TiedLinearRelu
-from occhio.distributions.sparse import SparseUniform
+from occhio.distributions import DAGRandomWalkToRoot
 from occhio.toy_model import ToyModel
 
 # %%
@@ -17,18 +20,16 @@ DEVICE = "mps"
 SEED = 42
 N_FEATURES = 1296
 D_HIDDEN = 100
-N_EPOCHS = 20_000
+N_EPOCHS = 15_000
 BATCH_SIZE = 512
 
 # %%
 # --- Distribution ---
-high = 0.3
-low = 1.28 / N_FEATURES
-alpha = np.log(high / low) / np.log(N_FEATURES)
-print(f"{alpha=}")
-firing_probs = [high / (i + 1) ** alpha for i in range(N_FEATURES)]
 
-dist = SparseUniform(N_FEATURES, p_active=firing_probs, device=DEVICE)
+
+dist = DAGRandomWalkToRoot(
+    n_features=N_FEATURES, p_edge=50 / N_FEATURES, beta=0.8, shrinking=True
+)
 
 # Average L0
 samples = dist.sample(100_000)
@@ -43,6 +44,10 @@ ae = TiedLinearRelu(N_FEATURES, D_HIDDEN, device=DEVICE, generator=gen)
 tm = ToyModel(distribution=dist, ae=ae, device=DEVICE)
 
 losses, _ = tm.fit(N_EPOCHS, batch_size=BATCH_SIZE, verbose=True)
+
+# %%
+# --- Plot losses ---
+px.line(losses)
 
 # %%
 # --- Plot: Feature Norms and Feature Dimensionalities ---
@@ -76,11 +81,12 @@ fig.update_xaxes(title_text="Feature index", row=1, col=2)
 fig.update_yaxes(title_text="‖w‖", row=1, col=1)
 fig.update_yaxes(title_text="Dimensionality", row=1, col=2)
 fig.update_layout(
-    title=f"TiedLinearRelu — SparseUniform (N={N_FEATURES}, D={D_HIDDEN})",
+    title=f"TiedLinearRelu — CorrelatedPairs (N={N_FEATURES}, D={D_HIDDEN})",
     height=400,
     width=900,
 )
 fig.show()
+
 
 # %%
 # --- SAE Training ---
@@ -91,7 +97,7 @@ N_DICT = N_FEATURES // 2
 SAE_STEPS = 15_000
 SAE_BATCH = 1024
 SAE_LR = 3e-4
-SAE_L1 = 0.3
+SAE_L1 = 0.35
 
 sae_gen = torch.Generator().manual_seed(4)
 
@@ -108,6 +114,8 @@ def data_fn(n: int) -> torch.Tensor:
 sae_losses = sae.train_sae(
     data_fn=data_fn, n_steps=SAE_STEPS, batch_size=SAE_BATCH, lr=SAE_LR
 )
+# %%
+px.line(sae_losses)
 
 # %%
 # --- SAE Metrics ---
@@ -162,9 +170,7 @@ with torch.no_grad():
     diag_sum = sum(sae_acts_matched[i, i] for i in range(n_matched))
     total_sum = sae_acts_matched.sum()
     purity = diag_sum / total_sum if total_sum > 0 else 0.0
-
 print(f"L1={SAE_L1}, batch={SAE_BATCH}, LR={SAE_LR}")
-print(f"prec={prec.mean():.4f}, reca={rec.mean():.4f}")
 print(f"L0={l0:.1f}  MCC={mcc:.4f}  F1={f1:.4f}  R²={r2:.4f}  Purity={purity:.4f}")
 
 # %%
