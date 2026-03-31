@@ -13,6 +13,7 @@ from .plots import (
     InterpretabilityTablePlot,
     PerformanceFidelityTablePlot,
     RepresentationPlot,
+    SAEBenchmarkTablePlot,
     SAEF1vsL0Plot,
     SAECoreMetricsTablePlot,
     SAEFeatureSimilarityPlot,
@@ -36,6 +37,7 @@ from .plots import (
     plot_sae_f1_vs_l0,
     plot_sae_feature_similarity,
     plot_sae_metrics_summary,
+    plot_sae_benchmark_table,
     plot_sae_metrics_table,
     plot_sae_per_feature_f1,
     plot_sae_per_feature_f1_distribution,
@@ -86,4 +88,6 @@ __all__ = [
     "SAEPerFeatureF1DistributionPlot",
     "plot_sae_per_feature_f1",
     "plot_sae_per_feature_f1_distribution",
+    "SAEBenchmarkTablePlot",
+    "plot_sae_benchmark_table",
 ]

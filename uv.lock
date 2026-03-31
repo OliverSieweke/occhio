@@ -3352,8 +3352,8 @@ version = "0.2.3"
 source = { editable = "." }
 dependencies = [
     { name = "debugpy" },
-    { name = "dill" },
     { name = "einops" },
+    { name = "huggingface-hub" },
     { name = "ipykernel" },
     { name = "ipython", version = "8.38.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "ipython", version = "9.10.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
@@ -3411,10 +3411,10 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "debugpy", specifier = ">=1.8.20" },
-    { name = "dill", specifier = ">=0.4.0" },
     { name = "einops", specifier = ">=0.8.2" },
     { name = "fastmcp", marker = "extra == 'mcp'", specifier = ">=2.0" },
     { name = "httpx", marker = "extra == 'mcp'", specifier = ">=0.27" },
+    { name = "huggingface-hub", specifier = ">=0.36.2" },
     { name = "ipykernel", specifier = ">=7.2.0" },
     { name = "ipython", specifier = ">=8.38.0" },
     { name = "jupyterlab", specifier = ">=4.5.3" },

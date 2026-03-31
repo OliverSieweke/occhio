@@ -18,6 +18,7 @@ from sae_lens.synthetic import (
     eval_sae_on_synthetic_data,
     train_toy_sae,
 )
+from safetensors.torch import load_file
 from torch import Tensor
 from torch.optim import AdamW, Optimizer
 from tqdm.auto import tqdm
@@ -305,7 +306,7 @@ class ToyModel:
 
     def train_saes(
         self,
-        saes: dict[str, TrainingSAE],
+        saes: dict[str, TrainingSAE] | Callable[["ToyModel"], dict[str, TrainingSAE]],
         training_samples: int = 10_000_000,
         batch_size: int = 1024,
         lr: float = 0.0003,
@@ -320,7 +321,9 @@ class ToyModel:
         """Train SAE(s) on this model's hidden activations using SAE Lens.
 
         Args:
-            saes: Dict mapping labels to SAEs.
+            saes: Either a dict mapping labels to SAEs, or a callable that takes
+                a ToyModel and returns such a dict. Use a callable when SAE
+                configuration depends on model properties (e.g., n_hidden, device).
             training_samples: Number of training samples (sae_lens param, default: 10M).
             batch_size: Training batch size (sae_lens param, default: 1024).
             lr: Learning rate (sae_lens param, default: 0.0003).
@@ -335,8 +338,11 @@ class ToyModel:
         Returns:
             None
         """
+        # Resolve SAEs: if callable, invoke it with this model
+        resolved_saes: dict[str, TrainingSAE] = saes(self) if callable(saes) else saes
+
         pbar = tqdm(
-            saes.items(),
+            resolved_saes.items(),
             desc="SAEs",
             unit="SAE",
             leave=False,
@@ -583,28 +589,10 @@ class ToyModel:
         }
 
     @property
-    def saes_mcc(self) -> dict[str, float]:
-        """Mean Correlation Coefficient between SAE decoder and ground truth features."""
-        return {
-            label: sae_record.results.mcc
-            for label, sae_record in self.saes.items()
-            if sae_record.results is not None
-        }
-
-    @property
     def saes_l0(self) -> dict[str, float]:
         """L0 sparsity for evaluated SAEs."""
         return {
             label: sae_record.results.sae_l0
-            for label, sae_record in self.saes.items()
-            if sae_record.results is not None
-        }
-
-    @property
-    def saes_true_l0(self) -> dict[str, float]:
-        """True L0 (ground truth feature activations) for evaluated SAEs."""
-        return {
-            label: sae_record.results.true_l0
             for label, sae_record in self.saes.items()
             if sae_record.results is not None
         }
@@ -619,10 +607,28 @@ class ToyModel:
         }
 
     @property
+    def saes_true_l0(self) -> dict[str, float]:
+        """True L0 (ground truth feature activations) for evaluated SAEs."""
+        return {
+            label: sae_record.results.true_l0
+            for label, sae_record in self.saes.items()
+            if sae_record.results is not None
+        }
+
+    @property
     def saes_shrinkage(self) -> dict[str, float]:
         """Shrinkage (ratio of SAE output norm to input norm) for evaluated SAEs."""
         return {
             label: sae_record.results.shrinkage
+            for label, sae_record in self.saes.items()
+            if sae_record.results is not None
+        }
+
+    @property
+    def saes_mcc(self) -> dict[str, float]:
+        """Mean Correlation Coefficient between SAE decoder and ground truth features."""
+        return {
+            label: sae_record.results.mcc
             for label, sae_record in self.saes.items()
             if sae_record.results is not None
         }

@@ -17,6 +17,10 @@ from occhio.visualization_2.plots.experimental.sae_metrics_summary import (
     PerformanceFidelityTablePlot,
     plot_sae_metrics_summary,
 )
+from occhio.visualization_2.plots.experimental.sae_benchmark_table import (
+    SAEBenchmarkTablePlot,
+    plot_sae_benchmark_table,
+)
 from occhio.visualization_2.plots.experimental.sae_metrics_table import (
     SAECoreMetricsTablePlot,
     SAEMetricsTablePlot,
@@ -112,4 +116,6 @@ __all__ = [
     "SAEPerFeatureF1DistributionPlot",
     "plot_sae_per_feature_f1",
     "plot_sae_per_feature_f1_distribution",
+    "SAEBenchmarkTablePlot",
+    "plot_sae_benchmark_table",
 ]

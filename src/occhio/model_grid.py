@@ -6,6 +6,7 @@ Uses torch.vmap + torch.compile for fast parallel training across grid points.
 from __future__ import annotations
 
 import datetime
+import pickle
 from collections.abc import Iterable, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
@@ -35,23 +36,22 @@ from occhio.utils.logging import suppress_tqdm
 @dataclass
 class Axis:
     label: str
-    values: Tensor | list[Any]
+    values: Sequence
 
-    def __init__(self, label: str, values: Tensor | Sequence[Any]):
+    def __init__(self, label: str, values: Iterable):
         self.label = label
-        # Try to convert to tensor for numeric types
-        if isinstance(values, Tensor):
-            if values.dtype not in (torch.float32, torch.float64):
-                self.values = values.to(dtype=torch.float32)
-            else:
-                self.values = values
-        else:
-            # Check if all values are numeric
-            try:
-                self.values = torch.as_tensor(values, dtype=torch.float32)
-            except (ValueError, TypeError):
-                # Non-numeric values (e.g., strings) - store as list
-                self.values = list(values)
+        # Convert to list if not already indexable (handles Enums, generators, etc.)
+        if not isinstance(values, Sequence):
+            values = list(values)
+        # Convert to tensor and ensure float dtype for meshgrid compatibility
+        # [2026-03-25 | OliverSieweke] TODO: work on this, not sure we want to convert to tensor at this point....
+        # if not isinstance(values, Tensor):
+        #     self.values = torch.as_tensor(values, dtype=torch.float32)
+        # elif values.dtype not in (torch.float32, torch.float64):
+        #     self.values = values.to(dtype=torch.float32)
+        # else:
+        #     self.values = values
+        self.values = values
 
 
 class TrainingAxis(Axis):
@@ -241,11 +241,10 @@ class ModelGrid:
             self.models: NDArray[np.object_] = _models
         else:
             self.models = self._initialize_models()
+            self._validate_vmap()
 
-        self._can_use_vmap = self._validate_vmap()
-
-        if self.broadcast_samples:
-            self._validate_generators()
+            if self.broadcast_samples:
+                self._validate_generators()
 
     def _initialize_models(self) -> NDArray[np.object_]:
         shape: tuple[int, ...] = tuple(len(axis.values) for axis in self.axes)
@@ -268,30 +267,33 @@ class ModelGrid:
                 "create_model must accept a 'params' parameter (dict[str, Any])."
             )
 
-    def _validate_vmap(self) -> bool:
+    def _validate_vmap(self) -> None:
         if self.models.size <= 1:
-            return True
+            return
 
-        flattened_models: NDArray[np.object_] = self.models.ravel()
-
-        reference: AutoEncoderBase = flattened_models[0].ae
+        first_index = next(np.ndindex(self.models.shape))
+        reference: AutoEncoderBase = self.models[first_index].ae
         reference_signature: tuple = (
             type(reference),
             {k: v.shape for k, v in reference.state_dict().items()},
             reference.device,
         )
 
-        for i, model in enumerate(flattened_models, start=1):
-            ae: AutoEncoderBase = model.ae
+        for index in np.ndindex(self.models.shape):
+            ae: AutoEncoderBase = self.models[index].ae
             ae_signature = (
                 type(ae),
                 {k: v.shape for k, v in ae.state_dict().items()},
                 ae.device,
             )
-            if ae_signature != reference_signature:
-                return False
 
-        return True
+            if ae_signature != reference_signature:
+                raise ValueError(
+                    f"\nAll Autoencoders should share the same architecture. "
+                    f"Autoencoder at index {index} has incompatible architecture with the first Autoencoder. "
+                    f"received: {ae_signature}, "
+                    f"expected: {reference_signature}"
+                )
 
     def _validate_generators(self) -> None:
         if self.models.size <= 1:
@@ -378,21 +380,8 @@ class ModelGrid:
 
     @cached_property
     def parameters_mesh(self):
-        """Returns a tuple of the meshgrid of the axes.
-
-        Raises:
-            TypeError: If any axis contains non-numeric values.
-        """
-        numeric_values = []
-        for axis in self.axes:
-            if isinstance(axis.values, Tensor):
-                numeric_values.append(axis.values)
-            else:
-                raise TypeError(
-                    f"Cannot create parameters_mesh with non-numeric axis '{axis.label}'. "
-                    "parameters_mesh is only available for grids with all numeric axes."
-                )
-        return meshgrid(*numeric_values, indexing="ij")
+        """Returns a tuple of the meshgrid of the axes."""
+        return meshgrid(*(axis.values for axis in self.axes), indexing="ij")
 
     @property
     def _shape_from_axes(self) -> tuple[int, ...]:
@@ -494,78 +483,6 @@ class ModelGrid:
         if self.broadcast_samples:
             self._validate_generators()
 
-    def _snapshot_model_copies(
-        self, flattened_models: NDArray[np.object_]
-    ) -> list[ToyModel]:
-        return [
-            ToyModel(
-                distribution=model.distribution,
-                ae=deepcopy(model.ae),
-                importances=model.importances,
-            )
-            for model in flattened_models
-        ]
-
-    def _fit_individually(
-        self,
-        flattened_models: NDArray[np.object_],
-        n_epochs: int,
-        batch_size: int,
-        learning_rate: float,
-        weight_decay: float,
-        verbose: bool,
-        track_losses: bool,
-        snapshot_interval: int | None,
-    ) -> ModelGrid | list[float] | None:
-        warn(
-            "vmap is not available for this ModelGrid as autoencoder architectures differ; training models individually via ToyModel.fit(). "
-            "In this mode, `compile` and `sample_every` are ignored.",
-            stacklevel=2,
-        )
-
-        n_models = len(flattened_models)
-        if n_models == 0:
-            return [] if track_losses else None
-        collect_loss = track_losses or verbose
-
-        optimizers: list[AdamW] = [
-            AdamW(model.ae.parameters(), lr=learning_rate, weight_decay=weight_decay)
-            for model in flattened_models
-        ]
-        losses: list[float] | None = [] if track_losses else None
-
-        snapshots: list[tuple[int, list[ToyModel]]] | None = None
-        if snapshot_interval is not None:
-            snapshots = [(0, self._snapshot_model_copies(flattened_models))]
-
-        for ep in tqdm(range(n_epochs), unit="epoch"):
-            epoch_loss_sum = 0.0
-            for model, optimizer in zip(flattened_models, optimizers):
-                model_losses, _ = model.fit(
-                    n_epochs=1,
-                    batch_size=batch_size,
-                    learning_rate=learning_rate,
-                    weight_decay=weight_decay,
-                    track_losses=collect_loss,
-                    optimizer=optimizer,
-                    verbose=False,
-                )
-                if collect_loss:
-                    epoch_loss_sum += model_losses[0]
-
-            if track_losses:
-                losses.append(epoch_loss_sum / n_models)
-            if verbose and (ep + 1) % 1000 == 0:
-                mean_loss = epoch_loss_sum / n_models
-                print(f"Epoch {ep + 1}/{n_epochs}, Mean Loss: {mean_loss:.6f}")
-
-            if snapshot_interval is not None and (ep + 1) % snapshot_interval == 0:
-                snapshots.append(
-                    (ep + 1, self._snapshot_model_copies(flattened_models))
-                )
-
-        return losses
-
     # If you change the signature or implementation here, make sure you keep it
     # consistent with ToyModel.fit()
     def fit(
@@ -612,18 +529,6 @@ class ModelGrid:
             broadcasters, broadcast_map = self._build_broadcast()
 
         flattened_models: NDArray[np.object_] = self.models.ravel()
-        self._can_use_vmap = self._validate_vmap()
-        if not self._can_use_vmap:
-            return self._fit_individually(
-                flattened_models=flattened_models,
-                n_epochs=n_epochs,
-                batch_size=batch_size,
-                learning_rate=learning_rate,
-                weight_decay=weight_decay,
-                verbose=verbose,
-                track_losses=track_losses,
-                snapshot_interval=snapshot_interval,
-            )
 
         # Stack Model Characteristics --------------------------------------------------
         stacked_params, stacked_buffers = stack_module_state(
@@ -843,14 +748,6 @@ class ModelGrid:
             _models=history_models,
         )
 
-    def __iter__(self):
-        """Iterate over all models in the grid in row-major (C-style) order."""
-        return iter(self.models.flat)
-
-    def __len__(self) -> int:
-        """Return the total number of models in the grid."""
-        return self.models.size
-
     def __getitem__(self, key) -> ModelGrid | ToyModel:
         if not isinstance(key, tuple):
             key = (key,)
@@ -935,6 +832,85 @@ class ModelGrid:
             _models=result,
         )
 
+    def train_saes(
+        self,
+        saes: dict[str, TrainingSAE] | Callable[[ToyModel], dict[str, TrainingSAE]],
+        training_samples: int = 10_000_000,
+        batch_size: int = 1024,
+        lr: float = 0.0003,
+        lr_warm_up_steps: int = 0,
+        lr_decay_steps: int = 0,
+        n_snapshots: int = 0,
+        snapshot_fn: Callable[[Any], None] | None = None,
+        autocast_sae: bool = False,
+        autocast_data: bool = False,
+        verbose: bool = False,
+    ) -> None:
+        """Train SAE(s) on each ToyModel in the grid.
+
+        Args:
+            saes: Either a dict mapping labels to SAEs, or a callable that takes
+                a ToyModel and returns such a dict. Use a callable when SAE
+                configuration depends on model properties (e.g., n_hidden, device).
+                If a dict is provided, it will be deep-copied for each model. If a
+                callable is provided, it will be invoked for each model.
+            training_samples: Number of training samples (sae_lens param, default: 10M).
+            batch_size: Training batch size (sae_lens param, default: 1024).
+            lr: Learning rate (sae_lens param, default: 0.0003).
+            lr_warm_up_steps: Number of warmup steps (sae_lens param, default: 0).
+            lr_decay_steps: Number of decay steps (sae_lens param, default: 0).
+            n_snapshots: Number of training snapshots (sae_lens param, default: 0).
+            snapshot_fn: Optional callback for snapshots (sae_lens param).
+            autocast_sae: Use autocast for SAE (sae_lens param, default: False).
+            autocast_data: Use autocast for data (sae_lens param, default: False).
+            verbose: Whether to show progress bars. Defaults to False.
+        """
+        flattened_models: NDArray[np.object_] = self.models.ravel()
+
+        for model in tqdm(
+            flattened_models, desc="Models", unit="model", disable=not verbose
+        ):
+            with (
+                suppress_tqdm()
+            ):  # SAE Lens tqdm gets very verbose when training on a grid
+                # If saes is callable, invoke it for each model; otherwise deepcopy the dict
+                model.train_saes(
+                    saes=saes,
+                    training_samples=training_samples,
+                    batch_size=batch_size,
+                    lr=lr,
+                    lr_warm_up_steps=lr_warm_up_steps,
+                    lr_decay_steps=lr_decay_steps,
+                    n_snapshots=n_snapshots,
+                    snapshot_fn=snapshot_fn,
+                    autocast_sae=autocast_sae,
+                    autocast_data=autocast_data,
+                    verbose=verbose,
+                )
+
+    def evaluate_saes(
+        self,
+        labels: list[str] | None = None,
+        num_samples: int = 100_000,
+        verbose: bool = False,
+    ) -> None:
+        """Evaluate stored SAEs on each ToyModel in the grid.
+
+        Args:
+            labels: List of SAE labels to evaluate. Defaults to all stored SAEs.
+            num_samples: Number of samples to use for evaluation.
+            verbose: Whether to show progress bars. Defaults to False.
+
+        Returns:
+           None
+        """
+        flattened_models: NDArray[np.object_] = self.models.ravel()
+
+        for model in tqdm(
+            flattened_models, desc="Models", unit="model", disable=not verbose
+        ):
+            model.evaluate_saes(labels=labels, num_samples=num_samples, verbose=verbose)
+
     def save(self, path: str | Path) -> None:
         """Save grid to disk using dill.
 
@@ -966,74 +942,3 @@ class ModelGrid:
         """
         with open(path, "rb") as file:
             return dill.load(file)
-
-    def train_saes(
-        self,
-        saes: dict[str, TrainingSAE],
-        training_samples: int = 10_000_000,
-        batch_size: int = 1024,
-        lr: float = 0.0003,
-        lr_warm_up_steps: int = 0,
-        lr_decay_steps: int = 0,
-        n_snapshots: int = 0,
-        snapshot_fn: Callable[[Any], None] | None = None,
-        autocast_sae: bool = False,
-        autocast_data: bool = False,
-        verbose: bool = False,
-    ) -> None:
-        """Train SAE(s) on each ToyModel in the grid.
-
-        Args:
-            saes: Dict mapping labels to SAEs.
-            training_samples: Number of training samples (sae_lens param, default: 10M).
-            batch_size: Training batch size (sae_lens param, default: 1024).
-            lr: Learning rate (sae_lens param, default: 0.0003).
-            lr_warm_up_steps: Number of warmup steps (sae_lens param, default: 0).
-            lr_decay_steps: Number of decay steps (sae_lens param, default: 0).
-            n_snapshots: Number of training snapshots (sae_lens param, default: 0).
-            snapshot_fn: Optional callback for snapshots (sae_lens param).
-            autocast_sae: Use autocast for SAE (sae_lens param, default: False).
-            autocast_data: Use autocast for data (sae_lens param, default: False).
-            verbose: Whether to show progress bars. Defaults to False.
-        """
-        flattened_models: NDArray[np.object_] = self.models.ravel()
-
-        for model in tqdm(
-            flattened_models, desc="Models", unit="model", disable=not verbose
-        ):
-            model.train_saes(
-                saes=deepcopy(saes),
-                training_samples=training_samples,
-                batch_size=batch_size,
-                lr=lr,
-                lr_warm_up_steps=lr_warm_up_steps,
-                lr_decay_steps=lr_decay_steps,
-                n_snapshots=n_snapshots,
-                snapshot_fn=snapshot_fn,
-                autocast_sae=autocast_sae,
-                autocast_data=autocast_data,
-                verbose=verbose,
-            )
-
-    def evaluate_saes(
-        self,
-        labels: list[str] | None = None,
-        num_samples: int = 100_000,
-        verbose: bool = False,
-    ) -> None:
-        """Evaluate stored SAEs on each ToyModel in the grid.
-
-        Args:
-            labels: List of SAE labels to evaluate. Defaults to all stored SAEs.
-            num_samples: Number of samples to use for evaluation.
-            verbose: Whether to show progress bars. Defaults to False.
-
-        Returns:
-           None
-        """
-        flattened_models: NDArray[np.object_] = self.models.ravel()
-
-        for model in tqdm(
-            flattened_models, desc="Models", unit="model", disable=not verbose
-        ):
-            model.evaluate_saes(labels=labels, num_samples=num_samples, verbose=verbose)

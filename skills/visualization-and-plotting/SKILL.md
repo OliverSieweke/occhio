@@ -84,15 +84,18 @@ class MyPlot(SinglePlot):
 `render()` draws into a single subplot cell. The framework calls it once per facet position.
 
 **Receives `FigureProxy`** (not raw `go.Figure`). FigureProxy auto-injects `row`/`col` for all subplot-aware methods and handles:
+
 - **Legend deduplication**: Same trace name across subplots appears in legend only once.
 - **Axis label deduplication**: X-axis tick labels only on bottom row, Y-axis only on left column. Override with `showticklabels=True`.
 
 **Allowed FigureProxy methods:**
+
 - `fig.add_trace(go.Scatter(...))` — routed to correct subplot
 - `fig.update_xaxes(...)` / `fig.update_yaxes(...)` — scoped to this subplot
 - `fig.add_annotation(...)`, `fig.add_hline(...)`, `fig.add_vline(...)`, `fig.add_shape(...)`
 
 **Blocked:**
+
 - `fig.update_layout(...)` — raises `AttributeError`. Use `configure_layout()` instead.
 
 **Axis reference remapping:** FigureProxy remaps bare `'x'`/`'y'` axis refs (e.g., in `scaleanchor="x"`) to the correct subplot axis. Don't use numbered refs like `'x2'` — let the proxy handle it.
@@ -113,16 +116,17 @@ def configure_layout(self, fig: go.Figure) -> None:
 
 ### `n_render_axes` — What `render()` Receives
 
-| Value | `models` parameter type | Use case |
-|-------|------------------------|----------|
-| `0` (default) | Single `ToyModel` | Per-model plots: heatmaps, bar charts, embeddings |
-| `1` | 1D `ModelGrid` | Line charts where x-axis spans grid values |
-| `2` | 2D `ModelGrid` | Phase diagrams, contour plots, surface plots |
+| Value         | `models` parameter type | Use case                                          |
+|---------------|-------------------------|---------------------------------------------------|
+| `0` (default) | Single `ToyModel`       | Per-model plots: heatmaps, bar charts, embeddings |
+| `1`           | 1D `ModelGrid`          | Line charts where x-axis spans grid values        |
+| `2`           | 2D `ModelGrid`          | Phase diagrams, contour plots, surface plots      |
 
 When `n_render_axes > 0`, `render()` receives a `ModelGrid` and you access the render axis via `models.axes[0]`:
 
 ```python
 from occhio.model_grid import ModelGrid
+
 
 class MetricOverGridPlot(SinglePlot):
     n_render_axes = 1
@@ -162,12 +166,12 @@ class MyIndicatorPlot(SinglePlot):
         )
 ```
 
-| `subplot_type` | Trace types | Description |
-|----------------|-------------|-------------|
-| `"xy"` (default) | `Scatter`, `Bar`, `Heatmap`, etc. | Standard cartesian plots |
-| `"domain"` | `Indicator`, `Pie`, `Sunburst`, etc. | Traces that fill their subplot domain |
-| `"scene"` | `Scatter3d`, `Surface`, `Mesh3d` | 3D plots |
-| `"polar"` | `Scatterpolar`, `Barpolar` | Polar coordinate plots |
+| `subplot_type`   | Trace types                          | Description                           |
+|------------------|--------------------------------------|---------------------------------------|
+| `"xy"` (default) | `Scatter`, `Bar`, `Heatmap`, etc.    | Standard cartesian plots              |
+| `"domain"`       | `Indicator`, `Pie`, `Sunburst`, etc. | Traces that fill their subplot domain |
+| `"scene"`        | `Scatter3d`, `Surface`, `Mesh3d`     | 3D plots                              |
+| `"polar"`        | `Scatterpolar`, `Barpolar`           | Polar coordinate plots                |
 
 When `subplot_type != "xy"`, `CompositePlot` automatically sets the correct spec type, and `FigureProxy` skips axis-related operations (tick label deduplication, axis matching).
 
@@ -249,6 +253,7 @@ Exporting instances enables autocomplete: `viz.plot_feat...` lists all feature p
 # In plots/feature.py
 class FeatureInterferencePlot(SinglePlot): ...
 
+
 plot_feature_interference = FeatureInterferencePlot()
 
 # In plots/__init__.py
@@ -284,58 +289,58 @@ class MyPlot(SinglePlot):
 
 ### Geometric Properties (all `@property`, `@torch.no_grad()`)
 
-| Property | Type | Description |
-|----------|------|-------------|
-| `W` | `Tensor (n_hidden x n_features)` | Encoder weight matrix (one-hot embeddings transposed) |
-| `W_T_W` | `Tensor (n_features x n_features)` | Gram matrix W^T W |
-| `W_normalized_features` | `Tensor (n_hidden x n_features)` | Column-normalized W |
-| `feature_norms` | `Tensor (n_features,)` | L2 norm per feature embedding |
-| `feature_representations` | `Tensor (n_features,)` | Squared norm per feature |
-| `interferences` | `Tensor (n_features x n_features)` | W_norm^T @ W (not squared) |
-| `interferences_sq` | `Tensor (n_features x n_features)` | (W_norm^T @ W)^2 |
-| `total_feature_interferences` | `Tensor (n_features,)` | Sum of squared interferences, diagonal zeroed |
-| `total_feature_interferences_including_self` | `Tensor (n_features,)` | Sum of squared interferences, with diagonal |
-| `cosine_similarity_matrix` | `Tensor (n_features x n_features)` | Pairwise cosine similarities |
-| `superposition` | `Tensor (scalar)` | Mean max abs cosine similarity (rho_mm) |
-| `feature_dimensionalities` | `Tensor (n_features,)` | representations / total_interferences_including_self |
-| `mean_feature_dimensionalities` | `Tensor (scalar)` | Mean of feature_dimensionalities |
-| `frobenius_norm_squared` | `Tensor (scalar)` | norm(W)^2_F |
+| Property                                     | Type                               | Description                                           |
+|----------------------------------------------|------------------------------------|-------------------------------------------------------|
+| `W`                                          | `Tensor (n_hidden x n_features)`   | Encoder weight matrix (one-hot embeddings transposed) |
+| `W_T_W`                                      | `Tensor (n_features x n_features)` | Gram matrix W^T W                                     |
+| `W_normalized_features`                      | `Tensor (n_hidden x n_features)`   | Column-normalized W                                   |
+| `feature_norms`                              | `Tensor (n_features,)`             | L2 norm per feature embedding                         |
+| `feature_representations`                    | `Tensor (n_features,)`             | Squared norm per feature                              |
+| `interferences`                              | `Tensor (n_features x n_features)` | W_norm^T @ W (not squared)                            |
+| `interferences_sq`                           | `Tensor (n_features x n_features)` | (W_norm^T @ W)^2                                      |
+| `total_feature_interferences`                | `Tensor (n_features,)`             | Sum of squared interferences, diagonal zeroed         |
+| `total_feature_interferences_including_self` | `Tensor (n_features,)`             | Sum of squared interferences, with diagonal           |
+| `cosine_similarity_matrix`                   | `Tensor (n_features x n_features)` | Pairwise cosine similarities                          |
+| `superposition`                              | `Tensor (scalar)`                  | Mean max abs cosine similarity (rho_mm)               |
+| `feature_dimensionalities`                   | `Tensor (n_features,)`             | representations / total_interferences_including_self  |
+| `mean_feature_dimensionalities`              | `Tensor (scalar)`                  | Mean of feature_dimensionalities                      |
+| `frobenius_norm_squared`                     | `Tensor (scalar)`                  | norm(W)^2_F                                           |
 
 ### SAE Metrics (all `dict[str, float]` keyed by SAE label)
 
-| Property | Description |
-|----------|-------------|
-| `saes_precision` | TP / (TP + FP) |
-| `saes_recall` | TP / (TP + FN) |
-| `saes_f1_score` | Harmonic mean of precision and recall |
-| `saes_accuracy` | (TP + TN) / total |
-| `saes_explained_variance` | Variance explained by SAE reconstruction |
-| `saes_l0` | L0 sparsity of SAE activations |
-| `saes_true_l0` | Ground-truth feature activation L0 |
-| `saes_dead_latents` | Count of dead SAE latents (`int`) |
-| `saes_shrinkage` | Ratio of SAE output norm to input norm |
-| `saes_mcc` | Mean Correlation Coefficient (SAE decoder vs ground truth) |
-| `saes_uniqueness` | Fraction of SAE latents tracking unique features |
+| Property                  | Description                                                |
+|---------------------------|------------------------------------------------------------|
+| `saes_precision`          | TP / (TP + FP)                                             |
+| `saes_recall`             | TP / (TP + FN)                                             |
+| `saes_f1_score`           | Harmonic mean of precision and recall                      |
+| `saes_accuracy`           | (TP + TN) / total                                          |
+| `saes_explained_variance` | Variance explained by SAE reconstruction                   |
+| `saes_l0`                 | L0 sparsity of SAE activations                             |
+| `saes_true_l0`            | Ground-truth feature activation L0                         |
+| `saes_dead_latents`       | Count of dead SAE latents (`int`)                          |
+| `saes_shrinkage`          | Ratio of SAE output norm to input norm                     |
+| `saes_mcc`                | Mean Correlation Coefficient (SAE decoder vs ground truth) |
+| `saes_uniqueness`         | Fraction of SAE latents tracking unique features           |
 
 ### Instance Attributes
 
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `importances` | `Tensor (n_features,)` | Feature importance weights |
-| `n_features` | `int` | Number of features (delegated to ae) |
-| `n_hidden` | `int` | Hidden dimension (delegated to ae via `__getattr__`) |
-| `saes` | `dict[str, SAERecord]` | Trained SAEs and their eval results |
-| `device` | `torch.device` | Computation device |
+| Attribute     | Type                   | Description                                          |
+|---------------|------------------------|------------------------------------------------------|
+| `importances` | `Tensor (n_features,)` | Feature importance weights                           |
+| `n_features`  | `int`                  | Number of features (delegated to ae)                 |
+| `n_hidden`    | `int`                  | Hidden dimension (delegated to ae via `__getattr__`) |
+| `saes`        | `dict[str, SAERecord]` | Trained SAEs and their eval results                  |
+| `device`      | `torch.device`         | Computation device                                   |
 
 ### ModelGrid / Axis
 
 ```python
 from occhio.model_grid import ModelGrid, Axis
 
-grid.axes          # list[Axis] — each has .label (str) and .values (Tensor or list)
-grid.shape         # tuple of axis lengths
-grid[i]            # index into grid; slicing with int/slice supported
-len(grid)          # total number of models (product of shape)
+grid.axes  # list[Axis] — each has .label (str) and .values (Tensor or list)
+grid.shape  # tuple of axis lengths
+grid[i]  # index into grid; slicing with int/slice supported
+len(grid)  # total number of models (product of shape)
 for model in grid  # iterate over all models (flattened)
 ```
 
@@ -343,15 +348,15 @@ for model in grid  # iterate over all models (flattened)
 
 These are the current plots — read their source for patterns and conventions.
 
-| Class | File | `n_render_axes` | `subplot_type` | Description |
-|-------|------|-----------------|----------------|-------------|
-| `EmbeddingPlot` | `embedding.py` | 0 | xy | Arrow plot of 2D feature embeddings from origin |
-| `RepresentationPlot` | `representation.py` | 0 | xy | W^T W heatmap |
-| `SuperpositionIndicatorPlot` | `feature_representation.py` | 0 | domain | Gauge indicator for superposition (ρmm) |
-| `SAEClassificationMetricPlot` | `sae_classification_metric.py` | 1 | xy | Line chart of one metric across a grid axis |
-| `SAEMetricsComparisonPlot` | `sae_classification_metric.py` | 1 | xy | Multiple metrics for one SAE across a grid |
-| `SAEClassificationMetricsPlot` | `sae_classification_metrics.py` | 0 | xy | Grouped bar chart of classification metrics per model |
-| `plot_sae_classification_metrics` | `sae_classification_metric.py` | - | - | 2x2 CompositePlot of precision/recall/accuracy/F1 |
+| Class                             | File                            | `n_render_axes` | `subplot_type` | Description                                           |
+|-----------------------------------|---------------------------------|-----------------|----------------|-------------------------------------------------------|
+| `EmbeddingPlot`                   | `embedding.py`                  | 0               | xy             | Arrow plot of 2D feature embeddings from origin       |
+| `RepresentationPlot`              | `representation.py`             | 0               | xy             | W^T W heatmap                                         |
+| `SuperpositionIndicatorPlot`      | `feature_representation.py`     | 0               | domain         | Gauge indicator for superposition (ρmm)               |
+| `SAEClassificationMetricPlot`     | `sae_classification_metric.py`  | 1               | xy             | Line chart of one metric across a grid axis           |
+| `SAEMetricsComparisonPlot`        | `sae_classification_metric.py`  | 1               | xy             | Multiple metrics for one SAE across a grid            |
+| `SAEClassificationMetricsPlot`    | `sae_classification_metrics.py` | 0               | xy             | Grouped bar chart of classification metrics per model |
+| `plot_sae_classification_metrics` | `sae_classification_metric.py`  | -               | -              | 2x2 CompositePlot of precision/recall/accuracy/F1     |
 
 ## Workflow Summary
 
@@ -366,6 +371,7 @@ These are the current plots — read their source for patterns and conventions.
 ## Skill Gaps
 
 If you encounter issues while implementing a plot, suggest additions to this skill:
+
 - Missing `ToyModel` property documentation
 - Unclear `FigureProxy` behavior or edge cases
 - Common Plotly patterns not covered
