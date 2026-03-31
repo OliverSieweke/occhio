@@ -26,7 +26,7 @@ from occhio.autoencoder import TiedLinearRelu
 from occhio.toy_model import ToyModel
 
 # --- Constants ---
-N_HIDDEN = 64
+N_HIDDEN = 100
 N_EPOCHS = 30_000
 BATCH_SIZE = 1024
 LEARNING_RATE = 3e-4
