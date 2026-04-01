@@ -3,6 +3,13 @@ name = "occhio"
 version = "0.2.3"
 description = "Experiment with Toy Models of Superposition"
 requires-python = ">=3.10"
+readme = "README.md"
+authors = [
+    { name = "Niclas Kupper" },
+    { name = "Kaushik Reddy" },
+    { name = "Oliver Sieweke" },
+    { name = "Kola Ayonrinde" },
+]
 dependencies = [
     "torch>=2.10.0",
     "numpy>=1.26",
@@ -17,7 +24,13 @@ dependencies = [
     "ipython>=8.38.0",
     "sae-lens>=6.38.0",
     "safetensors>=0.4.0",
+    "sphinx-copybutton[docs]>=0.5.2",
 ]
+
+[project.urls]
+Homepage = "https://docs.occhio.dev"
+Repository = "https://github.com/OliverSieweke/occhio"
+Documentation = "https://docs.occhio.dev"
 
 [build-system]
 requires = ["uv_build"]
@@ -58,6 +71,7 @@ docs = [
     "sphinx-rtd-theme>=3.1.0",
     "sphinx-notfound-page>=1.1.0",
     "sphinx-llm>=0.3.0",
+    "sphinx-autodoc-typehints>=2.0",
 ]
 
 

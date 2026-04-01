@@ -10,13 +10,13 @@ from typing import Any, Callable
 
 import torch
 import torch.nn.functional as F
-from safetensors.torch import load_file
 from sae_lens import TrainingSAE
 from sae_lens.synthetic import (
     SyntheticDataEvalResult,
     eval_sae_on_synthetic_data,
     train_toy_sae,
 )
+from safetensors.torch import load_file
 from torch import Tensor
 from torch.optim import AdamW, Optimizer
 from tqdm.auto import tqdm
@@ -39,6 +39,9 @@ class SAERecord:
 class ToyModel:
     """This is the ToyModel class which is the base for most experiments.
 
+    TODO:
+        - Test
+
     Args:
         distribution: A Distribution object. May live on a different device from
             the AutoEncoder (e.g. CPU for fast sampling while ae runs on GPU/MPS).
@@ -49,6 +52,8 @@ class ToyModel:
             ``None`` to infer from the ae or distribution.
         generator: For seeded experiments.
         importances: Weighing of the distribution.
+
+
     """
 
     distribution: Distribution
@@ -243,6 +248,7 @@ class ToyModel:
                             else t
                         )
                         for t in raw_buffer
+                    )
                     raw = tuple(
                         t[start:end] if isinstance(t, Tensor) else t for t in raw_buffer
                     )
