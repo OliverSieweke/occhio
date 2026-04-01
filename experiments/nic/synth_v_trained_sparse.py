@@ -18,6 +18,42 @@ from occhio.sae.sae import SAESimple
 from occhio.distributions.sparse import SparseUniform
 from occhio.toy_model import ToyModel
 
+# --- Publication-ready figure styling ---
+MODEL_COLORS = {"Trained AE": "#2563EB", "Constructed AE": "#16A34A"}
+_THRESH_COLORS = ["#3B82F6", "#F59E0B", "#EF4444"]
+
+_AXIS = dict(
+    showgrid=True,
+    gridcolor="#E5E7EB",
+    showline=True,
+    linecolor="#374151",
+    linewidth=1.2,
+    ticks="outside",
+    tickcolor="#374151",
+    minor=dict(ticks="outside", tickcolor="#9CA3AF"),
+    zeroline=False,
+)
+
+
+def style_fig(fig, nticksx=10, nticksy=8):
+    """Apply publication-ready styling."""
+    fig.update_layout(
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        font=dict(family="Arial, Helvetica, sans-serif", size=13, color="#1F2937"),
+        title_font=dict(size=15),
+        legend=dict(
+            bgcolor="rgba(255,255,255,0.95)",
+            bordercolor="#D1D5DB",
+            borderwidth=1,
+            itemsizing="constant",
+        ),
+    )
+    fig.update_xaxes(**_AXIS, nticks=nticksx)
+    fig.update_yaxes(**_AXIS, nticks=nticksy)
+    return fig
+
+
 # %%
 # --- Configuration ---
 DEVICE = "mps"
@@ -132,251 +168,6 @@ loss_synth_ortho = eval_losses_synth[-1]
 pf_synth_ortho = per_feature_synth[-1]
 print(f"  Final eval loss: {loss_synth_ortho:.6f}")
 
-# %%
-# --- Plot: Eval loss curve (TiedLinearRelu) with SynthAE baselines ---
-eval_epochs = list(range(0, N_EPOCHS, EVAL_FREQ)) + [N_EPOCHS - 1]
-
-fig = go.Figure()
-fig.add_trace(
-    go.Scatter(x=eval_epochs, y=eval_losses_tied, name="TiedLinearRelu", opacity=0.8)
-)
-fig.add_hline(
-    y=loss_synth_ortho,
-    line_dash="dash",
-    line_color="green",
-)
-fig.update_layout(
-    title=f"Eval Loss — SparseUniform (N={N_FEATURES}, D={D_HIDDEN})",
-    xaxis_title="Epoch",
-    yaxis_title="Loss",
-    yaxis_type="log",
-)
-fig.show()
-
-# %%
-# --- Plot: Per-feature reconstruction MSE ---
-final_tied = np.array(per_feature_tied[-1])
-
-# Sort features by firing probability (most frequent first)
-fp_np = firing_probs.cpu().numpy()
-sort_idx = np.argsort(-fp_np)
-
-fig = go.Figure()
-fig.add_trace(
-    go.Scatter(
-        x=np.arange(N_FEATURES),
-        y=final_tied[sort_idx],
-        name="TiedLinearRelu",
-        mode="lines",
-    )
-)
-fig.add_trace(
-    go.Scatter(
-        x=np.arange(N_FEATURES),
-        y=pf_synth_ortho[sort_idx],
-        name="SynthAE (ortho)",
-        mode="lines",
-    )
-)
-fig.update_layout(
-    title="Per-Feature Reconstruction MSE (sorted by firing probability)",
-    xaxis_title="Feature rank (most frequent → rarest)",
-    yaxis_title="MSE",
-)
-fig.show()
-
-# %%
-# --- Plot: Features recovered (MSE < threshold) vs epoch, with SynthAE baselines ---
-THRESHOLDS = [0.2, 0.5, 1.0]
-COLORS = ["blue", "orange", "red"]
-
-fig = go.Figure()
-for thresh, color in zip(THRESHOLDS, COLORS):
-    n_recovered_tied = [int((np.array(s) < thresh).sum()) for s in per_feature_tied]
-    fig.add_trace(
-        go.Scatter(
-            x=eval_epochs,
-            y=n_recovered_tied,
-            name=f"TiedLinearRelu (τ={thresh})",
-            mode="lines",
-            line=dict(color=color),
-        )
-    )
-    n_recovered_ortho = int((pf_synth_ortho < thresh).sum())
-    fig.add_hline(
-        y=n_recovered_ortho,
-        line_dash="dash",
-        line_color=color,
-    )
-fig.update_layout(
-    title="Features Recovered (MSE < τ) Over Training",
-    xaxis_title="Epoch",
-    yaxis_title="# features recovered",
-)
-fig.show()
-
-# %%
-# --- Plot: Per-feature MSE over training (heatmap, TiedLinearRelu only) ---
-arr = np.array(per_feature_tied).T[:, 1:]  # (N_FEATURES, n_eval_points), skip step 0
-arr_sorted = arr[sort_idx]
-
-fig = go.Figure(
-    go.Heatmap(
-        z=arr_sorted,
-        x=eval_epochs[1:],
-        y=np.arange(N_FEATURES),
-        colorscale="tempo",
-        colorbar=dict(title="MSE"),
-    )
-)
-fig.update_layout(
-    title="Per-Feature MSE Over Training — TiedLinearRelu",
-    xaxis_title="Epoch",
-    yaxis_title="Feature rank (most frequent → rarest)",
-    height=500,
-)
-fig.show()
-
-# %%
-# --- W^T W comparison ---
-models = [("TiedLinearRelu", tm_tied), ("SynthAE (ortho)", tm_synth_ortho)]
-
-fig = make_subplots(
-    rows=1, cols=2, subplot_titles=["TiedLinearRelu", "SynthAE (ortho)"]
-)
-
-for i, (name, tm) in enumerate(
-    [
-        ("TiedLinearRelu", tm_tied),
-        ("SynthAE (ortho)", tm_synth_ortho),
-    ]
-):
-    W = tm.W.detach().cpu().numpy()
-    WtW = W.T @ W
-    fig.add_trace(
-        go.Heatmap(z=WtW, colorscale="RdBu_r", zmid=0, showscale=(i == 1)),
-        row=1,
-        col=i + 1,
-    )
-
-fig.update_layout(title="W^T W Comparison", height=400, width=900)
-fig.show()
-
-# %%
-# --- Plot: Spectrum of W W^T ---
-fig = go.Figure()
-for name, tm in models:
-    W = tm.W.detach().cpu()
-    eigvals = torch.linalg.eigvalsh(W @ W.T).flip(0).numpy()
-    fig.add_trace(
-        go.Scatter(
-            x=np.arange(1, D_HIDDEN + 1),
-            y=eigvals,
-            name=name,
-            mode="lines+markers",
-        )
-    )
-fig.update_layout(
-    title="Spectrum of W W^T",
-    xaxis_title="Eigenvalue index",
-    yaxis_title="Eigenvalue",
-)
-fig.show()
-
-# %%
-# --- Plot: Geometric properties comparison ---
-fig = make_subplots(
-    rows=1,
-    cols=3,
-    subplot_titles=[
-        "Feature Dimensionalities",
-        "Feature Norms",
-        "Total Interference",
-    ],
-)
-
-model_colors = {"TiedLinearRelu": "blue", "SynthAE (ortho)": "green"}
-for name, tm in models:
-    fd = tm.feature_dimensionalities.detach().cpu().numpy()[sort_idx]
-    fn = tm.feature_norms.detach().cpu().numpy()[sort_idx]
-    ti = tm.total_feature_interferences.detach().cpu().numpy()[sort_idx]
-    x = np.arange(N_FEATURES)
-    color = model_colors[name]
-
-    fig.add_trace(
-        go.Scatter(x=x, y=fd, name=name, mode="lines", line=dict(color=color)),
-        row=1,
-        col=1,
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=x, y=fn, name=name, mode="lines", showlegend=False, line=dict(color=color)
-        ),
-        row=1,
-        col=2,
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=x, y=ti, name=name, mode="lines", showlegend=False, line=dict(color=color)
-        ),
-        row=1,
-        col=3,
-    )
-
-fig.update_layout(
-    title="Geometric Properties (sorted by firing probability)",
-    height=400,
-    width=1200,
-)
-for col in range(1, 4):
-    fig.update_xaxes(title_text="Feature rank", row=1, col=col)
-fig.show()
-
-# %%
-# --- Plot: Bias comparison ---
-fig = go.Figure()
-for name, tm in models:
-    b = tm.ae.b.detach().cpu().numpy()[sort_idx]  # ty:ignore
-    fig.add_trace(go.Scatter(x=np.arange(N_FEATURES), y=b, name=name, mode="lines"))
-fig.update_layout(
-    title="Learned Bias b (sorted by firing probability)",
-    xaxis_title="Feature rank (most frequent → rarest)",
-    yaxis_title="b",
-)
-fig.show()
-
-# %%
-# --- Plot: Feature norms² + bias (TiedLinearRelu) ---
-fn2 = tm_tied.feature_norms.detach().cpu().numpy() ** 2
-b_tied = tm_tied.ae.b.detach().cpu().numpy()  # ty:ignore
-combined = (fn2 + b_tied)[sort_idx]
-
-fig = go.Figure()
-fig.add_trace(
-    go.Scatter(x=np.arange(N_FEATURES), y=combined, mode="lines", name="‖w‖² + b")
-)
-fig.update_layout(
-    title="TiedLinearRelu: ‖w‖² + b (sorted by firing probability)",
-    xaxis_title="Feature rank (most frequent → rarest)",
-    yaxis_title="‖w‖² + b",
-)
-fig.show()
-
-# %%
-# --- Summary statistics ---
-print("\n=== Summary ===")
-for name, eval_loss, pf in [
-    ("TiedLinearRelu", eval_losses_tied[-1], per_feature_tied[-1]),
-    ("SynthAE (ortho)", loss_synth_ortho, pf_synth_ortho),
-]:
-    final_mse = np.array(pf)
-    recovered = "  ".join(f"τ={t}: {int((final_mse < t).sum())}" for t in THRESHOLDS)
-    print(
-        f"{name:25s}  eval_loss={eval_loss:.6f}  "
-        f"recovered=[{recovered}]  "
-        f"mean_feature_MSE={final_mse.mean():.4f}"
-    )
-
 # %% --- SAE training on both models ---
 N_DICT = N_FEATURES // 2
 SAE_STEPS = 50_000
@@ -386,7 +177,7 @@ SAE_L1 = 0.3
 
 sae_results = {}
 
-for name, tm in [("TiedLinearRelu", tm_tied), ("SynthAE (ortho)", tm_synth_ortho)]:
+for name, tm in [("Trained AE", tm_tied), ("Constructed AE", tm_synth_ortho)]:
     print(f"\nTraining SAE on {name}...")
 
     sae = SAESimple(
@@ -454,22 +245,324 @@ for name, tm in [("TiedLinearRelu", tm_tied), ("SynthAE (ortho)", tm_synth_ortho
         f"  L0={l0:.1f}  Dead={n_dead}/{N_DICT}  MSE={recon_mse:.6f}  ExplVar={explained_var:.4f}"
     )
 
+# %%
+# --- Plot: Eval loss curve (TiedLinearRelu) with SynthAE baselines ---
+eval_epochs = list(range(0, N_EPOCHS, EVAL_FREQ)) + [N_EPOCHS - 1]
+
+fig = go.Figure()
+fig.add_trace(
+    go.Scatter(
+        x=eval_epochs,
+        y=eval_losses_tied,
+        name="Trained AE",
+        mode="lines",
+        line=dict(width=2, color=MODEL_COLORS["Trained AE"]),
+    )
+)
+fig.add_hline(
+    y=loss_synth_ortho,
+    line_dash="dash",
+    line_color=MODEL_COLORS["Constructed AE"],
+    annotation_text="Constructed AE",
+)
+fig.update_layout(
+    title=f"Eval Loss — SparseUniform (N={N_FEATURES}, D={D_HIDDEN})",
+    xaxis_title="Epoch",
+    yaxis_title="Loss",
+    yaxis_type="log",
+)
+style_fig(fig)
+fig.show()
+
+# %%
+# --- Plot: Per-feature reconstruction MSE ---
+final_tied = np.array(per_feature_tied[-1])
+
+# Sort features by firing probability (most frequent first)
+fp_np = firing_probs.cpu().numpy()
+sort_idx = np.argsort(-fp_np)
+
+fig = go.Figure()
+fig.add_trace(
+    go.Scatter(
+        x=np.arange(N_FEATURES),
+        y=final_tied[sort_idx],
+        name="Trained AE",
+        mode="markers",
+        marker=dict(size=3.25, opacity=0.6, color=MODEL_COLORS["Trained AE"]),
+    )
+)
+fig.add_trace(
+    go.Scatter(
+        x=np.arange(N_FEATURES),
+        y=pf_synth_ortho[sort_idx],
+        name="Constructed AE",
+        mode="markers",
+        marker=dict(size=3.25, opacity=0.6, color=MODEL_COLORS["Constructed AE"]),
+    )
+)
+fig.update_layout(
+    title="Per-Feature Reconstruction MSE (sorted by firing probability)",
+    xaxis_title="Feature Rank ",
+    yaxis_title="MSE",
+)
+style_fig(fig)
+fig.show()
+
+# %%
+# --- Plot: Features recovered (MSE < threshold) vs epoch, with SynthAE baselines ---
+THRESHOLDS = [0.2, 0.5, 1.0]
+COLORS = _THRESH_COLORS
+
+fig = go.Figure()
+for thresh, color in zip(THRESHOLDS, COLORS):
+    n_recovered_tied = [int((np.array(s) < thresh).sum()) for s in per_feature_tied]
+    fig.add_trace(
+        go.Scatter(
+            x=eval_epochs,
+            y=n_recovered_tied,
+            name=f"Trained AE (τ={thresh})",
+            mode="lines",
+            line=dict(color=color, width=2),
+        )
+    )
+    n_recovered_ortho = int((pf_synth_ortho < thresh).sum())
+    fig.add_hline(
+        y=n_recovered_ortho,
+        line_dash="dash",
+        line_color=color,
+    )
+fig.update_layout(
+    title="Features Recovered (MSE < τ) Over Training",
+    xaxis_title="Epoch",
+    yaxis_title="# features recovered",
+)
+style_fig(fig)
+fig.show()
+
+# %%
+# --- Plot: Per-feature MSE over training (heatmap, TiedLinearRelu only) ---
+arr = np.array(per_feature_tied).T[:, 1:]  # (N_FEATURES, n_eval_points), skip step 0
+arr_sorted = arr[sort_idx]
+
+fig = go.Figure(
+    go.Heatmap(
+        z=arr_sorted,
+        x=eval_epochs[1:],
+        y=np.arange(N_FEATURES),
+        colorscale="tempo",
+        colorbar=dict(title="MSE"),
+    )
+)
+fig.update_layout(
+    title="Per-Feature MSE Over Training — Trained AE",
+    xaxis_title="Epoch",
+    yaxis_title="Feature rank (firing frequency)",
+    height=500,
+)
+style_fig(fig)
+fig.show()
+
+# %%
+# --- W^T W comparison ---
+models = [("Trained AE", tm_tied), ("Constructed AE", tm_synth_ortho)]
+
+fig = make_subplots(rows=1, cols=2, subplot_titles=["Trained AE", "Constructed AE"])
+
+for i, (name, tm) in enumerate(
+    [
+        ("Trained AE", tm_tied),
+        ("Constructed AE", tm_synth_ortho),
+    ]
+):
+    W = tm.W.detach().cpu().numpy()
+    WtW = W.T @ W
+    fig.add_trace(
+        go.Heatmap(z=WtW, colorscale="RdBu_r", zmid=0, showscale=(i == 1)),
+        row=1,
+        col=i + 1,
+    )
+
+fig.update_layout(title="W^T W Comparison", height=400, width=900)
+style_fig(fig)
+fig.show()
+
+# %%
+# --- Plot: Spectrum of W W^T ---
+fig = go.Figure()
+for name, tm in models:
+    W = tm.W.detach().cpu()
+    eigvals = torch.linalg.eigvalsh(W @ W.T).flip(0).numpy()
+    fig.add_trace(
+        go.Scatter(
+            x=np.arange(1, D_HIDDEN + 1),
+            y=eigvals,
+            name=name,
+            mode="lines+markers",
+            line=dict(width=2, color=MODEL_COLORS[name]),
+            marker=dict(size=6, color=MODEL_COLORS[name]),
+        )
+    )
+fig.update_layout(
+    title="Spectrum of W W^T",
+    xaxis_title="Eigenvalue index",
+    yaxis_title="Eigenvalue",
+)
+style_fig(fig)
+fig.show()
+
+# %%
+# --- Plot: Geometric properties comparison ---
+fig = make_subplots(
+    rows=1,
+    cols=3,
+    subplot_titles=[
+        "Feature Dimensionalities",
+        "Feature Norms",
+        "Total Interference",
+    ],
+)
+
+for name, tm in models:
+    fd = tm.feature_dimensionalities.detach().cpu().numpy()[sort_idx]
+    fn = tm.feature_norms.detach().cpu().numpy()[sort_idx]
+    ti = tm.total_feature_interferences.detach().cpu().numpy()[sort_idx]
+    x = np.arange(N_FEATURES)
+    color = MODEL_COLORS[name]
+
+    fig.add_trace(
+        go.Scatter(
+            x=x,
+            y=fd,
+            name=name,
+            legendgroup=name,
+            mode="markers",
+            marker=dict(size=3.25, opacity=0.6, color=color),
+        ),
+        row=1,
+        col=1,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=x,
+            y=fn,
+            name=name,
+            legendgroup=name,
+            mode="markers",
+            showlegend=False,
+            marker=dict(size=3.25, opacity=0.6, color=color),
+        ),
+        row=1,
+        col=2,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=x,
+            y=ti,
+            name=name,
+            legendgroup=name,
+            mode="markers",
+            showlegend=False,
+            marker=dict(size=3.25, opacity=0.6, color=color),
+        ),
+        row=1,
+        col=3,
+    )
+
+fig.update_layout(
+    title="Geometric Properties (sorted by firing probability)",
+    height=400,
+    width=1200,
+)
+for col in range(1, 4):
+    fig.update_xaxes(title_text="Feature Rank ", row=1, col=col)
+style_fig(fig)
+fig.show()
+
+# %%
+# --- Plot: Bias comparison ---
+fig = go.Figure()
+for name, tm in models:
+    b = tm.ae.b.detach().cpu().numpy()[sort_idx]  # ty:ignore
+    fig.add_trace(
+        go.Scatter(
+            x=np.arange(N_FEATURES),
+            y=b,
+            name=name,
+            mode="markers",
+            marker=dict(size=3.25, opacity=0.6, color=MODEL_COLORS[name]),
+        )
+    )
+fig.update_layout(
+    title="Learned Bias b (sorted by firing probability)",
+    xaxis_title="Feature Rank ",
+    yaxis_title="b",
+)
+style_fig(fig)
+fig.show()
+
+# %%
+# --- Plot: Feature norms² + bias (TiedLinearRelu) ---
+fn2 = tm_tied.feature_norms.detach().cpu().numpy() ** 2
+b_tied = tm_tied.ae.b.detach().cpu().numpy()  # ty:ignore
+combined = (fn2 + b_tied)[sort_idx]
+
+fig = go.Figure()
+fig.add_trace(
+    go.Scatter(
+        x=np.arange(N_FEATURES),
+        y=combined,
+        mode="markers",
+        marker=dict(size=3.25, opacity=0.6, color=MODEL_COLORS["Trained AE"]),
+        name="‖w‖² + b",
+    )
+)
+fig.update_layout(
+    title="Trained AE: ‖w‖² + b (sorted by firing probability)",
+    xaxis_title="Feature Rank ",
+    yaxis_title="‖w‖² + b",
+)
+style_fig(fig)
+fig.show()
+
+# %%
+# --- Summary statistics ---
+print("\n=== Summary ===")
+for name, eval_loss, pf in [
+    ("Trained AE", eval_losses_tied[-1], per_feature_tied[-1]),
+    ("Constructed AE", loss_synth_ortho, pf_synth_ortho),
+]:
+    final_mse = np.array(pf)
+    recovered = "  ".join(f"τ={t}: {int((final_mse < t).sum())}" for t in THRESHOLDS)
+    print(
+        f"{name:25s}  eval_loss={eval_loss:.6f}  "
+        f"recovered=[{recovered}]  "
+        f"mean_feature_MSE={final_mse.mean():.4f}"
+    )
+
 # %% --- SAE loss curves ---
 fig = go.Figure()
 for name, res in sae_results.items():
-    fig.add_trace(go.Scatter(y=res["losses"], mode="lines", name=name, opacity=0.8))
+    fig.add_trace(
+        go.Scatter(
+            y=res["losses"],
+            mode="lines",
+            name=name,
+            line=dict(width=2, color=MODEL_COLORS[name]),
+        )
+    )
 fig.update_layout(
     title="SAE Training Loss Comparison",
     xaxis_title="Step",
     yaxis_title="Loss",
     yaxis_type="log",
 )
+style_fig(fig)
 fig.show()
 
 
 # %% --- Per-feature SAE reconstruction error ---
 names = list(sae_results.keys())
-colors = ["blue", "green"]
 fig = go.Figure()
 for name in names:
     res = sae_results[name]
@@ -478,14 +571,16 @@ for name in names:
             x=np.arange(N_FEATURES),
             y=res["per_feat_sae_mse"][sort_idx],
             name=name,
-            mode="lines",
+            mode="markers",
+            marker=dict(size=3.25, opacity=0.6, color=MODEL_COLORS[name]),
         )
     )
 fig.update_layout(
     title="SAE Per-Feature Reconstruction Error (sorted by firing probability)",
-    xaxis_title="Feature rank (most frequent → rarest)",
+    xaxis_title="Feature Rank ",
     yaxis_title="MSE (hidden space)",
 )
+style_fig(fig)
 fig.show()
 
 # %% --- SAE activations on one-hot features (matched) ---
@@ -493,7 +588,7 @@ fig.show()
 
 for name in names:
     sae = sae_results[name]["sae"]
-    tm_ref = tm_tied if name == "TiedLinearRelu" else tm_synth_ortho
+    tm_ref = tm_tied if name == "Trained AE" else tm_synth_ortho
     with torch.no_grad():
         eye = torch.eye(N_FEATURES, device=DEVICE)
 
@@ -538,7 +633,7 @@ for name in names:
         f"mean_cosine = {mean_cosine:.4f}"
     )
 
-    px.imshow(
+    fig_imshow = px.imshow(
         sae_acts_matched,
         labels=dict(
             x="SAE dict element (cosine matched)", y="Feature (cosine matched)"
@@ -548,10 +643,12 @@ for name in names:
         title=f"SAE one-hot activations (cosine matched, diag={diagonality:.3f}) — {name}",
         aspect="auto",
         color_continuous_scale="ylgnbu_r",
-    ).show()
+    )
+    style_fig(fig_imshow)
+    fig_imshow.show()
 
     cosine_sim_matched = cosine_sim[np.ix_(row_order, col_order)]
-    px.imshow(
+    fig_imshow = px.imshow(
         cosine_sim_matched,
         labels=dict(
             x="SAE dict element (cosine matched)", y="Feature (cosine matched)"
@@ -563,7 +660,9 @@ for name in names:
         color_continuous_scale="RdBu",
         zmin=-1,
         zmax=1,
-    ).show()
+    )
+    style_fig(fig_imshow)
+    fig_imshow.show()
 
 # %% --- SAE evaluation: MCC, detection metrics ---
 for name, res in sae_results.items():
@@ -671,13 +770,11 @@ fig = make_subplots(
     subplot_titles=["Precision", "Recall (TPR)", "F1 Score", "FPR"],
 )
 
-model_colors = {"TiedLinearRelu": "blue", "SynthAE (ortho)": "green"}
 for name in names:
     res = sae_results[name]
-    # The per-feature arrays are indexed by matched order (mcc_feat_idx).
     # Re-sort by firing probability for display.
     feat_order = np.argsort(-fp_np[res["mcc_feat_idx_cos"]])
-    color = model_colors[name]
+    color = MODEL_COLORS[name]
     x = np.arange(len(feat_order))
 
     fig.add_trace(
@@ -685,8 +782,9 @@ for name in names:
             x=x,
             y=res["precision_per_cos"][feat_order],
             name=name,
-            mode="lines",
-            line=dict(color=color),
+            legendgroup=name,
+            mode="markers",
+            marker=dict(size=3.25, opacity=0.6, color=color),
         ),
         row=1,
         col=1,
@@ -696,9 +794,10 @@ for name in names:
             x=x,
             y=res["recall_per_cos"][feat_order],
             name=name,
-            mode="lines",
+            legendgroup=name,
+            mode="markers",
             showlegend=False,
-            line=dict(color=color),
+            marker=dict(size=3.25, opacity=0.6, color=color),
         ),
         row=1,
         col=2,
@@ -708,9 +807,10 @@ for name in names:
             x=x,
             y=res["f1_per_cos"][feat_order],
             name=name,
-            mode="lines",
+            legendgroup=name,
+            mode="markers",
             showlegend=False,
-            line=dict(color=color),
+            marker=dict(size=3.25, opacity=0.6, color=color),
         ),
         row=1,
         col=3,
@@ -720,21 +820,23 @@ for name in names:
             x=x,
             y=res["fpr_per_cos"][feat_order],
             name=name,
-            mode="lines",
+            legendgroup=name,
+            mode="markers",
             showlegend=False,
-            line=dict(color=color),
+            marker=dict(size=3.25, opacity=0.6, color=color),
         ),
         row=1,
         col=4,
     )
 
 fig.update_layout(
-    title="Per-Feature Detection Metrics (sorted by firing probability)",
+    title=f"Per-Feature Detection Metrics (top {N_DICT} matched, sorted by firing prob.)",
     height=400,
     width=1400,
 )
 for col in range(1, 5):
-    fig.update_xaxes(title_text="Feature rank", row=1, col=col)
+    fig.update_xaxes(title_text="Matched Feature Rank ", row=1, col=col)
+style_fig(fig)
 fig.show()
 
 # %% --- Encoder-based matching (using SAE activations on one-hot inputs) ---
@@ -844,7 +946,7 @@ for name in names:
     diag_enc = diag_sum / total_sum if total_sum > 0 else 0.0
     res["diagonality_enc"] = diag_enc
 
-    px.imshow(
+    fig_imshow = px.imshow(
         sae_acts_matched,
         labels=dict(
             x="SAE dict element (encoder matched)", y="Feature (encoder matched)"
@@ -854,7 +956,9 @@ for name in names:
         title=f"SAE one-hot activations (encoder matched, diag={diag_enc:.3f}) — {name}",
         aspect="auto",
         color_continuous_scale="ylgnbu_r",
-    ).show()
+    )
+    style_fig(fig_imshow)
+    fig_imshow.show()
 
 # %% --- Comparison table: decoder vs encoder matching ---
 print(f"\n{'=' * 90}")
@@ -909,10 +1013,9 @@ fig = make_subplots(
     ],
 )
 
-model_colors = {"TiedLinearRelu": "blue", "SynthAE (ortho)": "green"}
 for name in names:
     res = sae_results[name]
-    color = model_colors[name]
+    color = MODEL_COLORS[name]
 
     # Row 1: decoder matching (cos)
     feat_order_dec = np.argsort(-fp_np[res["mcc_feat_idx_cos"]])
@@ -925,8 +1028,9 @@ for name in names:
                 x=x,
                 y=res[metric][feat_order_dec],
                 name=name,
-                mode="lines",
-                line=dict(color=color),
+                legendgroup=name,
+                mode="markers",
+                marker=dict(size=3.25, opacity=0.6, color=color),
                 showlegend=(col == 1),
             ),
             row=1,
@@ -943,8 +1047,9 @@ for name in names:
                 x=x,
                 y=res[metric][feat_order_enc],
                 name=name,
-                mode="lines",
-                line=dict(color=color),
+                legendgroup=name,
+                mode="markers",
+                marker=dict(size=3.25, opacity=0.6, color=color),
                 showlegend=False,
             ),
             row=2,
@@ -958,7 +1063,8 @@ fig.update_layout(
 )
 for row in range(1, 3):
     for col in range(1, 5):
-        fig.update_xaxes(title_text="Feature rank", row=row, col=col)
+        fig.update_xaxes(title_text="Matched Feature Rank ", row=row, col=col)
+style_fig(fig)
 fig.show()
 
 # %%

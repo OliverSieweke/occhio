@@ -17,6 +17,42 @@ from occhio.distributions.correlated import HierarchicalPairs
 from occhio.sae.sae import SAESimple
 from occhio.toy_model import ToyModel
 
+# --- Publication-ready figure styling ---
+MODEL_COLORS = {"TiedLinearRelu": "#2563EB", "SynthAE (ortho)": "#16A34A"}
+_THRESH_COLORS = ["#3B82F6", "#F59E0B", "#EF4444"]
+
+_AXIS = dict(
+    showgrid=True,
+    gridcolor="#E5E7EB",
+    showline=True,
+    linecolor="#374151",
+    linewidth=1.2,
+    ticks="outside",
+    tickcolor="#374151",
+    minor=dict(ticks="outside", tickcolor="#9CA3AF"),
+    zeroline=False,
+)
+
+
+def style_fig(fig, nticksx=10, nticksy=8):
+    """Apply publication-ready styling."""
+    fig.update_layout(
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        font=dict(family="Arial, Helvetica, sans-serif", size=13, color="#1F2937"),
+        title_font=dict(size=15),
+        legend=dict(
+            bgcolor="rgba(255,255,255,0.95)",
+            bordercolor="#D1D5DB",
+            borderwidth=1,
+            itemsizing="constant",
+        ),
+    )
+    fig.update_xaxes(**_AXIS, nticks=nticksx)
+    fig.update_yaxes(**_AXIS, nticks=nticksy)
+    return fig
+
+
 # %%
 # --- Configuration ---
 DEVICE = "mps"
@@ -121,10 +157,19 @@ eval_epochs = list(range(0, N_EPOCHS, EVAL_FREQ)) + [N_EPOCHS - 1]
 
 fig = go.Figure()
 fig.add_trace(
-    go.Scatter(x=eval_epochs, y=eval_losses_tied, name="TiedLinearRelu", opacity=0.8)
+    go.Scatter(
+        x=eval_epochs,
+        y=eval_losses_tied,
+        name="TiedLinearRelu",
+        mode="lines",
+        line=dict(width=2, color=MODEL_COLORS["TiedLinearRelu"]),
+    )
 )
 fig.add_hline(
-    y=loss_synth, line_dash="dash", line_color="green", annotation_text="SynthAE"
+    y=loss_synth,
+    line_dash="dash",
+    line_color=MODEL_COLORS["SynthAE (ortho)"],
+    annotation_text="SynthAE",
 )
 fig.update_layout(
     title=f"Eval Loss — HierarchicalPairs (N={N_FEATURES}, D={D_HIDDEN})",
@@ -132,6 +177,7 @@ fig.update_layout(
     yaxis_title="Loss",
     yaxis_type="log",
 )
+style_fig(fig)
 fig.show()
 
 # %%
@@ -142,19 +188,36 @@ x = np.arange(N_FEATURES)
 pair_labels = [f"{'P' if i % 2 == 0 else 'S'}{i // 2}" for i in range(N_FEATURES)]
 
 fig = go.Figure()
-fig.add_trace(go.Scatter(x=x, y=final_tied, name="TiedLinearRelu", mode="lines"))
-fig.add_trace(go.Scatter(x=x, y=pf_synth, name="SynthAE (ortho)", mode="lines"))
+fig.add_trace(
+    go.Scatter(
+        x=x,
+        y=final_tied,
+        name="TiedLinearRelu",
+        mode="markers",
+        marker=dict(size=5, opacity=0.7, color=MODEL_COLORS["TiedLinearRelu"]),
+    )
+)
+fig.add_trace(
+    go.Scatter(
+        x=x,
+        y=pf_synth,
+        name="SynthAE (ortho)",
+        mode="markers",
+        marker=dict(size=5, opacity=0.7, color=MODEL_COLORS["SynthAE (ortho)"]),
+    )
+)
 fig.update_layout(
     title="Per-Feature Reconstruction MSE",
     xaxis_title="Feature index (P=primary, S=secondary within pair)",
     yaxis_title="MSE",
 )
+style_fig(fig)
 fig.show()
 
 # %%
 # --- Plot: Features recovered (MSE < threshold) over training ---
 THRESHOLDS = [0.2, 0.5, 1.0]
-COLORS = ["blue", "orange", "red"]
+COLORS = _THRESH_COLORS
 
 fig = go.Figure()
 for thresh, color in zip(THRESHOLDS, COLORS):
@@ -166,7 +229,7 @@ for thresh, color in zip(THRESHOLDS, COLORS):
             y=n_recovered,
             name=f"TiedLinearRelu (τ={thresh})",
             mode="lines",
-            line=dict(color=color),
+            line=dict(color=color, width=2),
         )
     )
     fig.add_hline(y=n_synth, line_dash="dash", line_color=color)
@@ -175,6 +238,7 @@ fig.update_layout(
     xaxis_title="Epoch",
     yaxis_title="# features recovered",
 )
+style_fig(fig)
 fig.show()
 
 # %%
@@ -193,6 +257,7 @@ for i, (name, tm) in enumerate(models):
         col=i + 1,
     )
 fig.update_layout(title="W^T W Comparison", height=400, width=900)
+style_fig(fig)
 fig.show()
 
 # %%
@@ -202,27 +267,43 @@ fig = make_subplots(
     cols=3,
     subplot_titles=["Feature Dimensionalities", "Feature Norms", "Total Interference"],
 )
-model_colors = {"TiedLinearRelu": "blue", "SynthAE (ortho)": "green"}
+model_colors = MODEL_COLORS
 for name, tm in models:
     fd = tm.feature_dimensionalities.detach().cpu().numpy()
     fn = tm.feature_norms.detach().cpu().numpy()
     ti = tm.total_feature_interferences.detach().cpu().numpy()
     color = model_colors[name]
     fig.add_trace(
-        go.Scatter(x=x, y=fd, name=name, mode="lines", line=dict(color=color)),
+        go.Scatter(
+            x=x,
+            y=fd,
+            name=name,
+            mode="markers",
+            marker=dict(size=5, opacity=0.7, color=color),
+        ),
         row=1,
         col=1,
     )
     fig.add_trace(
         go.Scatter(
-            x=x, y=fn, name=name, mode="lines", showlegend=False, line=dict(color=color)
+            x=x,
+            y=fn,
+            name=name,
+            mode="markers",
+            showlegend=False,
+            marker=dict(size=5, opacity=0.7, color=color),
         ),
         row=1,
         col=2,
     )
     fig.add_trace(
         go.Scatter(
-            x=x, y=ti, name=name, mode="lines", showlegend=False, line=dict(color=color)
+            x=x,
+            y=ti,
+            name=name,
+            mode="markers",
+            showlegend=False,
+            marker=dict(size=5, opacity=0.7, color=color),
         ),
         row=1,
         col=3,
@@ -230,6 +311,7 @@ for name, tm in models:
 fig.update_layout(title="Geometric Properties", height=400, width=1200)
 for col in range(1, 4):
     fig.update_xaxes(title_text="Feature index", row=1, col=col)
+style_fig(fig)
 fig.show()
 
 # %%
@@ -272,13 +354,21 @@ for name, tm in [("TiedLinearRelu", tm_tied), ("SynthAE (ortho)", tm_synth)]:
 # --- SAE loss curves ---
 fig = go.Figure()
 for name, res in sae_results.items():
-    fig.add_trace(go.Scatter(y=res["losses"], mode="lines", name=name, opacity=0.8))
+    fig.add_trace(
+        go.Scatter(
+            y=res["losses"],
+            mode="lines",
+            name=name,
+            line=dict(width=2, color=MODEL_COLORS[name]),
+        )
+    )
 fig.update_layout(
     title="SAE Training Loss",
     xaxis_title="Step",
     yaxis_title="Loss",
     yaxis_type="log",
 )
+style_fig(fig)
 fig.show()
 
 # %%
@@ -313,7 +403,7 @@ for name, res in sae_results.items():
 
     print(f"{name}: diagonality={diagonality:.4f}  mean_firing={mean_firing:.4f}")
 
-    px.imshow(
+    fig_imshow = px.imshow(
         sae_acts_matched,
         labels=dict(
             x="SAE dict element (firing matched)", y="Feature (firing matched)"
@@ -323,7 +413,9 @@ for name, res in sae_results.items():
         title=f"SAE one-hot activations (firing matched, diag={diagonality:.3f}) — {name}",
         aspect="auto",
         color_continuous_scale="ylgnbu_r",
-    ).show()
+    )
+    style_fig(fig_imshow)
+    fig_imshow.show()
 
 # %%
 # --- f0, f1, f0+f1 probe ---
@@ -393,6 +485,7 @@ fig.update_layout(
     height=300,
     width=500 * len(model_names),
 )
+style_fig(fig)
 fig.show()
 
 # %%
