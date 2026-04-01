@@ -461,6 +461,7 @@ fig_cos_act.add_trace(
 )
 
 fig_cos_act.update_layout(
+    **LAYOUT_DEFAULTS,
     title=f"Cosine similarity (activation matched, mean={cos_mcc_act_signed:.3f})",
     height=700,
     showlegend=False,
@@ -470,7 +471,7 @@ fig_cos_act.update_yaxes(title_text="b_enc", row=2, col=1)
 fig_cos_act.update_xaxes(
     title_text="SAE dict element (activation matched)", row=2, col=1
 )
-fig_cos_act.show()
+fig_cos_act
 
 # %% --- Detection metrics (both matchings) ---
 with torch.no_grad():
@@ -590,6 +591,7 @@ for i in range(len(feat_idx)):
     )
 
 fig3.update_layout(
+    **LAYOUT_DEFAULTS,
     title="AE embedding (W) vs matched SAE decoder dictionary",
     scene=dict(
         xaxis_title="h₀",
@@ -599,7 +601,7 @@ fig3.update_layout(
     ),
     height=700,
 )
-fig3.show()
+fig3
 
 # %% --- Plot W embedding + activation-matched SAE decoder dictionary ---
 matched_W_dec_act = W_dec_np[dict_idx_act]  # (n_matched, n_hidden)
@@ -673,6 +675,7 @@ for i in range(len(feat_idx_act)):
     )
 
 fig4.update_layout(
+    **LAYOUT_DEFAULTS,
     title="AE embedding (W) vs activation-matched SAE decoder dictionary",
     scene=dict(
         xaxis_title="h₀",
@@ -682,6 +685,6 @@ fig4.update_layout(
     ),
     height=700,
 )
-fig4.show()
+fig4
 
 # %%
