@@ -18,11 +18,43 @@ from occhio.sae.sae import SAESimple
 from occhio.distributions.sparse import SparseUniform
 from occhio.toy_model import ToyModel
 
+# --- Paper-quality plot defaults ---
+PALETTE = {"TiedLinearRelu": "#2166ac", "SynthAE (ortho)": "#4daf4a"}
+FONT = dict(family="Times New Roman, serif", size=14, color="#333333")
+AXIS_STYLE = dict(
+    showgrid=True,
+    gridcolor="rgba(0,0,0,0.08)",
+    gridwidth=1,
+    zeroline=False,
+    linecolor="#666666",
+    linewidth=1,
+    ticks="outside",
+    ticklen=4,
+    tickwidth=1,
+    tickcolor="#666666",
+    minor=dict(ticks="outside", ticklen=2),
+)
+LAYOUT_DEFAULTS = dict(
+    template="plotly_white",
+    font=FONT,
+    title_font_size=16,
+    legend=dict(
+        bgcolor="rgba(255,255,255,0.9)",
+        bordercolor="#cccccc",
+        borderwidth=1,
+        font_size=12,
+    ),
+    margin=dict(l=60, r=20, t=50, b=50),
+    plot_bgcolor="white",
+    paper_bgcolor="white",
+)
+LINE_WIDTH = 2
+
 # %%
 # --- Configuration ---
 DEVICE = "mps"
 SEED = 42
-N_FEATURES = 1000
+N_FEATURES = 500
 D_HIDDEN = 64
 N_EPOCHS = 30_000
 BATCH_SIZE = 512
@@ -32,8 +64,8 @@ EVAL_FREQ = 250
 # %%
 # --- Zipfian firing probabilities ---
 # Matches the SyntheticDataModel zipfian config: p_max=0.4, p_min=0.5/N, alpha=0.5
-high = 0.2
-low = 0.5 / N_FEATURES
+high = 0.46
+low = 1.0 / N_FEATURES
 alpha = np.log(high / low) / np.log(N_FEATURES)
 print(f"{alpha=}")
 firing_probs = [high / (i + 1) ** alpha for i in range(N_FEATURES)]
@@ -138,19 +170,33 @@ eval_epochs = list(range(0, N_EPOCHS, EVAL_FREQ)) + [N_EPOCHS - 1]
 
 fig = go.Figure()
 fig.add_trace(
-    go.Scatter(x=eval_epochs, y=eval_losses_tied, name="TiedLinearRelu", opacity=0.8)
+    go.Scatter(
+        x=eval_epochs,
+        y=eval_losses_tied,
+        name="TiedLinearRelu",
+        line=dict(color=PALETTE["TiedLinearRelu"], width=LINE_WIDTH),
+    )
 )
 fig.add_hline(
     y=loss_synth_ortho,
     line_dash="dash",
-    line_color="green",
+    line_color=PALETTE["SynthAE (ortho)"],
+    line_width=LINE_WIDTH,
+    annotation_text="SynthAE (ortho)",
+    annotation_font_size=12,
+    annotation_font_color=PALETTE["SynthAE (ortho)"],
 )
 fig.update_layout(
+    **LAYOUT_DEFAULTS,
     title=f"Eval Loss — SparseUniform (N={N_FEATURES}, D={D_HIDDEN})",
     xaxis_title="Epoch",
     yaxis_title="Loss",
     yaxis_type="log",
+    height=450,
+    width=700,
 )
+fig.update_xaxes(**AXIS_STYLE)
+fig.update_yaxes(**AXIS_STYLE)
 fig.show()
 
 # %%
@@ -168,6 +214,7 @@ fig.add_trace(
         y=final_tied[sort_idx],
         name="TiedLinearRelu",
         mode="lines",
+        line=dict(color=PALETTE["TiedLinearRelu"], width=LINE_WIDTH),
     )
 )
 fig.add_trace(
@@ -176,22 +223,28 @@ fig.add_trace(
         y=pf_synth_ortho[sort_idx],
         name="SynthAE (ortho)",
         mode="lines",
+        line=dict(color=PALETTE["SynthAE (ortho)"], width=LINE_WIDTH),
     )
 )
 fig.update_layout(
-    title="Per-Feature Reconstruction MSE (sorted by firing probability)",
+    **LAYOUT_DEFAULTS,
+    title="Per-Feature Reconstruction MSE",
     xaxis_title="Feature rank (most frequent → rarest)",
     yaxis_title="MSE",
+    height=450,
+    width=700,
 )
+fig.update_xaxes(**AXIS_STYLE)
+fig.update_yaxes(**AXIS_STYLE)
 fig.show()
 
 # %%
 # --- Plot: Features recovered (MSE < threshold) vs epoch, with SynthAE baselines ---
 THRESHOLDS = [0.2, 0.5, 1.0]
-COLORS = ["blue", "orange", "red"]
+THRESHOLD_COLORS = ["#d62728", "#ff7f0e", "#9467bd"]
 
 fig = go.Figure()
-for thresh, color in zip(THRESHOLDS, COLORS):
+for thresh, color in zip(THRESHOLDS, THRESHOLD_COLORS):
     n_recovered_tied = [int((np.array(s) < thresh).sum()) for s in per_feature_tied]
     fig.add_trace(
         go.Scatter(
@@ -199,7 +252,7 @@ for thresh, color in zip(THRESHOLDS, COLORS):
             y=n_recovered_tied,
             name=f"TiedLinearRelu (τ={thresh})",
             mode="lines",
-            line=dict(color=color),
+            line=dict(color=color, width=LINE_WIDTH),
         )
     )
     n_recovered_ortho = int((pf_synth_ortho < thresh).sum())
@@ -207,12 +260,21 @@ for thresh, color in zip(THRESHOLDS, COLORS):
         y=n_recovered_ortho,
         line_dash="dash",
         line_color=color,
+        line_width=1.5,
+        annotation_text=f"SynthAE τ={thresh}",
+        annotation_font_size=10,
+        annotation_font_color=color,
     )
 fig.update_layout(
+    **LAYOUT_DEFAULTS,
     title="Features Recovered (MSE < τ) Over Training",
     xaxis_title="Epoch",
-    yaxis_title="# features recovered",
+    yaxis_title="Number of features recovered",
+    height=450,
+    width=700,
 )
+fig.update_xaxes(**AXIS_STYLE)
+fig.update_yaxes(**AXIS_STYLE)
 fig.show()
 
 # %%
@@ -225,16 +287,21 @@ fig = go.Figure(
         z=arr_sorted,
         x=eval_epochs[1:],
         y=np.arange(N_FEATURES),
-        colorscale="tempo",
-        colorbar=dict(title="MSE"),
+        colorscale="Viridis",
+        reversescale=True,
+        colorbar=dict(title=dict(text="MSE", font=dict(size=13)), thickness=15),
     )
 )
 fig.update_layout(
+    **LAYOUT_DEFAULTS,
     title="Per-Feature MSE Over Training — TiedLinearRelu",
     xaxis_title="Epoch",
     yaxis_title="Feature rank (most frequent → rarest)",
     height=500,
+    width=750,
 )
+fig.update_xaxes(**AXIS_STYLE)
+fig.update_yaxes(**AXIS_STYLE)
 fig.show()
 
 # %%
@@ -242,7 +309,10 @@ fig.show()
 models = [("TiedLinearRelu", tm_tied), ("SynthAE (ortho)", tm_synth_ortho)]
 
 fig = make_subplots(
-    rows=1, cols=2, subplot_titles=["TiedLinearRelu", "SynthAE (ortho)"]
+    rows=1,
+    cols=2,
+    subplot_titles=["TiedLinearRelu", "SynthAE (ortho)"],
+    horizontal_spacing=0.08,
 )
 
 for i, (name, tm) in enumerate(
@@ -254,12 +324,21 @@ for i, (name, tm) in enumerate(
     W = tm.W.detach().cpu().numpy()
     WtW = W.T @ W
     fig.add_trace(
-        go.Heatmap(z=WtW, colorscale="RdBu_r", zmid=0, showscale=(i == 1)),
+        go.Heatmap(
+            z=WtW,
+            colorscale="RdBu_r",
+            zmid=0,
+            showscale=(i == 1),
+            colorbar=dict(thickness=15) if i == 1 else None,
+        ),
         row=1,
         col=i + 1,
     )
 
-fig.update_layout(title="W^T W Comparison", height=400, width=900)
+fig.update_layout(
+    **LAYOUT_DEFAULTS, title="W<sup>T</sup>W Comparison", height=450, width=950
+)
+fig.update_annotations(font_size=14)
 fig.show()
 
 # %%
@@ -274,13 +353,23 @@ for name, tm in models:
             y=eigvals,
             name=name,
             mode="lines+markers",
+            line=dict(color=PALETTE[name], width=LINE_WIDTH),
+            marker=dict(size=5, color=PALETTE[name]),
         )
     )
 fig.update_layout(
-    title="Spectrum of W W^T",
+    **LAYOUT_DEFAULTS,
+    title="Spectrum of WW<sup>T</sup>",
     xaxis_title="Eigenvalue index",
     yaxis_title="Eigenvalue",
+    height=450,
+    width=700,
 )
+fig.update_layout(
+    legend=dict(x=0.95, y=0.95, xanchor="right", yanchor="top"),
+)
+fig.update_xaxes(**AXIS_STYLE)
+fig.update_yaxes(**AXIS_STYLE)
 fig.show()
 
 # %%
@@ -289,47 +378,62 @@ fig = make_subplots(
     rows=1,
     cols=3,
     subplot_titles=[
-        "Feature Dimensionalities",
-        "Feature Norms",
+        "Feature Dimensionality",
+        "Feature Norm",
         "Total Interference",
     ],
+    horizontal_spacing=0.08,
 )
 
-model_colors = {"TiedLinearRelu": "blue", "SynthAE (ortho)": "green"}
 for name, tm in models:
     fd = tm.feature_dimensionalities.detach().cpu().numpy()[sort_idx]
     fn = tm.feature_norms.detach().cpu().numpy()[sort_idx]
     ti = tm.total_feature_interferences.detach().cpu().numpy()[sort_idx]
     x = np.arange(N_FEATURES)
-    color = model_colors[name]
+    color = PALETTE[name]
 
     fig.add_trace(
-        go.Scatter(x=x, y=fd, name=name, mode="lines", line=dict(color=color)),
+        go.Scatter(
+            x=x, y=fd, name=name, mode="lines", line=dict(color=color, width=LINE_WIDTH)
+        ),
         row=1,
         col=1,
     )
     fig.add_trace(
         go.Scatter(
-            x=x, y=fn, name=name, mode="lines", showlegend=False, line=dict(color=color)
+            x=x,
+            y=fn,
+            name=name,
+            mode="lines",
+            showlegend=False,
+            line=dict(color=color, width=LINE_WIDTH),
         ),
         row=1,
         col=2,
     )
     fig.add_trace(
         go.Scatter(
-            x=x, y=ti, name=name, mode="lines", showlegend=False, line=dict(color=color)
+            x=x,
+            y=ti,
+            name=name,
+            mode="lines",
+            showlegend=False,
+            line=dict(color=color, width=LINE_WIDTH),
         ),
         row=1,
         col=3,
     )
 
 fig.update_layout(
+    **LAYOUT_DEFAULTS,
     title="Geometric Properties (sorted by firing probability)",
     height=400,
     width=1200,
 )
+fig.update_annotations(font_size=14)
 for col in range(1, 4):
-    fig.update_xaxes(title_text="Feature rank", row=1, col=col)
+    fig.update_xaxes(title_text="Feature rank", row=1, col=col, **AXIS_STYLE)
+    fig.update_yaxes(row=1, col=col, **AXIS_STYLE)
 fig.show()
 
 # %%
@@ -337,12 +441,25 @@ fig.show()
 fig = go.Figure()
 for name, tm in models:
     b = tm.ae.b.detach().cpu().numpy()[sort_idx]  # ty:ignore
-    fig.add_trace(go.Scatter(x=np.arange(N_FEATURES), y=b, name=name, mode="lines"))
+    fig.add_trace(
+        go.Scatter(
+            x=np.arange(N_FEATURES),
+            y=b,
+            name=name,
+            mode="lines",
+            line=dict(color=PALETTE[name], width=LINE_WIDTH),
+        )
+    )
 fig.update_layout(
-    title="Learned Bias b (sorted by firing probability)",
+    **LAYOUT_DEFAULTS,
+    title="Learned Bias <i>b</i>",
     xaxis_title="Feature rank (most frequent → rarest)",
-    yaxis_title="b",
+    yaxis_title="<i>b</i>",
+    height=450,
+    width=700,
 )
+fig.update_xaxes(**AXIS_STYLE)
+fig.update_yaxes(**AXIS_STYLE)
 fig.show()
 
 # %%
@@ -353,13 +470,24 @@ combined = (fn2 + b_tied)[sort_idx]
 
 fig = go.Figure()
 fig.add_trace(
-    go.Scatter(x=np.arange(N_FEATURES), y=combined, mode="lines", name="‖w‖² + b")
+    go.Scatter(
+        x=np.arange(N_FEATURES),
+        y=combined,
+        mode="lines",
+        name="‖w‖² + b",
+        line=dict(color=PALETTE["TiedLinearRelu"], width=LINE_WIDTH),
+    )
 )
 fig.update_layout(
-    title="TiedLinearRelu: ‖w‖² + b (sorted by firing probability)",
+    **LAYOUT_DEFAULTS,
+    title="TiedLinearRelu: ‖w‖² + b",
     xaxis_title="Feature rank (most frequent → rarest)",
     yaxis_title="‖w‖² + b",
+    height=450,
+    width=700,
 )
+fig.update_xaxes(**AXIS_STYLE)
+fig.update_yaxes(**AXIS_STYLE)
 fig.show()
 
 # %%
@@ -457,19 +585,30 @@ for name, tm in [("TiedLinearRelu", tm_tied), ("SynthAE (ortho)", tm_synth_ortho
 # %% --- SAE loss curves ---
 fig = go.Figure()
 for name, res in sae_results.items():
-    fig.add_trace(go.Scatter(y=res["losses"], mode="lines", name=name, opacity=0.8))
+    fig.add_trace(
+        go.Scatter(
+            y=res["losses"],
+            mode="lines",
+            name=name,
+            line=dict(color=PALETTE[name], width=LINE_WIDTH),
+        )
+    )
 fig.update_layout(
-    title="SAE Training Loss Comparison",
+    **LAYOUT_DEFAULTS,
+    title="SAE Training Loss",
     xaxis_title="Step",
     yaxis_title="Loss",
     yaxis_type="log",
+    height=450,
+    width=700,
 )
+fig.update_xaxes(**AXIS_STYLE)
+fig.update_yaxes(**AXIS_STYLE)
 fig.show()
 
 
 # %% --- Per-feature SAE reconstruction error ---
 names = list(sae_results.keys())
-colors = ["blue", "green"]
 fig = go.Figure()
 for name in names:
     res = sae_results[name]
@@ -479,13 +618,19 @@ for name in names:
             y=res["per_feat_sae_mse"][sort_idx],
             name=name,
             mode="lines",
+            line=dict(color=PALETTE[name], width=LINE_WIDTH),
         )
     )
 fig.update_layout(
-    title="SAE Per-Feature Reconstruction Error (sorted by firing probability)",
+    **LAYOUT_DEFAULTS,
+    title="SAE Per-Feature Reconstruction Error",
     xaxis_title="Feature rank (most frequent → rarest)",
     yaxis_title="MSE (hidden space)",
+    height=450,
+    width=700,
 )
+fig.update_xaxes(**AXIS_STYLE)
+fig.update_yaxes(**AXIS_STYLE)
 fig.show()
 
 # %% --- SAE activations on one-hot features (matched) ---
@@ -538,32 +683,36 @@ for name in names:
         f"mean_cosine = {mean_cosine:.4f}"
     )
 
-    px.imshow(
+    _fig = px.imshow(
         sae_acts_matched,
         labels=dict(
             x="SAE dict element (cosine matched)", y="Feature (cosine matched)"
         ),
         x=col_labels,
         y=row_labels,
-        title=f"SAE one-hot activations (cosine matched, diag={diagonality:.3f}) — {name}",
+        title=f"SAE Activations (cosine matched, diag={diagonality:.3f}) — {name}",
         aspect="auto",
-        color_continuous_scale="ylgnbu_r",
-    ).show()
+        color_continuous_scale="Viridis",
+    )
+    _fig.update_layout(**LAYOUT_DEFAULTS, height=550, width=700)
+    _fig.show()
 
     cosine_sim_matched = cosine_sim[np.ix_(row_order, col_order)]
-    px.imshow(
+    _fig = px.imshow(
         cosine_sim_matched,
         labels=dict(
             x="SAE dict element (cosine matched)", y="Feature (cosine matched)"
         ),
         x=col_labels,
         y=row_labels,
-        title=f"Cosine similarity (matched, mean={mean_cosine:.3f}) — {name}",
+        title=f"Cosine Similarity (matched, mean={mean_cosine:.3f}) — {name}",
         aspect="auto",
         color_continuous_scale="RdBu",
         zmin=-1,
         zmax=1,
-    ).show()
+    )
+    _fig.update_layout(**LAYOUT_DEFAULTS, height=550, width=700)
+    _fig.show()
 
 # %% --- SAE evaluation: MCC, detection metrics ---
 for name, res in sae_results.items():
@@ -669,15 +818,13 @@ fig = make_subplots(
     rows=1,
     cols=4,
     subplot_titles=["Precision", "Recall (TPR)", "F1 Score", "FPR"],
+    horizontal_spacing=0.06,
 )
 
-model_colors = {"TiedLinearRelu": "blue", "SynthAE (ortho)": "green"}
 for name in names:
     res = sae_results[name]
-    # The per-feature arrays are indexed by matched order (mcc_feat_idx).
-    # Re-sort by firing probability for display.
     feat_order = np.argsort(-fp_np[res["mcc_feat_idx_cos"]])
-    color = model_colors[name]
+    color = PALETTE[name]
     x = np.arange(len(feat_order))
 
     fig.add_trace(
@@ -686,7 +833,7 @@ for name in names:
             y=res["precision_per_cos"][feat_order],
             name=name,
             mode="lines",
-            line=dict(color=color),
+            line=dict(color=color, width=LINE_WIDTH),
         ),
         row=1,
         col=1,
@@ -698,7 +845,7 @@ for name in names:
             name=name,
             mode="lines",
             showlegend=False,
-            line=dict(color=color),
+            line=dict(color=color, width=LINE_WIDTH),
         ),
         row=1,
         col=2,
@@ -710,7 +857,7 @@ for name in names:
             name=name,
             mode="lines",
             showlegend=False,
-            line=dict(color=color),
+            line=dict(color=color, width=LINE_WIDTH),
         ),
         row=1,
         col=3,
@@ -722,19 +869,22 @@ for name in names:
             name=name,
             mode="lines",
             showlegend=False,
-            line=dict(color=color),
+            line=dict(color=color, width=LINE_WIDTH),
         ),
         row=1,
         col=4,
     )
 
 fig.update_layout(
-    title="Per-Feature Detection Metrics (sorted by firing probability)",
+    **LAYOUT_DEFAULTS,
+    title="Per-Feature Detection Metrics",
     height=400,
     width=1400,
 )
+fig.update_annotations(font_size=14)
 for col in range(1, 5):
-    fig.update_xaxes(title_text="Feature rank", row=1, col=col)
+    fig.update_xaxes(title_text="Feature rank", row=1, col=col, **AXIS_STYLE)
+    fig.update_yaxes(row=1, col=col, **AXIS_STYLE)
 fig.show()
 
 # %% --- Encoder-based matching (using SAE activations on one-hot inputs) ---
@@ -844,17 +994,19 @@ for name in names:
     diag_enc = diag_sum / total_sum if total_sum > 0 else 0.0
     res["diagonality_enc"] = diag_enc
 
-    px.imshow(
+    _fig = px.imshow(
         sae_acts_matched,
         labels=dict(
             x="SAE dict element (encoder matched)", y="Feature (encoder matched)"
         ),
         x=col_labels,
         y=row_labels,
-        title=f"SAE one-hot activations (encoder matched, diag={diag_enc:.3f}) — {name}",
+        title=f"SAE Activations (encoder matched, diag={diag_enc:.3f}) — {name}",
         aspect="auto",
-        color_continuous_scale="ylgnbu_r",
-    ).show()
+        color_continuous_scale="Viridis",
+    )
+    _fig.update_layout(**LAYOUT_DEFAULTS, height=550, width=700)
+    _fig.show()
 
 # %% --- Comparison table: decoder vs encoder matching ---
 print(f"\n{'=' * 90}")
@@ -907,12 +1059,13 @@ fig = make_subplots(
         "F1 (enc)",
         "FPR (enc)",
     ],
+    horizontal_spacing=0.06,
+    vertical_spacing=0.12,
 )
 
-model_colors = {"TiedLinearRelu": "blue", "SynthAE (ortho)": "green"}
 for name in names:
     res = sae_results[name]
-    color = model_colors[name]
+    color = PALETTE[name]
 
     # Row 1: decoder matching (cos)
     feat_order_dec = np.argsort(-fp_np[res["mcc_feat_idx_cos"]])
@@ -926,7 +1079,7 @@ for name in names:
                 y=res[metric][feat_order_dec],
                 name=name,
                 mode="lines",
-                line=dict(color=color),
+                line=dict(color=color, width=LINE_WIDTH),
                 showlegend=(col == 1),
             ),
             row=1,
@@ -944,7 +1097,7 @@ for name in names:
                 y=res[metric][feat_order_enc],
                 name=name,
                 mode="lines",
-                line=dict(color=color),
+                line=dict(color=color, width=LINE_WIDTH),
                 showlegend=False,
             ),
             row=2,
@@ -952,13 +1105,16 @@ for name in names:
         )
 
 fig.update_layout(
+    **LAYOUT_DEFAULTS,
     title="Per-Feature Detection: Decoder (top) vs Encoder (bottom) Matching",
-    height=600,
+    height=650,
     width=1400,
 )
+fig.update_annotations(font_size=13)
 for row in range(1, 3):
     for col in range(1, 5):
-        fig.update_xaxes(title_text="Feature rank", row=row, col=col)
+        fig.update_xaxes(title_text="Feature rank", row=row, col=col, **AXIS_STYLE)
+        fig.update_yaxes(row=row, col=col, **AXIS_STYLE)
 fig.show()
 
 # %%

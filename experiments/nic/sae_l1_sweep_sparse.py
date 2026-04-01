@@ -17,6 +17,38 @@ from occhio.sae.sae import SAESimple
 from occhio.distributions import SparseUniform
 from occhio.toy_model import ToyModel
 
+# --- Paper-quality plot defaults ---
+PALETTE = {"TiedLinearRelu": "#2166ac", "SynthAE (ortho)": "#4daf4a"}
+FONT = dict(family="Times New Roman, serif", size=14, color="#333333")
+AXIS_STYLE = dict(
+    showgrid=True,
+    gridcolor="rgba(0,0,0,0.08)",
+    gridwidth=1,
+    zeroline=False,
+    linecolor="#666666",
+    linewidth=1,
+    ticks="outside",
+    ticklen=4,
+    tickwidth=1,
+    tickcolor="#666666",
+    minor=dict(ticks="outside", ticklen=2),
+)
+LAYOUT_DEFAULTS = dict(
+    template="plotly_white",
+    font=FONT,
+    title_font_size=16,
+    legend=dict(
+        bgcolor="rgba(255,255,255,0.9)",
+        bordercolor="#cccccc",
+        borderwidth=1,
+        font_size=12,
+    ),
+    margin=dict(l=60, r=20, t=50, b=50),
+    plot_bgcolor="white",
+    paper_bgcolor="white",
+)
+LINE_WIDTH = 2
+
 # %%
 # --- Configuration ---
 DEVICE = "mps"
@@ -29,15 +61,15 @@ BATCH_SIZE = 512
 EVAL_SAMPLES = 2**14
 
 # SAE sweep config
-L1_VALUES = [0.08, 0.09, 0.1, 0.2, 0.5, 0.8]
+L1_VALUES = [0.15, 0.2, 0.3, 0.5, 0.7, 0.9]
 N_DICT = N_FEATURES // 2
 SAE_STEPS = 25_000
 SAE_BATCH = 1024
 SAE_LR = 3e-4
 DET_SAMPLES = 50_000
 
-high = 0.2
-low = 0.5 / N_FEATURES
+high = 0.46
+low = 1.0 / N_FEATURES
 alpha = np.log(high / low) / np.log(N_FEATURES)
 print(f"{alpha=}")
 firing_probs = [high / (i + 1) ** alpha for i in range(N_FEATURES)]
@@ -209,8 +241,6 @@ for name, tm in base_models:
 
 # %%
 # --- Plot: F1 vs L0 ---
-colors = {"TiedLinearRelu": "blue", "SynthAE (ortho)": "green"}
-
 fig = go.Figure()
 for name, res in sweep_results.items():
     fig.add_trace(
@@ -221,18 +251,22 @@ for name, res in sweep_results.items():
             name=name,
             text=[f"L1={l1}" for l1 in res["l1"]],
             textposition="top center",
-            marker=dict(size=10, color=colors[name]),
-            line=dict(color=colors[name]),
+            textfont=dict(size=10),
+            marker=dict(size=8, color=PALETTE[name]),
+            line=dict(color=PALETTE[name], width=LINE_WIDTH),
         )
     )
 
 fig.update_layout(
+    **LAYOUT_DEFAULTS,
     title=f"SAE F1 vs Mean L0 — L1 Sweep (N={N_FEATURES}, D={D_HIDDEN}, dict={N_DICT})",
     xaxis_title="Mean L0 (avg active dict elements per sample)",
     yaxis_title="Mean F1 Score",
     width=900,
     height=600,
 )
+fig.update_xaxes(**AXIS_STYLE)
+fig.update_yaxes(**AXIS_STYLE)
 fig.show()
 
 # %%
@@ -248,8 +282,9 @@ for name, res in sweep_results.items():
             name=name,
             text=[f"L1={l1}" for l1 in res["l1"]],
             textposition="top center",
-            marker=dict(size=10, color=colors[name]),
-            line=dict(color=colors[name]),
+            textfont=dict(size=10),
+            marker=dict(size=8, color=PALETTE[name]),
+            line=dict(color=PALETTE[name], width=LINE_WIDTH),
         )
     )
     # Highlight best F1 point
@@ -261,23 +296,27 @@ for name, res in sweep_results.items():
             name=f"{name} best F1",
             text=[f"★ F1={res['f1'][best_idx]:.3f}"],
             textposition="bottom center",
+            textfont=dict(size=11),
             marker=dict(
-                size=16,
-                color=colors[name],
+                size=14,
+                color=PALETTE[name],
                 symbol="star",
-                line=dict(width=2, color="black"),
+                line=dict(width=1.5, color="#333333"),
             ),
             showlegend=False,
         )
     )
 
 fig2.update_layout(
+    **LAYOUT_DEFAULTS,
     title=f"SAE Recall vs Precision — L1 Sweep (N={N_FEATURES}, D={D_HIDDEN}, dict={N_DICT})",
     xaxis_title="Mean Precision",
     yaxis_title="Mean Recall",
     width=900,
     height=600,
 )
+fig2.update_xaxes(**AXIS_STYLE)
+fig2.update_yaxes(**AXIS_STYLE)
 fig2.show()
 
 # %%
@@ -313,9 +352,10 @@ fig = px.imshow(
     WtW,
     color_continuous_scale="RdBu",
     color_continuous_midpoint=0,
-    title="W^T W — TiedLinearRelu",
-    labels=dict(x="Feature j", y="Feature i", color="W^T W"),
+    title="W<sup>T</sup>W — TiedLinearRelu",
+    labels=dict(x="Feature j", y="Feature i", color="W<sup>T</sup>W"),
 )
+fig.update_layout(**LAYOUT_DEFAULTS, height=550, width=650)
 fig.show()
 
 # %%
