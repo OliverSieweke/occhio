@@ -372,8 +372,6 @@ fig_acts_act.update_layout(**LAYOUT_DEFAULTS)
 fig_acts_act
 
 # %% --- Cosine similarity matrix (matched order) + encoder bias ---
-from plotly.subplots import make_subplots
-
 cos_sim_matched = cos_sim_raw[np.ix_(row_order, col_order)]
 
 with torch.no_grad():
@@ -413,6 +411,7 @@ fig_cos.add_trace(
 )
 
 fig_cos.update_layout(
+    **LAYOUT_DEFAULTS,
     title=f"Cosine similarity (matched, mean={mcc_signed:.3f})",
     height=700,
     showlegend=False,
@@ -420,7 +419,7 @@ fig_cos.update_layout(
 fig_cos.update_yaxes(title_text="Feature (matched)", row=1, col=1)
 fig_cos.update_yaxes(title_text="b_enc", row=2, col=1)
 fig_cos.update_xaxes(title_text="SAE dict element (matched)", row=2, col=1)
-fig_cos.show()
+fig_cos
 
 # %% --- Cosine similarity matrix (activation-matched order) + encoder bias ---
 cos_sim_matched_act = cos_sim_raw[np.ix_(row_order_act, col_order_act)]
