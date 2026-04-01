@@ -243,6 +243,7 @@ class ToyModel:
                             else t
                         )
                         for t in raw_buffer
+                    )
                     raw = tuple(
                         t[start:end] if isinstance(t, Tensor) else t for t in raw_buffer
                     )

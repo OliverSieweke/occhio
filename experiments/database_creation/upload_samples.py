@@ -37,7 +37,7 @@ from occhio.distributions import (
 
 # --- Constants ---
 N_FEAT = 6**4  # 1296 — perfect 4th power for TorusDistribution(torus_dim=4)
-N_SAMPLES = 100_000
+N_SAMPLES = 1_000_000
 DEVICE = "mps"
 SAMPLE_CHUNK = 50_000
 
