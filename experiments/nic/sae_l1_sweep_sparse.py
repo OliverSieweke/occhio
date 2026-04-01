@@ -18,11 +18,11 @@ from occhio.distributions import SparseUniform
 from occhio.toy_model import ToyModel
 
 # --- Paper-quality plot defaults ---
-PALETTE = {"TiedLinearRelu": "#2166ac", "SynthAE (ortho)": "#4daf4a"}
-FONT = dict(family="Times New Roman, serif", size=14, color="#333333")
+PALETTE = {"Trained": "#2166ac", "Constructed": "#4daf4a"}
+FONT = dict(family="Times New Roman, serif", size=24, color="#333333")
 AXIS_STYLE = dict(
     showgrid=True,
-    gridcolor="rgba(0,0,0,0.08)",
+    gridcolor="rgba(0,0,0,0.02)",
     gridwidth=1,
     zeroline=False,
     linecolor="#666666",
@@ -32,16 +32,23 @@ AXIS_STYLE = dict(
     tickwidth=1,
     tickcolor="#666666",
     minor=dict(ticks="outside", ticklen=2),
+    tickfont_size=18,
+    # title_font_size=18,
 )
 LAYOUT_DEFAULTS = dict(
     template="plotly_white",
     font=FONT,
-    title_font_size=16,
+    title_font_size=18,
     legend=dict(
+        x=0.95,
+        y=0.95,
+        xanchor="right",
+        yanchor="top",
         bgcolor="rgba(255,255,255,0.9)",
         bordercolor="#cccccc",
         borderwidth=1,
-        font_size=12,
+        font_size=24,
+        itemsizing="constant",
     ),
     margin=dict(l=60, r=20, t=50, b=50),
     plot_bgcolor="white",
@@ -61,7 +68,7 @@ BATCH_SIZE = 512
 EVAL_SAMPLES = 2**14
 
 # SAE sweep config
-L1_VALUES = [0.15, 0.2, 0.3, 0.5, 0.7, 0.9]
+L1_VALUES = [0.15, 0.2, 0.3, 0.4, 0.5, 0.7, 0.9]
 N_DICT = N_FEATURES // 2
 SAE_STEPS = 25_000
 SAE_BATCH = 1024
@@ -120,7 +127,7 @@ def make_data_fn(tm_ref, device):
 
 # %%
 # --- L1 sweep (training only) ---
-base_models = [("TiedLinearRelu", tm_tied), ("SynthAE (ortho)", tm_synth)]
+base_models = [("Trained", tm_tied), ("Constructed", tm_synth)]
 sweep_results = {name: {"l1": [], "sae": []} for name, _ in base_models}
 
 for l1_coef in L1_VALUES:
@@ -251,17 +258,28 @@ for name, res in sweep_results.items():
             name=name,
             text=[f"L1={l1}" for l1 in res["l1"]],
             textposition="top center",
-            textfont=dict(size=10),
-            marker=dict(size=8, color=PALETTE[name]),
-            line=dict(color=PALETTE[name], width=LINE_WIDTH),
+            textfont=dict(size=16),
+            marker=dict(size=12, color=PALETTE[name]),
+            line=dict(color=PALETTE[name], width=3),
         )
     )
 
+true_mean_l0 = sum(firing_probs)
+fig.add_vline(
+    x=true_mean_l0,
+    line_dash="dot",
+    line_color="#888888",
+    line_width=2,
+    annotation_text=f"True L0 = {true_mean_l0:.1f}",
+    annotation_font_size=18,
+    annotation_font_color="#888888",
+    annotation_position="bottom right",
+)
 fig.update_layout(
     **LAYOUT_DEFAULTS,
-    title=f"SAE F1 vs Mean L0 — L1 Sweep (N={N_FEATURES}, D={D_HIDDEN}, dict={N_DICT})",
-    xaxis_title="Mean L0 (avg active dict elements per sample)",
-    yaxis_title="Mean F1 Score",
+    # title=f"SAE F1 vs Mean L0 — L1 Sweep (N={N_FEATURES}, D={D_HIDDEN}, dict={N_DICT})",
+    xaxis_title="Mean L0",
+    yaxis_title="F1 Score",
     width=900,
     height=600,
 )
@@ -281,10 +299,10 @@ for name, res in sweep_results.items():
             mode="lines+markers+text",
             name=name,
             text=[f"L1={l1}" for l1 in res["l1"]],
-            textposition="top center",
-            textfont=dict(size=10),
-            marker=dict(size=8, color=PALETTE[name]),
-            line=dict(color=PALETTE[name], width=LINE_WIDTH),
+            textposition="bottom center",
+            textfont=dict(size=14),
+            marker=dict(size=12, color=PALETTE[name]),
+            line=dict(color=PALETTE[name], width=3),
         )
     )
     # Highlight best F1 point

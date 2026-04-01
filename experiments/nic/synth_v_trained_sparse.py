@@ -1,5 +1,5 @@
 # %%
-"""Compare TiedLinearRelu vs SynthAE on SparseUniform with zipfian firing probabilities.
+"""Compare Trained vs Constructed on SparseUniform with zipfian firing probabilities.
 
 Same experiment structure as synth_v_trained.py but using a simpler SparseUniform
 distribution instead of the full SyntheticDataModel. The zipfian firing pattern
@@ -19,10 +19,10 @@ from occhio.distributions.sparse import SparseUniform
 from occhio.toy_model import ToyModel
 
 # --- Paper-quality plot defaults ---
-PALETTE = {"TiedLinearRelu": "#2166ac", "SynthAE (ortho)": "#4daf4a"}
-FONT = dict(family="Times New Roman, serif", size=14, color="#333333")
+PALETTE = {"Trained": "#2166ac", "Constructed": "#4daf4a"}
+FONT = dict(family="Times New Roman, serif", size=24, color="#333333")
 AXIS_STYLE = dict(
-    showgrid=True,
+    showgrid=False,
     gridcolor="rgba(0,0,0,0.08)",
     gridwidth=1,
     zeroline=False,
@@ -32,17 +32,18 @@ AXIS_STYLE = dict(
     ticklen=4,
     tickwidth=1,
     tickcolor="#666666",
+    tickfont_size=18,
     minor=dict(ticks="outside", ticklen=2),
 )
 LAYOUT_DEFAULTS = dict(
     template="plotly_white",
     font=FONT,
-    title_font_size=16,
+    title_font_size=24,
     legend=dict(
         bgcolor="rgba(255,255,255,0.9)",
         bordercolor="#cccccc",
         borderwidth=1,
-        font_size=12,
+        font_size=24,
     ),
     margin=dict(l=60, r=20, t=50, b=50),
     plot_bgcolor="white",
@@ -173,18 +174,18 @@ fig.add_trace(
     go.Scatter(
         x=eval_epochs,
         y=eval_losses_tied,
-        name="TiedLinearRelu",
-        line=dict(color=PALETTE["TiedLinearRelu"], width=LINE_WIDTH),
+        name="Trained",
+        line=dict(color=PALETTE["Trained"], width=LINE_WIDTH),
     )
 )
 fig.add_hline(
     y=loss_synth_ortho,
     line_dash="dash",
-    line_color=PALETTE["SynthAE (ortho)"],
+    line_color=PALETTE["Constructed"],
     line_width=LINE_WIDTH,
-    annotation_text="SynthAE (ortho)",
+    annotation_text="Constructed",
     annotation_font_size=12,
-    annotation_font_color=PALETTE["SynthAE (ortho)"],
+    annotation_font_color=PALETTE["Constructed"],
 )
 fig.update_layout(
     **LAYOUT_DEFAULTS,
@@ -212,18 +213,18 @@ fig.add_trace(
     go.Scatter(
         x=np.arange(N_FEATURES),
         y=final_tied[sort_idx],
-        name="TiedLinearRelu",
+        name="Trained",
         mode="lines",
-        line=dict(color=PALETTE["TiedLinearRelu"], width=LINE_WIDTH),
+        line=dict(color=PALETTE["Trained"], width=LINE_WIDTH),
     )
 )
 fig.add_trace(
     go.Scatter(
         x=np.arange(N_FEATURES),
         y=pf_synth_ortho[sort_idx],
-        name="SynthAE (ortho)",
+        name="Constructed",
         mode="lines",
-        line=dict(color=PALETTE["SynthAE (ortho)"], width=LINE_WIDTH),
+        line=dict(color=PALETTE["Constructed"], width=LINE_WIDTH),
     )
 )
 fig.update_layout(
@@ -240,8 +241,8 @@ fig.show()
 
 # %%
 # --- Plot: Features recovered (MSE < threshold) vs epoch, with SynthAE baselines ---
-THRESHOLDS = [0.2, 0.5, 1.0]
-THRESHOLD_COLORS = ["#d62728", "#ff7f0e", "#9467bd"]
+THRESHOLDS = [0.01, 0.2, 0.5]
+THRESHOLD_COLORS = ["#9626d3", "#d62728", "#ff7f0e"]
 
 fig = go.Figure()
 for thresh, color in zip(THRESHOLDS, THRESHOLD_COLORS):
@@ -250,7 +251,7 @@ for thresh, color in zip(THRESHOLDS, THRESHOLD_COLORS):
         go.Scatter(
             x=eval_epochs,
             y=n_recovered_tied,
-            name=f"TiedLinearRelu (τ={thresh})",
+            name=f"Trained (τ={thresh})",
             mode="lines",
             line=dict(color=color, width=LINE_WIDTH),
         )
@@ -261,7 +262,7 @@ for thresh, color in zip(THRESHOLDS, THRESHOLD_COLORS):
         line_dash="dash",
         line_color=color,
         line_width=1.5,
-        annotation_text=f"SynthAE τ={thresh}",
+        annotation_text=f"Constructed τ={thresh}",
         annotation_font_size=10,
         annotation_font_color=color,
     )
@@ -278,7 +279,7 @@ fig.update_yaxes(**AXIS_STYLE)
 fig.show()
 
 # %%
-# --- Plot: Per-feature MSE over training (heatmap, TiedLinearRelu only) ---
+# --- Plot: Per-feature MSE over training (heatmap, Trained only) ---
 arr = np.array(per_feature_tied).T[:, 1:]  # (N_FEATURES, n_eval_points), skip step 0
 arr_sorted = arr[sort_idx]
 
@@ -294,7 +295,7 @@ fig = go.Figure(
 )
 fig.update_layout(
     **LAYOUT_DEFAULTS,
-    title="Per-Feature MSE Over Training — TiedLinearRelu",
+    title="Per-Feature MSE Over Training — Trained",
     xaxis_title="Epoch",
     yaxis_title="Feature rank (most frequent → rarest)",
     height=500,
@@ -306,19 +307,19 @@ fig.show()
 
 # %%
 # --- W^T W comparison ---
-models = [("TiedLinearRelu", tm_tied), ("SynthAE (ortho)", tm_synth_ortho)]
+models = [("Trained", tm_tied), ("Constructed", tm_synth_ortho)]
 
 fig = make_subplots(
     rows=1,
     cols=2,
-    subplot_titles=["TiedLinearRelu", "SynthAE (ortho)"],
+    subplot_titles=["Trained", "Constructed"],
     horizontal_spacing=0.08,
 )
 
 for i, (name, tm) in enumerate(
     [
-        ("TiedLinearRelu", tm_tied),
-        ("SynthAE (ortho)", tm_synth_ortho),
+        ("Trained", tm_tied),
+        ("Constructed", tm_synth_ortho),
     ]
 ):
     W = tm.W.detach().cpu().numpy()
@@ -385,6 +386,7 @@ fig = make_subplots(
     horizontal_spacing=0.08,
 )
 
+
 for name, tm in models:
     fd = tm.feature_dimensionalities.detach().cpu().numpy()[sort_idx]
     fn = tm.feature_norms.detach().cpu().numpy()[sort_idx]
@@ -426,14 +428,15 @@ for name, tm in models:
 
 fig.update_layout(
     **LAYOUT_DEFAULTS,
-    title="Geometric Properties (sorted by firing probability)",
+    # title="Geometric Properties (sorted by firing probability)",
     height=400,
     width=1200,
 )
-fig.update_annotations(font_size=14)
+fig.update_annotations(font_size=24)
 for col in range(1, 4):
     fig.update_xaxes(title_text="Feature rank", row=1, col=col, **AXIS_STYLE)
     fig.update_yaxes(row=1, col=col, **AXIS_STYLE)
+fig.update_layout(yaxis2=dict(range=[0.8, None]))
 fig.show()
 
 # %%
@@ -452,18 +455,21 @@ for name, tm in models:
     )
 fig.update_layout(
     **LAYOUT_DEFAULTS,
-    title="Learned Bias <i>b</i>",
+    # title="Learned Bias <i>b</i>",
     xaxis_title="Feature rank (most frequent → rarest)",
     yaxis_title="<i>b</i>",
     height=450,
     width=700,
+)
+fig.update_layout(
+    legend=dict(x=0.95, y=0.95, xanchor="right", yanchor="top"),
 )
 fig.update_xaxes(**AXIS_STYLE)
 fig.update_yaxes(**AXIS_STYLE)
 fig.show()
 
 # %%
-# --- Plot: Feature norms² + bias (TiedLinearRelu) ---
+# --- Plot: Feature norms² + bias (Trained) ---
 fn2 = tm_tied.feature_norms.detach().cpu().numpy() ** 2
 b_tied = tm_tied.ae.b.detach().cpu().numpy()  # ty:ignore
 combined = (fn2 + b_tied)[sort_idx]
@@ -475,12 +481,12 @@ fig.add_trace(
         y=combined,
         mode="lines",
         name="‖w‖² + b",
-        line=dict(color=PALETTE["TiedLinearRelu"], width=LINE_WIDTH),
+        line=dict(color=PALETTE["Trained"], width=LINE_WIDTH),
     )
 )
 fig.update_layout(
     **LAYOUT_DEFAULTS,
-    title="TiedLinearRelu: ‖w‖² + b",
+    title="Trained: ‖w‖² + b",
     xaxis_title="Feature rank (most frequent → rarest)",
     yaxis_title="‖w‖² + b",
     height=450,
@@ -494,8 +500,8 @@ fig.show()
 # --- Summary statistics ---
 print("\n=== Summary ===")
 for name, eval_loss, pf in [
-    ("TiedLinearRelu", eval_losses_tied[-1], per_feature_tied[-1]),
-    ("SynthAE (ortho)", loss_synth_ortho, pf_synth_ortho),
+    ("Trained", eval_losses_tied[-1], per_feature_tied[-1]),
+    ("Constructed", loss_synth_ortho, pf_synth_ortho),
 ]:
     final_mse = np.array(pf)
     recovered = "  ".join(f"τ={t}: {int((final_mse < t).sum())}" for t in THRESHOLDS)
@@ -514,7 +520,7 @@ SAE_L1 = 0.3
 
 sae_results = {}
 
-for name, tm in [("TiedLinearRelu", tm_tied), ("SynthAE (ortho)", tm_synth_ortho)]:
+for name, tm in [("Trained", tm_tied), ("Constructed", tm_synth_ortho)]:
     print(f"\nTraining SAE on {name}...")
 
     sae = SAESimple(
@@ -638,7 +644,7 @@ fig.show()
 
 for name in names:
     sae = sae_results[name]["sae"]
-    tm_ref = tm_tied if name == "TiedLinearRelu" else tm_synth_ortho
+    tm_ref = tm_tied if name == "Trained" else tm_synth_ortho
     with torch.no_grad():
         eye = torch.eye(N_FEATURES, device=DEVICE)
 
