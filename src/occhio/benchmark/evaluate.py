@@ -15,12 +15,12 @@ from occhio.model_grid import Axis
 # [2026-03-27 | OliverSieweke] TODO: make this a script
 
 
-def evaluate(
+def evaluate_benchmark(
     benchmark_distributions: list[BenchmarkName] = list(BenchmarkName),
     saes: BenchmarkSAEsInput = DEFAULT_BENCHMARK_SAEs,
     training_samples: int = 10_000_000,
     device: str | None = None,
-    verbose: bool = True,
+    verbose: bool = False,
 ):
     """
     Evaluate SAEs on toy model benchmarks.

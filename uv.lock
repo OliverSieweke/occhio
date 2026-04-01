@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.10"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
@@ -3352,6 +3352,7 @@ version = "0.2.3"
 source = { editable = "." }
 dependencies = [
     { name = "debugpy" },
+    { name = "dill" },
     { name = "einops" },
     { name = "huggingface-hub" },
     { name = "ipykernel" },
@@ -3411,6 +3412,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "debugpy", specifier = ">=1.8.20" },
+    { name = "dill", specifier = ">=0.4.0" },
     { name = "einops", specifier = ">=0.8.2" },
     { name = "fastmcp", marker = "extra == 'mcp'", specifier = ">=2.0" },
     { name = "httpx", marker = "extra == 'mcp'", specifier = ">=0.27" },

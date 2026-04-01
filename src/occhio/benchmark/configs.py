@@ -41,14 +41,14 @@ DEFAULT_BENCHMARK_SAEs: BenchmarkSAEsInput = {
     BenchmarkName.CORRELATED_PAIRS: {
         "Standard": StandardTrainingSAE(
             StandardTrainingSAEConfig(
-                d_in=64,
+                d_in=100,
                 d_sae=648,
                 l1_coefficient=0.4,
             )
         ),
         "Matryoshka": MatryoshkaBatchTopKTrainingSAE(
             MatryoshkaBatchTopKTrainingSAEConfig(
-                d_in=64,
+                d_in=100,
                 d_sae=648,
                 matryoshka_widths=[
                     81,
@@ -61,7 +61,7 @@ DEFAULT_BENCHMARK_SAEs: BenchmarkSAEsInput = {
         ),
         "MatchingPursuit": MatchingPursuitTrainingSAE(
             MatchingPursuitTrainingSAEConfig(
-                d_in=64,
+                d_in=100,
                 d_sae=648,
                 max_iterations=2,
             )
@@ -70,14 +70,14 @@ DEFAULT_BENCHMARK_SAEs: BenchmarkSAEsInput = {
     BenchmarkName.HIERARCHICAL_PAIRS: {
         "Standard": StandardTrainingSAE(
             StandardTrainingSAEConfig(
-                d_in=64,
+                d_in=100,
                 d_sae=648,
                 l1_coefficient=0.5,
             )
         ),
         "Matryoshka": MatryoshkaBatchTopKTrainingSAE(
             MatryoshkaBatchTopKTrainingSAEConfig(
-                d_in=64,
+                d_in=100,
                 d_sae=648,
                 matryoshka_widths=[
                     81,
@@ -90,7 +90,7 @@ DEFAULT_BENCHMARK_SAEs: BenchmarkSAEsInput = {
         ),
         "MatchingPursuit": MatchingPursuitTrainingSAE(
             MatchingPursuitTrainingSAEConfig(
-                d_in=64,
+                d_in=100,
                 d_sae=648,
                 max_iterations=2,  # check for higher
             )
@@ -99,14 +99,14 @@ DEFAULT_BENCHMARK_SAEs: BenchmarkSAEsInput = {
     BenchmarkName.DAG_RANDOM_WALK: {
         "Standard": StandardTrainingSAE(
             StandardTrainingSAEConfig(
-                d_in=64,
+                d_in=100,
                 d_sae=648,
                 l1_coefficient=0.6,
             )
         ),
         "Matryoshka": MatryoshkaBatchTopKTrainingSAE(
             MatryoshkaBatchTopKTrainingSAEConfig(
-                d_in=64,
+                d_in=100,
                 d_sae=648,
                 matryoshka_widths=[
                     81,
@@ -119,7 +119,7 @@ DEFAULT_BENCHMARK_SAEs: BenchmarkSAEsInput = {
         ),
         "MatchingPursuit": MatchingPursuitTrainingSAE(
             MatchingPursuitTrainingSAEConfig(
-                d_in=64,
+                d_in=100,
                 d_sae=648,
                 max_iterations=5,
             )
@@ -128,14 +128,14 @@ DEFAULT_BENCHMARK_SAEs: BenchmarkSAEsInput = {
     BenchmarkName.POWER_LAW_DIGRAPH: {
         "Standard": StandardTrainingSAE(
             StandardTrainingSAEConfig(
-                d_in=64,
+                d_in=100,
                 d_sae=648,
                 l1_coefficient=0.9,
             )
         ),
         "Matryoshka": MatryoshkaBatchTopKTrainingSAE(
             MatryoshkaBatchTopKTrainingSAEConfig(
-                d_in=64,
+                d_in=100,
                 d_sae=648,
                 matryoshka_widths=[
                     81,
@@ -148,7 +148,7 @@ DEFAULT_BENCHMARK_SAEs: BenchmarkSAEsInput = {
         ),
         "MatchingPursuit": MatchingPursuitTrainingSAE(
             MatchingPursuitTrainingSAEConfig(
-                d_in=64,
+                d_in=100,
                 d_sae=648,
                 max_iterations=2,
             )
@@ -157,14 +157,14 @@ DEFAULT_BENCHMARK_SAEs: BenchmarkSAEsInput = {
     BenchmarkName.SIMPLICIAL_COMPLEX: {
         "Standard": StandardTrainingSAE(
             StandardTrainingSAEConfig(
-                d_in=64,
+                d_in=100,
                 d_sae=648,
                 l1_coefficient=0.05,
             )
         ),
         "Matryoshka": MatryoshkaBatchTopKTrainingSAE(
             MatryoshkaBatchTopKTrainingSAEConfig(
-                d_in=64,
+                d_in=100,
                 d_sae=648,
                 matryoshka_widths=[
                     81,
@@ -177,7 +177,7 @@ DEFAULT_BENCHMARK_SAEs: BenchmarkSAEsInput = {
         ),
         "MatchingPursuit": MatchingPursuitTrainingSAE(
             MatchingPursuitTrainingSAEConfig(
-                d_in=64,
+                d_in=100,
                 d_sae=648,
                 max_iterations=2,
             )
@@ -186,14 +186,14 @@ DEFAULT_BENCHMARK_SAEs: BenchmarkSAEsInput = {
     BenchmarkName.SPARSE_UNIFORM: {
         "Standard": StandardTrainingSAE(
             StandardTrainingSAEConfig(
-                d_in=64,
+                d_in=100,
                 d_sae=648,
                 l1_coefficient=0.6,
             )
         ),
         "Matryoshka": MatryoshkaBatchTopKTrainingSAE(
             MatryoshkaBatchTopKTrainingSAEConfig(
-                d_in=64,
+                d_in=100,
                 d_sae=648,
                 matryoshka_widths=[
                     81,
@@ -206,7 +206,7 @@ DEFAULT_BENCHMARK_SAEs: BenchmarkSAEsInput = {
         ),
         "MatchingPursuit": MatchingPursuitTrainingSAE(
             MatchingPursuitTrainingSAEConfig(
-                d_in=64,
+                d_in=100,
                 d_sae=648,
                 max_iterations=3,
             )
@@ -215,14 +215,14 @@ DEFAULT_BENCHMARK_SAEs: BenchmarkSAEsInput = {
     BenchmarkName.SPHERICAL: {
         "Standard": StandardTrainingSAE(
             StandardTrainingSAEConfig(
-                d_in=64,
+                d_in=100,
                 d_sae=648,
                 l1_coefficient=0.05,
             )
         ),
         "Matryoshka": MatryoshkaBatchTopKTrainingSAE(
             MatryoshkaBatchTopKTrainingSAEConfig(
-                d_in=64,
+                d_in=100,
                 d_sae=648,
                 matryoshka_widths=[
                     81,
@@ -235,7 +235,7 @@ DEFAULT_BENCHMARK_SAEs: BenchmarkSAEsInput = {
         ),
         "MatchingPursuit": MatchingPursuitTrainingSAE(
             MatchingPursuitTrainingSAEConfig(
-                d_in=64,
+                d_in=100,
                 d_sae=648,
                 max_iterations=2,
             )
@@ -244,14 +244,14 @@ DEFAULT_BENCHMARK_SAEs: BenchmarkSAEsInput = {
     BenchmarkName.TORUS: {
         "Standard": StandardTrainingSAE(
             StandardTrainingSAEConfig(
-                d_in=64,
+                d_in=100,
                 d_sae=648,
                 l1_coefficient=0.4,
             )
         ),
         "Matryoshka": MatryoshkaBatchTopKTrainingSAE(
             MatryoshkaBatchTopKTrainingSAEConfig(
-                d_in=64,
+                d_in=100,
                 d_sae=648,
                 matryoshka_widths=[
                     81,
@@ -264,7 +264,7 @@ DEFAULT_BENCHMARK_SAEs: BenchmarkSAEsInput = {
         ),
         "MatchingPursuit": MatchingPursuitTrainingSAE(
             MatchingPursuitTrainingSAEConfig(
-                d_in=64,
+                d_in=100,
                 d_sae=648,
                 max_iterations=5,
             )

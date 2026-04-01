@@ -1,4 +1,4 @@
-from occhio.benchmark.evaluate import evaluate
+from occhio.benchmark import evaluate
 
 __all__ = [
     "evaluate",
