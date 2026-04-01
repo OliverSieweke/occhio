@@ -5,11 +5,48 @@ import numpy as np
 import torch
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from scipy.optimize import linear_sum_assignment
 
 from occhio.autoencoder import TiedLinearRelu
 from occhio.distributions import SimplexDistribution, SimplicialComplexDistribution
 from occhio.toy_model import ToyModel
+
+# --- Paper-quality plot defaults ---
+FONT = dict(family="Times New Roman, serif", size=24, color="#333333")
+AXIS_STYLE = dict(
+    showgrid=True,
+    gridcolor="rgba(0,0,0,0.02)",
+    gridwidth=1,
+    zeroline=False,
+    linecolor="#666666",
+    linewidth=1,
+    ticks="outside",
+    ticklen=4,
+    tickwidth=1,
+    tickcolor="#666666",
+    minor=dict(ticks="outside", ticklen=2),
+    tickfont_size=18,
+)
+LAYOUT_DEFAULTS = dict(
+    template="plotly_white",
+    font=FONT,
+    title_font_size=18,
+    legend=dict(
+        x=0.95,
+        y=0.95,
+        xanchor="right",
+        yanchor="top",
+        bgcolor="rgba(255,255,255,0.9)",
+        bordercolor="#cccccc",
+        borderwidth=1,
+        font_size=20,
+        itemsizing="constant",
+    ),
+    margin=dict(l=60, r=20, t=50, b=50),
+    plot_bgcolor="white",
+    paper_bgcolor="white",
+)
 
 # %%
 DEVICE = "mps"
@@ -45,7 +82,11 @@ tm = ToyModel(distribution=dist, ae=ae, device=DEVICE)
 losses, _ = tm.fit(25_000, 256, verbose=True)
 
 # %%
-px.line(y=losses, labels={"x": "Epoch", "y": "Loss"}, title="Training loss").show()
+fig_loss = px.line(y=losses, labels={"x": "Epoch", "y": "Loss"}, title="Training loss")
+fig_loss.update_layout(**LAYOUT_DEFAULTS)
+fig_loss.update_xaxes(**AXIS_STYLE)
+fig_loss.update_yaxes(**AXIS_STYLE)
+fig_loss
 
 # %%
 W = tm.W.detach().cpu().numpy()  # (n_hidden, n_features)
@@ -121,6 +162,7 @@ for i, face in enumerate(dist.faces):
         )
 
 fig2.update_layout(
+    **LAYOUT_DEFAULTS,
     title="Encoded samples in hidden space",
     scene=dict(
         xaxis_title="h₀",
@@ -130,17 +172,19 @@ fig2.update_layout(
     ),
     height=700,
 )
-fig2.show()
+fig2
 
 # %%
 WtW = (tm.W.T @ tm.W).detach().cpu().numpy()
-px.imshow(
+fig_wtw = px.imshow(
     WtW,
     title="W^T W (feature cosine structure)",
     labels=dict(x="Feature", y="Feature"),
     x=[f"v{j}" for j in range(n_features)],
     y=[f"v{j}" for j in range(n_features)],
-).show()
+)
+fig_wtw.update_layout(**LAYOUT_DEFAULTS)
+fig_wtw
 
 # %% --- SAE training ---
 from occhio.sae.sae import SAESimple
@@ -179,12 +223,16 @@ sae_losses = sae.train_sae(
 )
 
 # %%
-px.line(
+fig_sae_loss = px.line(
     y=sae_losses,
     title="SAE Training Loss",
     labels={"x": "Step", "y": "Loss"},
     log_y=True,
-).show()
+)
+fig_sae_loss.update_layout(**LAYOUT_DEFAULTS)
+fig_sae_loss.update_xaxes(**AXIS_STYLE)
+fig_sae_loss.update_yaxes(**AXIS_STYLE)
+fig_sae_loss
 
 # %% --- SAE metrics ---
 with torch.no_grad():
@@ -244,7 +292,7 @@ total_sum = sae_acts_matched.sum()
 diagonality = diag_sum / total_sum if total_sum > 0 else 0.0
 print(f"Diagonality={diagonality:.4f}")
 
-px.imshow(
+fig_acts = px.imshow(
     sae_acts_matched,
     labels=dict(x="SAE dict element (cosine matched)", y="Feature (cosine matched)"),
     x=col_labels,
@@ -252,7 +300,9 @@ px.imshow(
     title=f"SAE one-hot activations (cosine matched, diag={diagonality:.3f})",
     aspect="auto",
     color_continuous_scale="ylgnbu_r",
-).show()
+)
+fig_acts.update_layout(**LAYOUT_DEFAULTS)
+fig_acts
 
 # %% --- Dual: one-hot SAE latents → decoded feature activations (unmatched) ---
 with torch.no_grad():
@@ -264,7 +314,7 @@ with torch.no_grad():
     )  # (N_DICT, n_features)
     decoded_acts = np.maximum(decoded_acts, 0)
 
-px.imshow(
+fig_dual = px.imshow(
     decoded_acts,
     labels=dict(x="Feature", y="SAE dict element"),
     x=[f"v{f}" for f in range(n_features)],
@@ -272,7 +322,9 @@ px.imshow(
     title="Dual: one-hot SAE latent → ae.decode(sae.decode(·))",
     aspect="auto",
     color_continuous_scale="Blues",
-).show()
+)
+fig_dual.update_layout(**LAYOUT_DEFAULTS)
+fig_dual
 
 # %% --- Activation-based matching (Hungarian on one-hot SAE activations) ---
 feat_idx_act, dict_idx_act = linear_sum_assignment(-sae_acts)
@@ -305,7 +357,7 @@ print(
 print(f"[Cosine matching]     Diagonality={diagonality:.4f}")
 print(f"[Cosine matching]     MCC (|cos|)={mcc:.4f}  MCC (cos)={mcc_signed:.4f}")
 
-px.imshow(
+fig_acts_act = px.imshow(
     sae_acts_matched_act,
     labels=dict(
         x="SAE dict element (activation matched)", y="Feature (activation matched)"
@@ -315,7 +367,9 @@ px.imshow(
     title=f"SAE one-hot activations (activation matched, diag={diagonality_act:.3f})",
     aspect="auto",
     color_continuous_scale="ylgnbu_r",
-).show()
+)
+fig_acts_act.update_layout(**LAYOUT_DEFAULTS)
+fig_acts_act
 
 # %% --- Cosine similarity matrix (matched order) + encoder bias ---
 from plotly.subplots import make_subplots

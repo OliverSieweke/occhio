@@ -1,3 +1,4 @@
+# %%
 """
 Experiment: Can the CausalSAE recover hierarchical pair structure?
 
