@@ -4,7 +4,7 @@ Generate & Upload Sample Datasets to HuggingFace.
 
 For each distribution defined in distribution_list.txt:
 1. Create the distribution (N=1296 features, 6^4 for torus compatibility)
-2. Sample 1M points in chunks (CPU-saved to avoid MPS corruption)
+2. Sample 100K points in chunks (CPU-saved to avoid MPS corruption)
 3. Upload samples.safetensors + samples.json to HuggingFace
 
 Run cell 0 to authenticate and define helpers,
@@ -159,7 +159,7 @@ dist_gen.manual_seed(DIST_SEED)
 
 dist = SparseUniform(
     n_features=N_FEAT,
-    p_active=zipfian_p_active(N_FEAT),
+    p_active=zipfian_p_active(N_FEAT, high=0.416, low=1.0 / N_FEAT),
     device=DEVICE,
     generator=dist_gen,
 )
@@ -170,7 +170,7 @@ upload_samples(
         "Sparse uniform distribution with zipfian (power-law) activation frequencies. "
         "Each feature fires independently; feature i fires with probability "
         "p_active[i] = high / (i+1)^alpha, where alpha = ln(high/low) / ln(N) "
-        "gives a smooth decay from high=0.2 to low=0.5/N. "
+        "gives a smooth decay from high=0.416 to low=1/N. "
         "This is the simplest TMoS distribution, purely capturing frequency variation."
     ),
 )
@@ -183,8 +183,8 @@ random.seed(RANDOM_SEED)
 
 dist = CorrelatedPairs(
     n_features=N_FEAT,
-    density=zipfian_p_active(N_FEAT),
-    correlation=[random.random() for _ in range(N_FEAT)],
+    density=zipfian_p_active(N_FEAT, high=0.5, low=1.22 / N_FEAT),
+    correlation=[0.5 + 0.5 * random.random() for _ in range(N_FEAT)],
     device=DEVICE,
     generator=dist_gen,
 )
@@ -195,9 +195,9 @@ upload_samples(
         "Correlated pair distribution with zipfian density. "
         "Features are grouped into pairs (2i, 2i+1). Each pair activates jointly "
         "with some probability, then each feature within an active pair fires "
-        "independently. The density (= p_active * p_individual) follows the same "
-        "zipfian power-law as SparseUniform. Per-pair correlation is drawn "
-        "uniformly from [0, 1] (stdlib random seed=42). "
+        "independently. The density follows a zipfian power-law with "
+        "high=0.5, low=1.22/N. Per-pair correlation is drawn from "
+        "[0.5, 1.0] (stdlib random seed=42). "
         "Models co-occurring features like 'peanut butter and jam'."
     ),
 )
@@ -210,7 +210,8 @@ random.seed(RANDOM_SEED)
 
 dist = HierarchicalPairs(
     n_features=N_FEAT,
-    p_active=zipfian_p_active(N_FEAT),
+    p_active=zipfian_p_active(N_FEAT, high=0.45, low=1.3 / N_FEAT),
+    p_follow=0.6,
     beta=[random.random() for _ in range(N_FEAT)],
     device=DEVICE,
     generator=dist_gen,
@@ -221,10 +222,11 @@ upload_samples(
     description=(
         "Hierarchical pair distribution with zipfian activation and per-pair "
         "magnitude coupling. Features form pairs (2i, 2i+1): the primary (2i) "
-        "fires with zipfian p_active; the secondary (2i+1) fires conditionally "
-        "with p_follow=0.5 (default). When active, the secondary's magnitude is "
-        "coupled to the primary's via beta[i] ~ Uniform(0,1) (stdlib random "
-        "seed=42): v_child = v_parent * (beta + (1-beta) * U). "
+        "fires with zipfian p_active (high=0.45, low=1.3/N); the secondary "
+        "(2i+1) fires conditionally with p_follow=0.6. When active, the "
+        "secondary's magnitude is coupled to the primary's via "
+        "beta[i] ~ Uniform(0,1) (stdlib random seed=42): "
+        "v_child = v_parent * (beta + (1-beta) * U). "
         "Models parent-child feature relationships with magnitude inheritance."
     ),
 )
@@ -236,10 +238,10 @@ dist_gen.manual_seed(DIST_SEED)
 
 dist = PowerLawDigraph(
     n_features=N_FEAT,
-    p_active=4.6 / N_FEAT,
+    p_active=3.3 / N_FEAT,
     alpha=1,
-    p_edge=10 / N_FEAT,
-    p_child=(0, 0.5),
+    p_edge=4.1 / N_FEAT,
+    p_child=(0.1, 0.4),
     device=DEVICE,
     generator=dist_gen,
 )
@@ -249,11 +251,10 @@ upload_samples(
     description=(
         "Power-law digraph distribution. Features are nodes of a randomly sampled "
         "weighted directed graph with power-law in-degree (alpha=1). Sampling is "
-        "two-step: (1) each feature fires independently with p_active=4.6/N "
-        "(~1% chance of nothing firing), then (2) each fired feature cascades to "
-        "its out-neighbors via Noisy-OR with edge weights drawn from "
-        "Uniform(0, 0.5). Edge density p_edge=10/N gives ~10 expected edges per "
-        "node. Models one-step causal propagation in a sparse network."
+        "two-step: (1) each feature fires independently with p_active=3.3/N, "
+        "then (2) each fired feature cascades to its out-neighbors via Noisy-OR "
+        "with edge weights drawn from Uniform(0.1, 0.4). Edge density "
+        "p_edge=4.1/N. Models one-step causal propagation in a sparse network."
     ),
 )
 
@@ -264,7 +265,7 @@ dist_gen.manual_seed(DIST_SEED)
 
 dist = DAGRandomWalkToRoot(
     n_features=N_FEAT,
-    p_edge=3 / N_FEAT,
+    p_edge=50 / N_FEAT,
     beta=0.8,
     shrinking=True,
     device=DEVICE,
@@ -275,7 +276,7 @@ upload_samples(
     dist,
     description=(
         "DAG random-walk-to-root distribution. Features are nodes of a randomly "
-        "sampled DAG (p_edge=3/N). To generate a sample, a node is chosen "
+        "sampled DAG (p_edge=50/N). To generate a sample, a node is chosen "
         "uniformly at random, then a path is walked upward to a root node, "
         "activating all nodes along the path. beta=0.8 controls value decay per "
         "step (shrinking=True). This creates deep hierarchical dependencies — "
@@ -285,8 +286,8 @@ upload_samples(
 
 # %%
 # --- SimplicialComplexDistribution ---
-FACE_DIM = 16
-N_FACES = 10 * (N_FEAT // FACE_DIM)  # 810
+FACE_DIM = 4
+N_FACES = 4 * (N_FEAT // (FACE_DIM + 1))  # 1036
 
 dist_gen = torch.Generator(DEVICE)
 dist_gen.manual_seed(DIST_SEED)
@@ -310,7 +311,7 @@ dist = SimplicialComplexDistribution(
     n_vertices=N_FEAT,
     faces=faces,
     sampling_mode="sparse",
-    p_active=4.6 / N_FACES,
+    p_active=1 / N_FACES,
     device=DEVICE,
     generator=dist_gen,
 )
@@ -318,12 +319,12 @@ upload_samples(
     "simplicial_complex",
     dist,
     description=(
-        "Simplicial complex distribution. Features are vertices of 16-dimensional "
+        f"Simplicial complex distribution. Features are vertices of {FACE_DIM}-dimensional "
         f"simplices ({N_FACES} faces, {FACE_DIM + 1} vertices each). Faces are "
         "constructed to cover all vertices (stdlib random seed=42), then padded "
         "with random faces. Faces may share vertices ('gluing'). "
         "sampling_mode='sparse': each face fires independently with "
-        f"p_active=4.6/{N_FACES}, overlapping Dirichlet contributions are summed "
+        f"p_active=1/{N_FACES}, overlapping Dirichlet contributions are summed "
         "and re-normalized. Models features living on geometric simplices — e.g. "
         "concepts like [Cold, Hot] or RGB color."
     ),
@@ -337,7 +338,7 @@ dist_gen.manual_seed(DIST_SEED)
 
 dist = SphericalDistribution(
     n_features=N_FEAT,
-    length_scale=0.5,
+    length_scale=0.245,
     manifold_dim=4,
     magnitude_range=(0.5, 1.0),
     device=DEVICE,
@@ -351,7 +352,7 @@ upload_samples(
         "S^4 (the 4-sphere). Each sample picks a random direction and magnitude "
         "m ~ Uniform(0.5, 1.0); features activate via a cosine bump: "
         "x = m * cos(alpha / length_scale) where alpha is the geodesic distance. "
-        "length_scale=0.5 controls bump width (smaller = sparser). "
+        "length_scale=0.245 controls bump width (smaller = sparser). "
         "Models features living on manifolds — e.g. time, earth coordinates, "
         "pitch-yaw-roll, or more abstract continuous concepts."
     ),
@@ -364,7 +365,7 @@ dist_gen.manual_seed(DIST_SEED)
 
 dist = TorusDistribution(
     n_features=N_FEAT,
-    length_scale=0.5,
+    length_scale=0.669,
     torus_dim=4,
     magnitude_range=(0.5, 1.0),
     device=DEVICE,
@@ -378,7 +379,7 @@ upload_samples(
         "T^4 (the 4-torus = S^1 x S^1 x S^1 x S^1, hence N=6^4=1296 features). "
         "Each sample picks a random point on the torus and magnitude "
         "m ~ Uniform(0.5, 1.0); features activate via a cosine bump using "
-        "flat-torus geodesic distance with length_scale=0.5. "
+        "flat-torus geodesic distance with length_scale=0.669. "
         "Models periodic/cyclical features — e.g. time tracked as "
         "seconds x minutes x hours ~ T^3."
     ),

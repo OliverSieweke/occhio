@@ -19,7 +19,7 @@ from occhio.autoencoder import TiedLinearRelu
 
 DATASET_REPO = "kaushikreddyxyz/occhio-distributions"
 MODEL_REPO = "kaushikreddyxyz/occhio-models"
-N_HIDDEN = 64
+N_HIDDEN = 100
 DEVICE = "mps"
 
 DISTRIBUTIONS = [
