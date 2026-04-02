@@ -14,16 +14,21 @@ from .base import Distribution
 class HuggingFaceDistribution(Distribution):
     """A distribution that serves pre-generated samples from HuggingFace Hub.
 
-    Samples are downloaded from a HuggingFace dataset repository and loaded eagerly
-    into memory. The ``sample()`` method returns random samples with replacement
-    from the cached data.
+    Samples are downloaded from a HuggingFace dataset repository and kept on CPU
+    (pin-memory backed for fast transfers). When a ``device`` is given, a
+    ``buffer_batches``-sized chunk is prefetched to that device; ``sample()`` draws
+    from the on-device buffer and refills it only when exhausted, amortising
+    CPU→device transfer cost across many training steps.
 
     Args:
         repo_id: HuggingFace Hub repository ID (e.g., "username/dataset-name").
         filename: Path to the safetensors file within the repository.
         revision: Optional branch, tag, or commit hash.
-        device: Torch device for samples.
+        device: Torch device for returned samples.
         generator: Optional generator for reproducible sampling order.
+        buffer_batches: How many batches to prefetch to ``device`` per transfer.
+            Higher values reduce transfer frequency at the cost of device memory.
+            Set to ``0`` to disable buffering (transfers every call).
 
     Example:
         >>> dist = HuggingFaceDistribution(
@@ -42,6 +47,7 @@ class HuggingFaceDistribution(Distribution):
         data_key: str = "samples",
         device: torch.device | str | None = None,
         generator: torch.Generator | None = None,
+        buffer_batches: int = 32,
     ):
         resolved_revision = HfApi().dataset_info(repo_id, revision=revision).sha
 
@@ -79,11 +85,24 @@ class HuggingFaceDistribution(Distribution):
         super().__init__(samples.shape[1], device=device, generator=generator)
 
         self._n_samples = samples.shape[0]
-        # Keep backing store on CPU; only sampled batches are moved to device.
-        self._samples = samples
+        # Keep backing store on CPU. Pin memory when a device is given so that
+        # CPU→device DMA transfers bypass the CPU entirely.
+        self._samples = samples.pin_memory() if device else samples
+        self._buffer_batches = buffer_batches
+        self._buffer: Tensor | None = None
+        self._buffer_pos: int = 0
 
         self.filename = filename
         self.revision = resolved_revision
+
+    def _refill_buffer(self, batch_size: int) -> None:
+        # Generate indices on self.device (respects self.generator), then move to
+        # CPU for indexing the CPU-resident backing store.
+        indices = self._randint(
+            0, self._n_samples, (self._buffer_batches * batch_size,)
+        ).cpu()
+        self._buffer = self._samples[indices].to(self.device, non_blocking=True)
+        self._buffer_pos = 0
 
     def sample(self, batch_size: int) -> Tensor:
         """Return random samples with replacement from the cached data.
@@ -94,19 +113,37 @@ class HuggingFaceDistribution(Distribution):
         Returns:
             Tensor of shape ``(batch_size, n_features)``.
         """
+        if self.device and self._buffer_batches:
+            if self._buffer is None or self._buffer_pos + batch_size > len(
+                self._buffer
+            ):
+                indices = self._randint(
+                    0, self._n_samples, (self._buffer_batches * batch_size,)
+                ).cpu()
+                self._buffer = self._samples[indices].to(self.device, non_blocking=True)
+                self._buffer_pos = 0
+
+            batch = self._buffer[self._buffer_pos : self._buffer_pos + batch_size]
+            self._buffer_pos += batch_size
+            return batch
+
         indices = self._randint(0, self._n_samples, (batch_size,))
         batch = self._samples[indices.cpu()]
         return batch.to(self.device) if self.device else batch
 
     def to(self, device: torch.device | str) -> "HuggingFaceDistribution":
-        # Update device without moving _samples; only batches are transferred on demand.
+        # _samples intentionally stays on CPU — moving it would load the full
+        # dataset onto the device, defeating the memory optimisation.
+        # Invalidate the buffer so the next sample() refills on the new device.
         self.device = torch.device(device)
+        self._buffer = None
+        self._buffer_pos = 0
         return self
 
     def __repr__(self) -> str:
         return (
             f"HuggingFaceDistribution(filename={self.filename!r}, n_features={self.n_features}, "
-            f"n_samples={self._n_samples}, device={self.device})"
+            f"n_samples={self._n_samples}, buffer_batches={self._buffer_batches}, device={self.device})"
         )
 
     def __str__(self) -> str:
