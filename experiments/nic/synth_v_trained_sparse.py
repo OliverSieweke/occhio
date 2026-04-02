@@ -2,8 +2,8 @@
 """Compare TiedLinearRelu vs SynthAE on SparseUniform with zipfian firing probabilities.
 
 Same experiment structure as synth_v_trained.py but using a simpler SparseUniform
-distribution instead of the full SyntheticDataModel. The zipfian firing pattern
-(p_max=0.4, p_min=0.5/N, alpha=0.5) is matched to the SyntheticDataModel config.
+distribution instead of the full SyntheticDataModel. Uses a soft power-law firing
+decay (p_max=0.2, p_min=0.01). SAEs trained via SAELens StandardTrainingSAE.
 """
 
 import torch
@@ -13,8 +13,9 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 from scipy.optimize import linear_sum_assignment
 
+from sae_lens import StandardTrainingSAE, StandardTrainingSAEConfig
+
 from occhio.autoencoder import TiedLinearRelu, SynthAE
-from occhio.sae.sae import SAESimple
 from occhio.distributions.sparse import SparseUniform
 from occhio.toy_model import ToyModel
 
@@ -66,14 +67,13 @@ EVAL_SAMPLES = 2**14
 EVAL_FREQ = 250
 
 # %%
-# --- Zipfian firing probabilities ---
-# Matches the SyntheticDataModel zipfian config: p_max=0.4, p_min=0.5/N, alpha=0.5
+# --- Zipfian firing probabilities (soft decay) ---
 high = 0.2
-low = 0.5 / N_FEATURES
+low = 0.5 / N_FEATURES  # softer decay: 20x range instead of 400x
 alpha = np.log(high / low) / np.log(N_FEATURES)
 print(f"{alpha=}")
-firing_probs = [high / (i + 1) ** alpha for i in range(N_FEATURES)]
 
+firing_probs = [high / (i + 1) ** alpha for i in range(N_FEATURES)]
 firing_probs = torch.tensor(firing_probs, dtype=torch.float32)
 
 dist = SparseUniform(N_FEATURES, p_active=firing_probs, device=DEVICE)
@@ -106,6 +106,17 @@ def per_feature_hook(data):
     return (eye - x_hat).pow(2).sum(dim=-1).cpu().numpy()
 
 
+def geometry_hook(data):
+    """Capture feature dimensionalities, norms, total interference, and bias."""
+    tm = data["tm"]
+    return {
+        "fd": tm.feature_dimensionalities.detach().cpu().numpy(),
+        "fn": tm.feature_norms.detach().cpu().numpy(),
+        "ti": tm.total_feature_interferences.detach().cpu().numpy(),
+        "bias": tm.ae.b.detach().cpu().numpy(),
+    }
+
+
 # %%
 # --- Helper: evaluate a (non-trained) model once ---
 def evaluate_model(tm):
@@ -129,14 +140,15 @@ ae_tied = TiedLinearRelu(N_FEATURES, D_HIDDEN, device=DEVICE, generator=gen1)
 tm_tied = ToyModel(distribution=dist, ae=ae_tied, device=DEVICE)
 
 _, hook_results_tied = tm_tied.fit(
-    N_EPOCHS,
+    30000,
     batch_size=BATCH_SIZE,
-    hooks=[eval_hook, per_feature_hook],
+    hooks=[eval_hook, per_feature_hook, geometry_hook],
     hook_freq=EVAL_FREQ,
     verbose=True,
 )
 eval_losses_tied = hook_results_tied[0]
 per_feature_tied = hook_results_tied[1]
+geometry_tied = hook_results_tied[2]
 print(f"  Final eval loss: {eval_losses_tied[-1]:.6f}")
 
 # %%
@@ -147,7 +159,7 @@ ae_synth_ortho = SynthAE(
     N_FEATURES,
     D_HIDDEN,
     orthogonalize=True,
-    ortho_steps=100,
+    ortho_steps=1000,
     ortho_lr=3e-4,
     device=DEVICE,
     generator=gen3,
@@ -168,45 +180,41 @@ loss_synth_ortho = eval_losses_synth[-1]
 pf_synth_ortho = per_feature_synth[-1]
 print(f"  Final eval loss: {loss_synth_ortho:.6f}")
 
-# %% --- SAE training on both models ---
-N_DICT = N_FEATURES // 2
-SAE_STEPS = 50_000
+# %% --- SAE training on both models (SAELens Standard SAE) ---
+N_DICT = 1100
 SAE_BATCH = 1024
 SAE_LR = 3e-4
-SAE_L1 = 0.3
+SAE_L1 = 0.1
+SAE_TRAINING_SAMPLES = 200_000 * SAE_BATCH  # ~200k steps
 
 sae_results = {}
 
 for name, tm in [("Trained AE", tm_tied), ("Constructed AE", tm_synth_ortho)]:
     print(f"\nTraining SAE on {name}...")
 
-    sae = SAESimple(
-        n_latent=D_HIDDEN,
-        n_dict=N_DICT,
-        l1_coef=SAE_L1,
+    sae_config = StandardTrainingSAEConfig(
+        d_in=D_HIDDEN,
+        d_sae=N_DICT,
+        l1_coefficient=SAE_L1,
         device=DEVICE,
-    ).to(DEVICE)
+    )
+    sae = StandardTrainingSAE(sae_config)
 
-    def make_data_fn(tm_ref):
-        def data_fn(n: int) -> torch.Tensor:
-            x = tm_ref.distribution.sample(n).to(DEVICE)
-            return tm_ref.ae.encode(x)
-
-        return data_fn
-
-    sae_losses = sae.train_sae(
-        data_fn=make_data_fn(tm),
-        n_steps=SAE_STEPS,
+    tm.train_saes(
+        {name: sae},
+        training_samples=SAE_TRAINING_SAMPLES,
         batch_size=SAE_BATCH,
         lr=SAE_LR,
+        verbose=True,
     )
 
     # Compute metrics
+    trained_sae = tm.saes[name].sae
     with torch.no_grad():
         test_x = dist.sample(10_000).to(DEVICE)
         test_hidden = tm.ae.encode(test_x)
-        test_z = sae.encode(test_hidden)
-        test_recon = sae.decode(test_z)
+        test_z = trained_sae.encode(test_hidden)
+        test_recon = trained_sae.decode(test_z)
 
         # L0 sparsity: mean number of active (> 0) dict elements per sample
         l0 = (test_z > 0).float().sum(dim=-1).mean().item()
@@ -222,7 +230,7 @@ for name, tm in [("Trained AE", tm_tied), ("Constructed AE", tm_synth_ortho)]:
         # Per-feature faithfulness: encode one-hot, round-trip through SAE
         eye = torch.eye(N_FEATURES, device=DEVICE)
         h_eye = tm.ae.encode(eye)
-        h_eye_recon = sae.decode(sae.encode(h_eye))
+        h_eye_recon = trained_sae.decode(trained_sae.encode(h_eye))
         per_feat_sae_mse = (h_eye - h_eye_recon).pow(2).sum(dim=-1).cpu().numpy()
 
         # Explained variance ratio
@@ -231,9 +239,6 @@ for name, tm in [("Trained AE", tm_tied), ("Constructed AE", tm_synth_ortho)]:
         explained_var = 1 - residual_var / total_var
 
     sae_results[name] = {
-        "sae": sae,
-        "tm": tm,
-        "losses": sae_losses,
         "l0": l0,
         "n_dead": n_dead,
         "n_alive": n_alive,
@@ -366,6 +371,7 @@ fig.show()
 # %%
 # --- W^T W comparison ---
 models = [("Trained AE", tm_tied), ("Constructed AE", tm_synth_ortho)]
+models_dict = dict(models)
 
 fig = make_subplots(rows=1, cols=2, subplot_titles=["Trained AE", "Constructed AE"])
 
@@ -412,92 +418,112 @@ style_fig(fig)
 fig.show()
 
 # %%
-# --- Plot: Geometric properties comparison ---
-fig = make_subplots(
-    rows=1,
-    cols=3,
-    subplot_titles=[
-        "Feature Dimensionalities",
-        "Feature Norms",
-        "Total Interference",
+# --- Plot: Geometric properties + bias over training (slider) ---
+_geom_props = ["fd", "fn", "ti", "bias"]
+_geom_titles = [
+    "Feature Dimensionalities",
+    "Feature Norms",
+    "Total Interference",
+    "Learned Bias",
+]
+
+# Build per-snapshot arrays for Trained AE, sorted by firing prob
+geom_arrays = {}
+for prop in _geom_props:
+    arr = np.array([g[prop] for g in geometry_tied]).T  # (N_FEATURES, n_snapshots)
+    geom_arrays[prop] = arr[sort_idx]
+
+n_snapshots = geom_arrays["fd"].shape[1]
+geom_epochs = (np.arange(n_snapshots) * EVAL_FREQ).astype(int)
+
+# Static Constructed AE reference (final state)
+synth_props = {
+    "fd": tm_synth_ortho.feature_dimensionalities.detach().cpu().numpy()[sort_idx],
+    "fn": tm_synth_ortho.feature_norms.detach().cpu().numpy()[sort_idx],
+    "ti": tm_synth_ortho.total_feature_interferences.detach().cpu().numpy()[sort_idx],
+    "bias": tm_synth_ortho.ae.b.detach().cpu().numpy()[sort_idx],
+}
+
+# Compute y-axis ranges across all snapshots (both models) for stable axes
+y_ranges = {}
+for prop in _geom_props:
+    all_vals = np.concatenate([geom_arrays[prop].ravel(), synth_props[prop]])
+    lo, hi = float(np.nanmin(all_vals)), float(np.nanmax(all_vals))
+    pad = (hi - lo) * 0.05
+    y_ranges[prop] = [lo - pad, hi + pad]
+
+x_feat = np.arange(N_FEATURES)
+fig = make_subplots(rows=1, cols=4, subplot_titles=_geom_titles)
+
+# Initial traces (epoch 0): 4 Trained AE + 4 Constructed AE = 8 traces
+for i, prop in enumerate(_geom_props):
+    fig.add_trace(
+        go.Scatter(
+            x=x_feat,
+            y=geom_arrays[prop][:, 0],
+            name="Trained AE",
+            legendgroup="Trained AE",
+            mode="markers",
+            marker=dict(size=3.25, opacity=0.6, color=MODEL_COLORS["Trained AE"]),
+            showlegend=(i == 0),
+        ),
+        row=1,
+        col=i + 1,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=x_feat,
+            y=synth_props[prop],
+            name="Constructed AE",
+            legendgroup="Constructed AE",
+            mode="markers",
+            marker=dict(size=3.25, opacity=0.6, color=MODEL_COLORS["Constructed AE"]),
+            showlegend=(i == 0),
+        ),
+        row=1,
+        col=i + 1,
+    )
+
+# Slider steps — update the 4 Trained AE traces (indices 0, 2, 4, 6)
+steps = []
+for s in range(n_snapshots):
+    step = dict(
+        method="update",
+        label=str(geom_epochs[s]),
+        args=[
+            {
+                "y": [
+                    geom_arrays["fd"][:, s],
+                    None,
+                    geom_arrays["fn"][:, s],
+                    None,
+                    geom_arrays["ti"][:, s],
+                    None,
+                    geom_arrays["bias"][:, s],
+                    None,
+                ]
+            },
+        ],
+    )
+    steps.append(step)
+
+fig.update_layout(
+    title="Geometric Properties Over Training (sorted by firing probability)",
+    height=500,
+    width=1400,
+    sliders=[
+        dict(
+            active=0,
+            currentvalue=dict(prefix="Epoch: "),
+            pad=dict(t=50),
+            steps=steps,
+        )
     ],
 )
-
-for name, tm in models:
-    fd = tm.feature_dimensionalities.detach().cpu().numpy()[sort_idx]
-    fn = tm.feature_norms.detach().cpu().numpy()[sort_idx]
-    ti = tm.total_feature_interferences.detach().cpu().numpy()[sort_idx]
-    x = np.arange(N_FEATURES)
-    color = MODEL_COLORS[name]
-
-    fig.add_trace(
-        go.Scatter(
-            x=x,
-            y=fd,
-            name=name,
-            legendgroup=name,
-            mode="markers",
-            marker=dict(size=3.25, opacity=0.6, color=color),
-        ),
-        row=1,
-        col=1,
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=x,
-            y=fn,
-            name=name,
-            legendgroup=name,
-            mode="markers",
-            showlegend=False,
-            marker=dict(size=3.25, opacity=0.6, color=color),
-        ),
-        row=1,
-        col=2,
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=x,
-            y=ti,
-            name=name,
-            legendgroup=name,
-            mode="markers",
-            showlegend=False,
-            marker=dict(size=3.25, opacity=0.6, color=color),
-        ),
-        row=1,
-        col=3,
-    )
-
-fig.update_layout(
-    title="Geometric Properties (sorted by firing probability)",
-    height=400,
-    width=1200,
-)
-for col in range(1, 4):
+for i, prop in enumerate(_geom_props):
+    fig.update_yaxes(range=y_ranges[prop], row=1, col=i + 1)
+for col in range(1, 5):
     fig.update_xaxes(title_text="Feature Rank ", row=1, col=col)
-style_fig(fig)
-fig.show()
-
-# %%
-# --- Plot: Bias comparison ---
-fig = go.Figure()
-for name, tm in models:
-    b = tm.ae.b.detach().cpu().numpy()[sort_idx]  # ty:ignore
-    fig.add_trace(
-        go.Scatter(
-            x=np.arange(N_FEATURES),
-            y=b,
-            name=name,
-            mode="markers",
-            marker=dict(size=3.25, opacity=0.6, color=MODEL_COLORS[name]),
-        )
-    )
-fig.update_layout(
-    title="Learned Bias b (sorted by firing probability)",
-    xaxis_title="Feature Rank ",
-    yaxis_title="b",
-)
 style_fig(fig)
 fig.show()
 
@@ -540,27 +566,6 @@ for name, eval_loss, pf in [
         f"mean_feature_MSE={final_mse.mean():.4f}"
     )
 
-# %% --- SAE loss curves ---
-fig = go.Figure()
-for name, res in sae_results.items():
-    fig.add_trace(
-        go.Scatter(
-            y=res["losses"],
-            mode="lines",
-            name=name,
-            line=dict(width=2, color=MODEL_COLORS[name]),
-        )
-    )
-fig.update_layout(
-    title="SAE Training Loss Comparison",
-    xaxis_title="Step",
-    yaxis_title="Loss",
-    yaxis_type="log",
-)
-style_fig(fig)
-fig.show()
-
-
 # %% --- Per-feature SAE reconstruction error ---
 names = list(sae_results.keys())
 fig = go.Figure()
@@ -587,8 +592,8 @@ fig.show()
 
 
 for name in names:
-    sae = sae_results[name]["sae"]
-    tm_ref = tm_tied if name == "Trained AE" else tm_synth_ortho
+    tm_ref = models_dict[name]
+    sae = tm_ref.saes[name].sae
     with torch.no_grad():
         eye = torch.eye(N_FEATURES, device=DEVICE)
 
@@ -666,8 +671,8 @@ for name in names:
 
 # %% --- SAE evaluation: MCC, detection metrics ---
 for name, res in sae_results.items():
-    sae = res["sae"]
-    tm = res["tm"]
+    tm = models_dict[name]
+    sae = tm.saes[name].sae
 
     with torch.no_grad():
         # Mean Correlation Coefficient (MCC) — O'Neill et al. (2025)
@@ -830,20 +835,20 @@ for name in names:
     )
 
 fig.update_layout(
-    title=f"Per-Feature Detection Metrics (top {N_DICT} matched, sorted by firing prob.)",
+    title="Per-Feature Detection Metrics (sorted by firing prob.)",
     height=400,
     width=1400,
 )
 for col in range(1, 5):
-    fig.update_xaxes(title_text="Matched Feature Rank ", row=1, col=col)
+    fig.update_xaxes(title_text="Feature Rank ", row=1, col=col)
 style_fig(fig)
 fig.show()
 
 # %% --- Encoder-based matching (using SAE activations on one-hot inputs) ---
 for name in names:
     res = sae_results[name]
-    sae = res["sae"]
-    tm = res["tm"]
+    tm = models_dict[name]
+    sae = tm.saes[name].sae
 
     with torch.no_grad():
         eye = torch.eye(N_FEATURES, device=DEVICE)
@@ -920,8 +925,8 @@ for name in names:
 # %% --- Encoder-matched SAE activations heatmap ---
 for name in names:
     res = sae_results[name]
-    sae = res["sae"]
-    tm = res["tm"]
+    tm = models_dict[name]
+    sae = tm.saes[name].sae
 
     with torch.no_grad():
         eye = torch.eye(N_FEATURES, device=DEVICE)
@@ -1063,7 +1068,7 @@ fig.update_layout(
 )
 for row in range(1, 3):
     for col in range(1, 5):
-        fig.update_xaxes(title_text="Matched Feature Rank ", row=row, col=col)
+        fig.update_xaxes(title_text="Feature Rank ", row=row, col=col)
 style_fig(fig)
 fig.show()
 
