@@ -30,7 +30,6 @@ from tqdm.auto import tqdm
 from occhio.autoencoder import AutoEncoderBase
 from occhio.distributions.base import Distribution
 from occhio.toy_model import SAEEntry, ToyModel
-from occhio.utils.logging import suppress_tqdm
 
 
 @dataclass
@@ -871,23 +870,20 @@ class ModelGrid:
         for model in tqdm(
             flattened_models, desc="Training SAEs", unit="model", disable=not verbose
         ):
-            with (
-                suppress_tqdm()
-            ):  # SAE Lens tqdm gets very verbose when training on a grid
-                model.train_saes(
-                    saes=saes,
-                    training_samples=training_samples,
-                    batch_size=batch_size,
-                    lr=lr,
-                    lr_warm_up_steps=lr_warm_up_steps,
-                    lr_decay_steps=lr_decay_steps,
-                    n_snapshots=n_snapshots,
-                    snapshot_fn=snapshot_fn,
-                    autocast_sae=autocast_sae,
-                    autocast_data=autocast_data,
-                    verbose=verbose,
-                    n_loss_snapshots=n_loss_snapshots,
-                )
+            model.train_saes(
+                saes=saes,
+                training_samples=training_samples,
+                batch_size=batch_size,
+                lr=lr,
+                lr_warm_up_steps=lr_warm_up_steps,
+                lr_decay_steps=lr_decay_steps,
+                n_snapshots=n_snapshots,
+                snapshot_fn=snapshot_fn,
+                autocast_sae=autocast_sae,
+                autocast_data=autocast_data,
+                verbose=verbose,
+                n_loss_snapshots=n_loss_snapshots,
+            )
 
     def evaluate_saes(
         self,

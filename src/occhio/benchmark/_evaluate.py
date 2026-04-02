@@ -98,7 +98,7 @@ def evaluate(
     )
 
     if is_per_benchmark_saes(saes):
-        for benchmark, benchmark_saes in tqdm(saes.items(), desc="benchmark"):
+        for benchmark, benchmark_saes in tqdm(saes.items(), desc="Distribution"):
             grid[benchmark_list.index(benchmark)].train_saes(
                 benchmark_saes,
                 training_samples=training_samples,
