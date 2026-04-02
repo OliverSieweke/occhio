@@ -1,3 +1,3 @@
-from occhio.benchmark.evaluate import evaluate_benchmark
+from occhio import benchmark
 
-evaluate_benchmark()
+benchmark.evaluate(verbose=True)

@@ -19,7 +19,7 @@ OCCHIO_HF_MODELS_REPO = "kaushikreddyxyz/occhio-models"
 
 
 @unique
-class BenchmarkName(str, Enum):
+class BenchmarkDistributionName(str, Enum):
     CORRELATED_PAIRS = "correlated_pairs"
     HIERARCHICAL_PAIRS = "hierarchical_pairs"
     DAG_RANDOM_WALK = "dag_random_walk"
@@ -33,241 +33,267 @@ class BenchmarkName(str, Enum):
 BenchmarkSAEsInput = (
     dict[str, TrainingSAE]
     | Callable[[ToyModel], dict[str, TrainingSAE]]
-    | dict[BenchmarkName, dict[str, TrainingSAE]]
-    | dict[BenchmarkName, Callable[[ToyModel], dict[str, TrainingSAE]]]
+    | dict[BenchmarkDistributionName, dict[str, TrainingSAE]]
+    | dict[BenchmarkDistributionName, Callable[[ToyModel], dict[str, TrainingSAE]]]
 )
 
-DEFAULT_BENCHMARK_SAEs: BenchmarkSAEsInput = {
-    BenchmarkName.CORRELATED_PAIRS: {
-        "Standard": StandardTrainingSAE(
-            StandardTrainingSAEConfig(
-                d_in=100,
-                d_sae=648,
-                l1_coefficient=0.4,
-            )
-        ),
-        "Matryoshka": MatryoshkaBatchTopKTrainingSAE(
-            MatryoshkaBatchTopKTrainingSAEConfig(
-                d_in=100,
-                d_sae=648,
-                matryoshka_widths=[
-                    81,
-                    324,
-                    648,
-                ],
-                k=2,
-                use_matryoshka_aux_loss=True,
-            )
-        ),
-        "MatchingPursuit": MatchingPursuitTrainingSAE(
-            MatchingPursuitTrainingSAEConfig(
-                d_in=100,
-                d_sae=648,
-                max_iterations=2,
-            )
-        ),
-    },
-    BenchmarkName.HIERARCHICAL_PAIRS: {
-        "Standard": StandardTrainingSAE(
-            StandardTrainingSAEConfig(
-                d_in=100,
-                d_sae=648,
-                l1_coefficient=0.5,
-            )
-        ),
-        "Matryoshka": MatryoshkaBatchTopKTrainingSAE(
-            MatryoshkaBatchTopKTrainingSAEConfig(
-                d_in=100,
-                d_sae=648,
-                matryoshka_widths=[
-                    81,
-                    324,
-                    648,
-                ],
-                k=1,
-                use_matryoshka_aux_loss=True,
-            )
-        ),
-        "MatchingPursuit": MatchingPursuitTrainingSAE(
-            MatchingPursuitTrainingSAEConfig(
-                d_in=100,
-                d_sae=648,
-                max_iterations=2,  # check for higher
-            )
-        ),
-    },
-    BenchmarkName.DAG_RANDOM_WALK: {
-        "Standard": StandardTrainingSAE(
-            StandardTrainingSAEConfig(
-                d_in=100,
-                d_sae=648,
-                l1_coefficient=0.6,
-            )
-        ),
-        "Matryoshka": MatryoshkaBatchTopKTrainingSAE(
-            MatryoshkaBatchTopKTrainingSAEConfig(
-                d_in=100,
-                d_sae=648,
-                matryoshka_widths=[
-                    81,
-                    324,
-                    648,
-                ],
-                k=1,
-                use_matryoshka_aux_loss=True,
-            )
-        ),
-        "MatchingPursuit": MatchingPursuitTrainingSAE(
-            MatchingPursuitTrainingSAEConfig(
-                d_in=100,
-                d_sae=648,
-                max_iterations=5,
-            )
-        ),
-    },
-    BenchmarkName.POWER_LAW_DIGRAPH: {
-        "Standard": StandardTrainingSAE(
-            StandardTrainingSAEConfig(
-                d_in=100,
-                d_sae=648,
-                l1_coefficient=0.9,
-            )
-        ),
-        "Matryoshka": MatryoshkaBatchTopKTrainingSAE(
-            MatryoshkaBatchTopKTrainingSAEConfig(
-                d_in=100,
-                d_sae=648,
-                matryoshka_widths=[
-                    81,
-                    324,
-                    648,
-                ],
-                k=2,
-                use_matryoshka_aux_loss=True,
-            )
-        ),
-        "MatchingPursuit": MatchingPursuitTrainingSAE(
-            MatchingPursuitTrainingSAEConfig(
-                d_in=100,
-                d_sae=648,
-                max_iterations=2,
-            )
-        ),
-    },
-    BenchmarkName.SIMPLICIAL_COMPLEX: {
-        "Standard": StandardTrainingSAE(
-            StandardTrainingSAEConfig(
-                d_in=100,
-                d_sae=648,
-                l1_coefficient=0.05,
-            )
-        ),
-        "Matryoshka": MatryoshkaBatchTopKTrainingSAE(
-            MatryoshkaBatchTopKTrainingSAEConfig(
-                d_in=100,
-                d_sae=648,
-                matryoshka_widths=[
-                    81,
-                    324,
-                    648,
-                ],
-                k=2,
-                use_matryoshka_aux_loss=True,
-            )
-        ),
-        "MatchingPursuit": MatchingPursuitTrainingSAE(
-            MatchingPursuitTrainingSAEConfig(
-                d_in=100,
-                d_sae=648,
-                max_iterations=2,
-            )
-        ),
-    },
-    BenchmarkName.SPARSE_UNIFORM: {
-        "Standard": StandardTrainingSAE(
-            StandardTrainingSAEConfig(
-                d_in=100,
-                d_sae=648,
-                l1_coefficient=0.6,
-            )
-        ),
-        "Matryoshka": MatryoshkaBatchTopKTrainingSAE(
-            MatryoshkaBatchTopKTrainingSAEConfig(
-                d_in=100,
-                d_sae=648,
-                matryoshka_widths=[
-                    81,
-                    324,
-                    648,
-                ],
-                k=1,
-                use_matryoshka_aux_loss=True,
-            )
-        ),
-        "MatchingPursuit": MatchingPursuitTrainingSAE(
-            MatchingPursuitTrainingSAEConfig(
-                d_in=100,
-                d_sae=648,
-                max_iterations=3,
-            )
-        ),
-    },
-    BenchmarkName.SPHERICAL: {
-        "Standard": StandardTrainingSAE(
-            StandardTrainingSAEConfig(
-                d_in=100,
-                d_sae=648,
-                l1_coefficient=0.05,
-            )
-        ),
-        "Matryoshka": MatryoshkaBatchTopKTrainingSAE(
-            MatryoshkaBatchTopKTrainingSAEConfig(
-                d_in=100,
-                d_sae=648,
-                matryoshka_widths=[
-                    81,
-                    324,
-                    648,
-                ],
-                k=2,
-                use_matryoshka_aux_loss=True,
-            )
-        ),
-        "MatchingPursuit": MatchingPursuitTrainingSAE(
-            MatchingPursuitTrainingSAEConfig(
-                d_in=100,
-                d_sae=648,
-                max_iterations=2,
-            )
-        ),
-    },
-    BenchmarkName.TORUS: {
-        "Standard": StandardTrainingSAE(
-            StandardTrainingSAEConfig(
-                d_in=100,
-                d_sae=648,
-                l1_coefficient=0.4,
-            )
-        ),
-        "Matryoshka": MatryoshkaBatchTopKTrainingSAE(
-            MatryoshkaBatchTopKTrainingSAEConfig(
-                d_in=100,
-                d_sae=648,
-                matryoshka_widths=[
-                    81,
-                    324,
-                    648,
-                ],
-                k=1,
-                use_matryoshka_aux_loss=True,
-            )
-        ),
-        "MatchingPursuit": MatchingPursuitTrainingSAE(
-            MatchingPursuitTrainingSAEConfig(
-                d_in=100,
-                d_sae=648,
-                max_iterations=5,
-            )
-        ),
-    },
-}
+
+def default_benchmark_saes(device="cpu") -> BenchmarkSAEsInput:
+    return {
+        BenchmarkDistributionName.CORRELATED_PAIRS: {
+            "Standard": StandardTrainingSAE(
+                StandardTrainingSAEConfig(
+                    d_in=100,
+                    d_sae=648,
+                    l1_coefficient=0.4,
+                    device=device,
+                )
+            ),
+            "Matryoshka": MatryoshkaBatchTopKTrainingSAE(
+                MatryoshkaBatchTopKTrainingSAEConfig(
+                    d_in=100,
+                    d_sae=648,
+                    matryoshka_widths=[
+                        81,
+                        324,
+                        648,
+                    ],
+                    k=2,
+                    use_matryoshka_aux_loss=True,
+                    device=device,
+                )
+            ),
+            "MatchingPursuit": MatchingPursuitTrainingSAE(
+                MatchingPursuitTrainingSAEConfig(
+                    d_in=100,
+                    d_sae=648,
+                    max_iterations=2,
+                    device=device,
+                )
+            ),
+        },
+        BenchmarkDistributionName.HIERARCHICAL_PAIRS: {
+            "Standard": StandardTrainingSAE(
+                StandardTrainingSAEConfig(
+                    d_in=100,
+                    d_sae=648,
+                    l1_coefficient=0.5,
+                    device=device,
+                )
+            ),
+            "Matryoshka": MatryoshkaBatchTopKTrainingSAE(
+                MatryoshkaBatchTopKTrainingSAEConfig(
+                    d_in=100,
+                    d_sae=648,
+                    matryoshka_widths=[
+                        81,
+                        324,
+                        648,
+                    ],
+                    k=1,
+                    use_matryoshka_aux_loss=True,
+                    device=device,
+                )
+            ),
+            "MatchingPursuit": MatchingPursuitTrainingSAE(
+                MatchingPursuitTrainingSAEConfig(
+                    d_in=100,
+                    d_sae=648,
+                    max_iterations=2,  # check for higher
+                    device=device,
+                )
+            ),
+        },
+        BenchmarkDistributionName.DAG_RANDOM_WALK: {
+            "Standard": StandardTrainingSAE(
+                StandardTrainingSAEConfig(
+                    d_in=100,
+                    d_sae=648,
+                    l1_coefficient=0.6,
+                    device=device,
+                )
+            ),
+            "Matryoshka": MatryoshkaBatchTopKTrainingSAE(
+                MatryoshkaBatchTopKTrainingSAEConfig(
+                    d_in=100,
+                    d_sae=648,
+                    matryoshka_widths=[
+                        81,
+                        324,
+                        648,
+                    ],
+                    k=1,
+                    use_matryoshka_aux_loss=True,
+                    device=device,
+                )
+            ),
+            "MatchingPursuit": MatchingPursuitTrainingSAE(
+                MatchingPursuitTrainingSAEConfig(
+                    d_in=100,
+                    d_sae=648,
+                    max_iterations=5,
+                    device=device,
+                )
+            ),
+        },
+        BenchmarkDistributionName.POWER_LAW_DIGRAPH: {
+            "Standard": StandardTrainingSAE(
+                StandardTrainingSAEConfig(
+                    d_in=100,
+                    d_sae=648,
+                    l1_coefficient=0.9,
+                    device=device,
+                )
+            ),
+            "Matryoshka": MatryoshkaBatchTopKTrainingSAE(
+                MatryoshkaBatchTopKTrainingSAEConfig(
+                    d_in=100,
+                    d_sae=648,
+                    matryoshka_widths=[
+                        81,
+                        324,
+                        648,
+                    ],
+                    k=2,
+                    use_matryoshka_aux_loss=True,
+                    device=device,
+                )
+            ),
+            "MatchingPursuit": MatchingPursuitTrainingSAE(
+                MatchingPursuitTrainingSAEConfig(
+                    d_in=100,
+                    d_sae=648,
+                    max_iterations=2,
+                    device=device,
+                )
+            ),
+        },
+        BenchmarkDistributionName.SIMPLICIAL_COMPLEX: {
+            "Standard": StandardTrainingSAE(
+                StandardTrainingSAEConfig(
+                    d_in=100,
+                    d_sae=648,
+                    l1_coefficient=0.05,
+                    device=device,
+                )
+            ),
+            "Matryoshka": MatryoshkaBatchTopKTrainingSAE(
+                MatryoshkaBatchTopKTrainingSAEConfig(
+                    d_in=100,
+                    d_sae=648,
+                    matryoshka_widths=[
+                        81,
+                        324,
+                        648,
+                    ],
+                    k=2,
+                    use_matryoshka_aux_loss=True,
+                    device=device,
+                )
+            ),
+            "MatchingPursuit": MatchingPursuitTrainingSAE(
+                MatchingPursuitTrainingSAEConfig(
+                    d_in=100,
+                    d_sae=648,
+                    max_iterations=2,
+                    device=device,
+                )
+            ),
+        },
+        BenchmarkDistributionName.SPARSE_UNIFORM: {
+            "Standard": StandardTrainingSAE(
+                StandardTrainingSAEConfig(
+                    d_in=100,
+                    d_sae=648,
+                    l1_coefficient=0.6,
+                    device=device,
+                )
+            ),
+            "Matryoshka": MatryoshkaBatchTopKTrainingSAE(
+                MatryoshkaBatchTopKTrainingSAEConfig(
+                    d_in=100,
+                    d_sae=648,
+                    matryoshka_widths=[
+                        81,
+                        324,
+                        648,
+                    ],
+                    k=1,
+                    use_matryoshka_aux_loss=True,
+                    device=device,
+                )
+            ),
+            "MatchingPursuit": MatchingPursuitTrainingSAE(
+                MatchingPursuitTrainingSAEConfig(
+                    d_in=100,
+                    d_sae=648,
+                    max_iterations=3,
+                    device=device,
+                )
+            ),
+        },
+        BenchmarkDistributionName.SPHERICAL: {
+            "Standard": StandardTrainingSAE(
+                StandardTrainingSAEConfig(
+                    d_in=100,
+                    d_sae=648,
+                    l1_coefficient=0.05,
+                    device=device,
+                )
+            ),
+            "Matryoshka": MatryoshkaBatchTopKTrainingSAE(
+                MatryoshkaBatchTopKTrainingSAEConfig(
+                    d_in=100,
+                    d_sae=648,
+                    matryoshka_widths=[
+                        81,
+                        324,
+                        648,
+                    ],
+                    k=2,
+                    use_matryoshka_aux_loss=True,
+                    device=device,
+                )
+            ),
+            "MatchingPursuit": MatchingPursuitTrainingSAE(
+                MatchingPursuitTrainingSAEConfig(
+                    d_in=100,
+                    d_sae=648,
+                    max_iterations=2,
+                    device=device,
+                )
+            ),
+        },
+        BenchmarkDistributionName.TORUS: {
+            "Standard": StandardTrainingSAE(
+                StandardTrainingSAEConfig(
+                    d_in=100,
+                    d_sae=648,
+                    l1_coefficient=0.4,
+                    device=device,
+                )
+            ),
+            "Matryoshka": MatryoshkaBatchTopKTrainingSAE(
+                MatryoshkaBatchTopKTrainingSAEConfig(
+                    d_in=100,
+                    d_sae=648,
+                    matryoshka_widths=[
+                        81,
+                        324,
+                        648,
+                    ],
+                    k=1,
+                    use_matryoshka_aux_loss=True,
+                    device=device,
+                )
+            ),
+            "MatchingPursuit": MatchingPursuitTrainingSAE(
+                MatchingPursuitTrainingSAEConfig(
+                    d_in=100,
+                    d_sae=648,
+                    max_iterations=5,
+                    device=device,
+                )
+            ),
+        },
+    }

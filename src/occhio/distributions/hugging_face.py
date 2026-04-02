@@ -79,7 +79,8 @@ class HuggingFaceDistribution(Distribution):
         super().__init__(samples.shape[1], device=device, generator=generator)
 
         self._n_samples = samples.shape[0]
-        self._samples = samples.to(self.device) if self.device else samples
+        # Keep backing store on CPU; only sampled batches are moved to device.
+        self._samples = samples
 
         self.filename = filename
         self.revision = resolved_revision
@@ -93,7 +94,14 @@ class HuggingFaceDistribution(Distribution):
         Returns:
             Tensor of shape ``(batch_size, n_features)``.
         """
-        return self._samples[self._randint(0, self._n_samples, (batch_size,))]
+        indices = self._randint(0, self._n_samples, (batch_size,))
+        batch = self._samples[indices.cpu()]
+        return batch.to(self.device) if self.device else batch
+
+    def to(self, device: torch.device | str) -> "HuggingFaceDistribution":
+        # Update device without moving _samples; only batches are transferred on demand.
+        self.device = torch.device(device)
+        return self
 
     def __repr__(self) -> str:
         return (
