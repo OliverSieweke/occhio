@@ -84,7 +84,10 @@ class HuggingFaceDistribution(Distribution):
         # dataset into device memory. Batches are transferred in sample() instead.
         self._samples = samples
 
+        self.repo_id = repo_id
         self.filename = filename
+        self.repo_type = repo_type
+        self.data_key = data_key
         self.revision = resolved_revision
 
     def sample(self, batch_size: int) -> Tensor:
@@ -105,6 +108,23 @@ class HuggingFaceDistribution(Distribution):
         # dataset onto the device, defeating the memory optimisation.
         self.device = torch.device(device)
         return self
+
+    def __getstate__(self) -> dict:
+        state = self.__dict__.copy()
+        del state["_samples"]
+        return state
+
+    def __setstate__(self, state: dict) -> None:
+        self.__dict__.update(state)
+        path = hf_hub_download(
+            repo_id=state["repo_id"],
+            filename=state["filename"],
+            repo_type=state["repo_type"],
+            revision=state["revision"],
+        )
+        # [2026-04-02 | OliverSieweke] TODO: make this a method to reuse?
+        data = load_file(path)
+        self._samples = data[state["data_key"]]
 
     def __repr__(self) -> str:
         return (

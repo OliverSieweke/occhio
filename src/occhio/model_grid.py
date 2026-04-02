@@ -9,7 +9,7 @@ import datetime
 import pickle
 from collections.abc import Iterable, Sequence
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from functools import cached_property
 from inspect import signature
 from itertools import product
@@ -19,6 +19,7 @@ from warnings import warn
 
 import dill
 import numpy as np
+import pandas as pd
 import torch
 from numpy.typing import NDArray
 from sae_lens import TrainingSAE
@@ -910,6 +911,68 @@ class ModelGrid:
             flattened_models, desc="Models", unit="model", disable=not verbose
         ):
             model.evaluate_saes(labels=labels, num_samples=num_samples, verbose=verbose)
+
+    def sae_results_to_dataframe(self):
+        """Convert SAE evaluation results to a pandas DataFrame.
+
+        Returns a DataFrame with a ``(distribution, sae)`` MultiIndex on the rows
+        and one column per metric. Only includes SAEs that have been evaluated
+        (results is not None).
+
+        Returns:
+            A DataFrame with ``(distribution, sae)`` row MultiIndex and metric names
+            as columns. Metrics are derived dynamically from the result objects, with
+            nested fields (e.g. ``classification``) flattened into the top level.
+
+        Example::
+
+            grid.evaluate_saes()
+            df = grid.sae_results_to_dataframe()
+            df.loc["SPARSE_UNIFORM"]  # all SAEs, all metrics
+            df.loc["SPARSE_UNIFORM"].xs("Standard", level="sae")  # one SAE, all metrics
+            df.loc["SPARSE_UNIFORM"].xs(
+                ["Standard", "Matryoshka"], level="sae"
+            )  # two SAEs, all metrics
+            df[["f1_score", "mcc"]]  # filter metrics
+        """
+        axis_labels = [axis.label for axis in self.axes]
+
+        rows: list[dict[str, Any]] = []
+        for idx in np.ndindex(*self.shape):
+            # [2026-04-02 | OliverSieweke] TODO: this feels like something that should be utility on model grid
+            model: ToyModel = self.models[idx]
+            axis_values = {}
+            for i, axis in enumerate(self.axes):
+                value = axis.values[idx[i]]
+                axis_values[axis.label] = (
+                    value.name
+                    if hasattr(value, "name") and isinstance(value.name, str)
+                    else str(value)
+                )
+
+            for sae_label, sae_record in model.saes.items():
+                if sae_record.results is None:
+                    continue
+                metrics = asdict(sae_record.results)
+                # Flatten any nested dataclass fields (e.g. classification)
+                for key, value in list(metrics.items()):
+                    if isinstance(value, dict):
+                        metrics.update(metrics.pop(key))
+                rows.append({**axis_values, "sae": sae_label, **metrics})
+
+        if not rows:
+            return pd.DataFrame(
+                index=pd.MultiIndex.from_tuples([], names=axis_labels + ["sae"])
+            )
+
+        tidy = pd.DataFrame(rows)
+        # [2026-04-02 | OliverSieweke] TODO: based on benchmark axis here - don't assume it's the first.
+        non_benchmark_axes = [label for label in axis_labels if label != axis_labels[0]]
+        tidy = tidy.set_index(
+            axis_labels[:1] + ["sae"] + non_benchmark_axes
+        ).sort_index()
+        tidy.columns.name = "metric"
+        return tidy
 
     def save(self, path: str | Path) -> None:
         """Save grid to disk using dill.
