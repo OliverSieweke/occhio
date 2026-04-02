@@ -95,15 +95,6 @@ class HuggingFaceDistribution(Distribution):
         self.filename = filename
         self.revision = resolved_revision
 
-    def _refill_buffer(self, batch_size: int) -> None:
-        # Generate indices on self.device (respects self.generator), then move to
-        # CPU for indexing the CPU-resident backing store.
-        indices = self._randint(
-            0, self._n_samples, (self._buffer_batches * batch_size,)
-        ).cpu()
-        self._buffer = self._samples[indices].to(self.device, non_blocking=True)
-        self._buffer_pos = 0
-
     def sample(self, batch_size: int) -> Tensor:
         """Return random samples with replacement from the cached data.
 
