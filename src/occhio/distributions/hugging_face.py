@@ -85,9 +85,10 @@ class HuggingFaceDistribution(Distribution):
         super().__init__(samples.shape[1], device=device, generator=generator)
 
         self._n_samples = samples.shape[0]
-        # Keep backing store on CPU. Pin memory when a device is given so that
-        # CPU→device DMA transfers bypass the CPU entirely.
-        self._samples = samples.pin_memory() if device else samples
+        # Keep backing store on CPU. clone() copies out of the mmap'd safetensors
+        # backing store into regular CPU memory, which CUDA requires before
+        # pin_memory() can lock the pages for fast DMA transfers.
+        self._samples = samples.clone().pin_memory() if device else samples
         self._buffer_batches = buffer_batches
         self._buffer: Tensor | None = None
         self._buffer_pos: int = 0
