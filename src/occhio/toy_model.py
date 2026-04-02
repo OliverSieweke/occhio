@@ -18,7 +18,7 @@ from sae_lens.synthetic import (
     eval_sae_on_synthetic_data,
     train_toy_sae,
 )
-from safetensors.torch import load_file
+from sae_lens.training.sae_trainer import SAETrainer, TrainStepInput
 from torch import Tensor
 from torch.optim import AdamW, Optimizer
 from tqdm.auto import tqdm
@@ -32,11 +32,58 @@ from .utils.logging import suppress_tqdm
 
 
 @dataclass
+class SAEEntry:
+    """Declares an SAE to train, with optional sweep metadata.
+
+    Args:
+        sae: The SAE instance to train.
+        type: SAE type name (e.g. "Matryoshka", "Standard").
+        params: Optional dict of sweep parameters (e.g. ``{"k": 2}``).
+            These are propagated to :class:`SAERecord` and flattened into
+            DataFrame columns by :meth:`ModelGrid.sae_results_to_dataframe`.
+        label: Optional human-readable label. If *None*, auto-generated as
+            ``"{type}_{index}"`` where index is per-type.
+    """
+
+    sae: TrainingSAE
+    type: str
+    params: dict[str, Any] | None = None
+    label: str | None = None
+
+
+def _resolve_sae_entries(
+    entries: list[SAEEntry],
+) -> dict[str, tuple[TrainingSAE, str, dict[str, Any] | None]]:
+    """Convert a list of :class:`SAEEntry` to a labelled dict.
+
+    Returns a dict mapping ``label -> (sae, sae_type, params)``.
+    Labels are auto-generated as ``"{type}_{per_type_index}"`` when not
+    explicitly set on the entry.
+    """
+    type_counts: dict[str, int] = {}
+    result: dict[str, tuple[TrainingSAE, str, dict[str, Any] | None]] = {}
+    for entry in entries:
+        if entry.label is not None:
+            label = entry.label
+        else:
+            idx = type_counts.get(entry.type, 0)
+            type_counts[entry.type] = idx + 1
+            label = f"{entry.type}_{idx}"
+        if label in result:
+            raise ValueError(f"Duplicate SAE label: '{label}'")
+        result[label] = (entry.sae, entry.type, entry.params)
+    return result
+
+
+@dataclass
 class SAERecord:
     """Holds an SAE and its evaluation results."""
 
     sae: TrainingSAE
+    sae_type: str | None = None
+    params: dict[str, Any] | None = None
     results: SyntheticDataEvalResult | None = None
+    losses: list[tuple[int, float]] | None = None
 
 
 class ToyModel:
@@ -306,7 +353,7 @@ class ToyModel:
 
     def train_saes(
         self,
-        saes: dict[str, TrainingSAE] | Callable[["ToyModel"], dict[str, TrainingSAE]],
+        saes: list[SAEEntry] | Callable[["ToyModel"], list[SAEEntry]],
         training_samples: int = 10_000_000,
         batch_size: int = 1024,
         lr: float = 0.0003,
@@ -317,13 +364,13 @@ class ToyModel:
         autocast_sae: bool = False,
         autocast_data: bool = False,
         verbose: bool = False,
+        n_loss_snapshots: int | None = None,
     ) -> None:
         """Train SAE(s) on this model's hidden activations using SAE Lens.
 
         Args:
-            saes: Either a dict mapping labels to SAEs, or a callable that takes
-                a ToyModel and returns such a dict. Use a callable when SAE
-                configuration depends on model properties (e.g., n_hidden, device).
+            saes: A list of :class:`SAEEntry` instances, or a callable that
+                takes a :class:`ToyModel` and returns such a list.
             training_samples: Number of training samples (sae_lens param, default: 10M).
             batch_size: Training batch size (sae_lens param, default: 1024).
             lr: Learning rate (sae_lens param, default: 0.0003).
@@ -334,21 +381,23 @@ class ToyModel:
             autocast_sae: Use autocast for SAE (sae_lens param, default: False).
             autocast_data: Use autocast for data (sae_lens param, default: False).
             verbose: Whether to show progress bars. Defaults to False.
+            n_loss_snapshots: If set, record the overall loss at this many
+                evenly-spaced snapshots and store in SAERecord.losses. None (default)
+                disables loss tracking.
 
         Returns:
             None
         """
-        # Resolve SAEs: if callable, invoke it with this model
-        resolved_saes: dict[str, TrainingSAE] = saes(self) if callable(saes) else saes
+        resolved = _resolve_sae_entries(saes(self) if callable(saes) else saes)
 
         pbar = tqdm(
-            resolved_saes.items(),
+            resolved.items(),
             desc="SAEs",
             unit="SAE",
             leave=False,
             disable=not verbose,
         )
-        for label, sae in pbar:
+        for label, (sae, sae_type, params) in pbar:
             pbar.set_description(f"SAE: {label}")
             if label in self.saes.keys():
                 warnings.warn(
@@ -356,6 +405,33 @@ class ToyModel:
                     UserWarning,
                     stacklevel=2,
                 )
+
+            if n_loss_snapshots is not None:
+                captured_losses: list[tuple[int, float]] = []
+
+                def _loss_snapshot_fn(trainer: SAETrainer) -> None:
+                    batch = next(trainer.data_provider).to(trainer.sae.device)
+                    with torch.no_grad():
+                        output = trainer.sae.training_forward_pass(
+                            TrainStepInput(
+                                sae_in=batch,
+                                dead_neuron_mask=trainer.dead_neurons,
+                                coefficients=trainer.get_coefficients(),
+                                n_training_steps=trainer.n_training_steps,
+                                is_logging_step=False,
+                            )
+                        )
+                    captured_losses.append(
+                        (trainer.n_training_steps, output.loss.item())
+                    )
+
+                effective_n_snapshots = n_loss_snapshots
+                effective_snapshot_fn = _loss_snapshot_fn
+            else:
+                captured_losses = None
+                effective_n_snapshots = n_snapshots
+                effective_snapshot_fn = snapshot_fn
+
             with (
                 suppress_tqdm()
             ):  # SAE Lens tqdm gets very verbose when training on a grid
@@ -369,12 +445,17 @@ class ToyModel:
                     lr_warm_up_steps=lr_warm_up_steps,
                     lr_decay_steps=lr_decay_steps,
                     device=self.device,
-                    n_snapshots=n_snapshots,
-                    snapshot_fn=snapshot_fn,
+                    n_snapshots=effective_n_snapshots,
+                    snapshot_fn=effective_snapshot_fn,
                     autocast_sae=autocast_sae,
                     autocast_data=autocast_data,
                 )
-                self.saes[label] = SAERecord(sae=sae)
+                self.saes[label] = SAERecord(
+                    sae=sae,
+                    sae_type=sae_type,
+                    params=params,
+                    losses=captured_losses,
+                )
 
     def evaluate_saes(
         self,

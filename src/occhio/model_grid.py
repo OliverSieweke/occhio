@@ -22,7 +22,6 @@ import numpy as np
 import pandas as pd
 import torch
 from numpy.typing import NDArray
-from sae_lens import TrainingSAE
 from torch import Tensor, meshgrid
 from torch.func import functional_call, stack_module_state
 from torch.optim import AdamW
@@ -30,7 +29,7 @@ from tqdm.auto import tqdm
 
 from occhio.autoencoder import AutoEncoderBase
 from occhio.distributions.base import Distribution
-from occhio.toy_model import ToyModel
+from occhio.toy_model import SAEEntry, ToyModel
 from occhio.utils.logging import suppress_tqdm
 
 
@@ -835,7 +834,7 @@ class ModelGrid:
 
     def train_saes(
         self,
-        saes: dict[str, TrainingSAE] | Callable[[ToyModel], dict[str, TrainingSAE]],
+        saes: list[SAEEntry] | Callable[[ToyModel], list[SAEEntry]],
         training_samples: int = 10_000_000,
         batch_size: int = 1024,
         lr: float = 0.0003,
@@ -846,15 +845,13 @@ class ModelGrid:
         autocast_sae: bool = False,
         autocast_data: bool = False,
         verbose: bool = False,
+        n_loss_snapshots: int | None = None,
     ) -> None:
         """Train SAE(s) on each ToyModel in the grid.
 
         Args:
-            saes: Either a dict mapping labels to SAEs, or a callable that takes
-                a ToyModel and returns such a dict. Use a callable when SAE
-                configuration depends on model properties (e.g., n_hidden, device).
-                If a dict is provided, it will be deep-copied for each model. If a
-                callable is provided, it will be invoked for each model.
+            saes: A list of :class:`SAEEntry` instances, or a callable that
+                takes a :class:`ToyModel` and returns such a list.
             training_samples: Number of training samples (sae_lens param, default: 10M).
             batch_size: Training batch size (sae_lens param, default: 1024).
             lr: Learning rate (sae_lens param, default: 0.0003).
@@ -865,6 +862,9 @@ class ModelGrid:
             autocast_sae: Use autocast for SAE (sae_lens param, default: False).
             autocast_data: Use autocast for data (sae_lens param, default: False).
             verbose: Whether to show progress bars. Defaults to False.
+            n_loss_snapshots: If set, record the overall loss at this many
+                evenly-spaced snapshots and store in each SAERecord.losses. None
+                (default) disables loss tracking.
         """
         flattened_models: NDArray[np.object_] = self.models.ravel()
 
@@ -874,7 +874,6 @@ class ModelGrid:
             with (
                 suppress_tqdm()
             ):  # SAE Lens tqdm gets very verbose when training on a grid
-                # If saes is callable, invoke it for each model; otherwise deepcopy the dict
                 model.train_saes(
                     saes=saes,
                     training_samples=training_samples,
@@ -887,6 +886,7 @@ class ModelGrid:
                     autocast_sae=autocast_sae,
                     autocast_data=autocast_data,
                     verbose=verbose,
+                    n_loss_snapshots=n_loss_snapshots,
                 )
 
     def evaluate_saes(
@@ -958,7 +958,13 @@ class ModelGrid:
                 for key, value in list(metrics.items()):
                     if isinstance(value, dict):
                         metrics.update(metrics.pop(key))
-                rows.append({**axis_values, "sae": sae_label, **metrics})
+                row = {**axis_values, "sae": sae_label, **metrics}
+                if sae_record.sae_type is not None:
+                    row["sae_type"] = sae_record.sae_type
+                if sae_record.params:
+                    for param_key, param_value in sae_record.params.items():
+                        row[param_key] = param_value
+                rows.append(row)
 
         if not rows:
             return pd.DataFrame(

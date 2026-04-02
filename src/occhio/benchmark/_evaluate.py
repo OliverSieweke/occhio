@@ -8,9 +8,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, TypeGuard
 
+import numpy as np
 import pandas as pd
 import torch
-from sae_lens import TrainingSAE
 from tqdm.auto import tqdm
 
 from occhio.benchmark.configs import (
@@ -20,7 +20,7 @@ from occhio.benchmark.configs import (
 )
 from occhio.benchmark.utils import toy_model_from_benchmark
 from occhio.model_grid import Axis, ModelGrid
-from occhio.toy_model import ToyModel
+from occhio.toy_model import SAEEntry, ToyModel
 
 # [2026-03-27 | OliverSieweke] TODO: make this a script
 
@@ -31,6 +31,7 @@ class EvaluationResult:
 
     grid: ModelGrid
     df: pd.DataFrame
+    losses_df: pd.DataFrame | None = None
 
 
 def evaluate(
@@ -40,6 +41,8 @@ def evaluate(
     device: str | None = None,
     verbose: bool = False,
     export_dir: str | Path | None = None,
+    n_loss_snapshots: int | None = None,
+    n_seeds: int | None = None,
 ) -> EvaluationResult:
     """Evaluate SAEs on toy model benchmarks.
 
@@ -56,6 +59,10 @@ def evaluate(
         verbose: Whether to show progress bars.
         export_dir: If set, export results to this directory. The directory must not
             already exist and be non-empty.
+        n_loss_snapshots: If set, record the overall loss at this many evenly-spaced
+            snapshots per SAE and include in the export. None (default) disables loss tracking.
+        n_seeds: If set, sweep over this many seeds (0..n_seeds-1). None (default) runs
+            a single model with no seed axis.
 
     Returns:
         An EvaluationResult with the trained grid and a tidy DataFrame of SAE metrics.
@@ -77,29 +84,40 @@ def evaluate(
             else list(BenchmarkDistributionName)
         )
 
+    axes = [Axis("benchmark", benchmark_list)]
+    if n_seeds is not None:
+        axes.append(Axis("seed", list(range(n_seeds))))
+
     grid = ModelGrid(
         lambda params: toy_model_from_benchmark(
             params["benchmark"].value,
             device=device,
             generator=torch.Generator(device=device),
         ),
-        axes=[
-            Axis("benchmark", benchmark_list),
-            Axis("seed", [0, 1]),
-        ],
+        axes=axes,
     )
 
     if is_per_benchmark_saes(saes):
         for benchmark, benchmark_saes in tqdm(saes.items(), desc="benchmark"):
             grid[benchmark_list.index(benchmark)].train_saes(
-                benchmark_saes, training_samples=training_samples, verbose=verbose
+                benchmark_saes,
+                training_samples=training_samples,
+                verbose=verbose,
+                n_loss_snapshots=n_loss_snapshots,
             )
     elif is_shared_saes(saes):
-        grid.train_saes(saes, training_samples=training_samples, verbose=verbose)
+        grid.train_saes(
+            saes,
+            training_samples=training_samples,
+            verbose=verbose,
+            n_loss_snapshots=n_loss_snapshots,
+        )
 
     grid.evaluate_saes(verbose=verbose)
 
     df = grid.sae_results_to_dataframe()
+
+    losses_df = _build_losses_dataframe(grid) if n_loss_snapshots is not None else None
 
     if export_dir is not None:
         _export_results(
@@ -109,9 +127,35 @@ def evaluate(
             training_samples=training_samples,
             device=device,
             per_benchmark=is_per_benchmark_saes(saes),
+            losses_df=losses_df,
         )
 
-    return EvaluationResult(grid=grid, df=df)
+    return EvaluationResult(grid=grid, df=df, losses_df=losses_df)
+
+
+def _build_losses_dataframe(grid: ModelGrid) -> pd.DataFrame | None:
+    """Build a tidy DataFrame of SAE training losses from a grid."""
+    rows = []
+    for idx in np.ndindex(*grid.shape):
+        model = grid.models[idx]
+        axis_values = {}
+        for i, axis in enumerate(grid.axes):
+            value = axis.values[idx[i]]
+            axis_values[axis.label] = (
+                value.name
+                if hasattr(value, "name") and isinstance(value.name, str)
+                else str(value)
+            )
+        for label, record in model.saes.items():
+            if record.losses is not None:
+                row_base: dict[str, Any] = {**axis_values, "sae": label}
+                if record.sae_type is not None:
+                    row_base["sae_type"] = record.sae_type
+                if record.params:
+                    row_base.update(record.params)
+                for step, loss in record.losses:
+                    rows.append({**row_base, "step": step, "loss": loss})
+    return pd.DataFrame(rows) if rows else None
 
 
 def _export_results(
@@ -121,6 +165,7 @@ def _export_results(
     training_samples: int,
     device: str | None,
     per_benchmark: bool,
+    losses_df: pd.DataFrame | None = None,
 ) -> None:
     """Write grid, results, and run info to an export directory."""
     if export_dir.exists() and any(export_dir.iterdir()):
@@ -133,6 +178,11 @@ def _export_results(
     grid.save(export_dir / "grid.pkl")
     df.to_parquet(export_dir / "results.parquet")
     df.reset_index().to_csv(export_dir / "results.csv", index=False)
+
+    if losses_df is not None:
+        losses_df.to_parquet(export_dir / "losses.parquet")
+        losses_df.to_csv(export_dir / "losses.csv", index=False)
+
     nested = {
         benchmark: {
             str(k) if isinstance(k, tuple) else k: v
@@ -194,14 +244,17 @@ def _build_run_info(
 def is_per_benchmark_saes(
     saes: BenchmarkSAEsInput,
 ) -> TypeGuard[
-    dict[BenchmarkDistributionName, Callable[[ToyModel], dict[str, TrainingSAE]]]
+    dict[BenchmarkDistributionName, list[SAEEntry]]
+    | dict[BenchmarkDistributionName, Callable[[ToyModel], list[SAEEntry]]]
 ]:
-    return not callable(saes) and isinstance(
-        next(iter(saes.keys())), BenchmarkDistributionName
+    return (
+        not callable(saes)
+        and not isinstance(saes, list)
+        and isinstance(next(iter(saes.keys())), BenchmarkDistributionName)
     )
 
 
 def is_shared_saes(
     saes: BenchmarkSAEsInput,
-) -> TypeGuard[dict[str, TrainingSAE] | Callable[[ToyModel], dict[str, TrainingSAE]]]:
-    return callable(saes) or isinstance(next(iter(saes.keys())), str)
+) -> TypeGuard[list[SAEEntry] | Callable[[ToyModel], list[SAEEntry]]]:
+    return callable(saes) or isinstance(saes, list)
