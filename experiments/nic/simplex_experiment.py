@@ -15,7 +15,7 @@ from occhio.toy_model import ToyModel
 # --- Paper-quality plot defaults ---
 FONT = dict(family="Times New Roman, serif", size=24, color="#333333")
 AXIS_STYLE = dict(
-    showgrid=True,
+    showgrid=False,
     gridcolor="rgba(0,0,0,0.02)",
     gridwidth=1,
     zeroline=False,
@@ -51,7 +51,7 @@ LAYOUT_DEFAULTS = dict(
 # %%
 DEVICE = "mps"
 gen = torch.Generator(DEVICE)
-gen.manual_seed(6)
+gen.manual_seed(3)
 
 # 3 simplices of size 3 → 9 features total
 # simplex_sizes = [2, 2, 2]
@@ -60,11 +60,20 @@ n_features = 9
 n_hidden = 3
 
 
-random.seed(7)
 FACE_DIM = 1
 N_FACES = n_features
 p_active = 1 / (N_FACES)
 faces = [(0, 1, 2), (1, 2, 3), (4, 5, 6), (6, 7, 8)]
+# faces = [
+#     (0, 1, 2),
+#     (0, 2, 3),
+#     (0, 3, 4),
+#     (0, 4, 1),
+#     (5, 1, 2),
+#     (5, 2, 3),
+#     (5, 3, 4),
+#     (5, 4, 1),
+# ]
 
 dist = SimplicialComplexDistribution(
     n_vertices=n_features,
@@ -89,11 +98,10 @@ fig_loss.update_yaxes(**AXIS_STYLE)
 fig_loss
 
 # %%
+# Sample 256 points, encode into hidden space, and visualise
 W = tm.W.detach().cpu().numpy()  # (n_hidden, n_features)
 
 
-# %%
-# Sample 256 points, encode into hidden space, and visualise
 with torch.no_grad():
     samples = dist.sample(512)
     hidden = tm.ae.encode(samples).cpu().numpy()
@@ -106,13 +114,74 @@ for row in samples_cpu:
     active_verts.append(",".join(verts) if verts else "none")
 
 fig2 = go.Figure()
+
+# # Wall projection (shadow on h₀–h₂ plane at y-min) for depth cue
+# y_wall = float(hidden[:, 1].min()) - 0.05
+# fig2.add_trace(
+#     go.Scatter3d(
+#         x=hidden[:, 0],
+#         y=[y_wall] * len(hidden),
+#         z=hidden[:, 2],
+#         mode="markers",
+#         marker=dict(size=1.5, opacity=0.15, color="black"),
+#         showlegend=False,
+#         hoverinfo="skip",
+#     )
+# )
+
+# # Shadow of face edges on the y-wall
+# for i, face in enumerate(dist.faces):
+#     edges = list(zip(face, face[1:])) + [(face[-1], face[0])]
+#     for a, b in edges:
+#         fig2.add_trace(
+#             go.Scatter3d(
+#                 x=[W[0, a], W[0, b]],
+#                 y=[y_wall, y_wall],
+#                 z=[W[2, a], W[2, b]],
+#                 mode="lines",
+#                 line=dict(width=1.5, color="rgba(0,0,0,0.15)"),
+#                 showlegend=False,
+#                 hoverinfo="skip",
+#             )
+#         )
+
+# # Back wall projection (shadow on h₁–h₂ plane at x-min) for depth cue
+# x_wall = float(hidden[:, 0].min()) - 0.05
+# fig2.add_trace(
+#     go.Scatter3d(
+#         x=[x_wall] * len(hidden),
+#         y=hidden[:, 1],
+#         z=hidden[:, 2],
+#         mode="markers",
+#         marker=dict(size=1.5, opacity=0.15, color="black"),
+#         showlegend=False,
+#         hoverinfo="skip",
+#     )
+# )
+
+# # Shadow of face edges on the x-wall
+# for i, face in enumerate(dist.faces):
+#     edges = list(zip(face, face[1:])) + [(face[-1], face[0])]
+#     for a, b in edges:
+#         fig2.add_trace(
+#             go.Scatter3d(
+#                 x=[x_wall, x_wall],
+#                 y=[W[1, a], W[1, b]],
+#                 z=[W[2, a], W[2, b]],
+#                 mode="lines",
+#                 line=dict(width=1.5, color="rgba(0,0,0,0.15)"),
+#                 showlegend=False,
+#                 hoverinfo="skip",
+#             )
+#         )
+
 fig2.add_trace(
     go.Scatter3d(
         x=hidden[:, 0],
         y=hidden[:, 1],
         z=hidden[:, 2],
         mode="markers",
-        marker=dict(size=2, opacity=0.3, color="gray"),
+        marker=dict(size=2, opacity=0.3, color="black"),
         text=active_verts,
         hovertemplate="Active vertices: %{text}<extra></extra>",
         name="Encoded samples",
@@ -126,27 +195,36 @@ fig2.add_trace(
         y=W[1],
         z=W[2],
         mode="markers+text",
-        marker=dict(size=6),
+        marker=dict(size=8, opacity=0.9, color="red"),
         text=[f"v{j}" for j in range(n_features)],
         textposition="top center",
         name="Vertices",
     )
 )
-# for j in range(n_features):
-#     fig2.add_trace(
-#         go.Scatter3d(
-#             x=[0, W[0, j]],
-#             y=[0, W[1, j]],
-#             z=[0, W[2, j]],
-#             mode="lines",
-#             line=dict(width=2),
-#             showlegend=False,
-#             hoverinfo="skip",
-#         )
-#     )
 
-# Draw edges between vertices that share a face
+# Draw filled triangles and edges for each face
+face_colors = [
+    "rgba(31,119,180,0.9)",
+    "rgba(255,127,14,0.8)",
+    "rgba(44,160,44,0.8)",
+    "rgba(214,39,40,0.9)",
+]
 for i, face in enumerate(dist.faces):
+    verts = list(face)
+    # fig2.add_trace(
+    #     go.Mesh3d(
+    #         x=W[0, verts],
+    #         y=W[1, verts],
+    #         z=W[2, verts],
+    #         i=[0], j=[1], k=[2],
+    #         color=face_colors[i % len(face_colors)],
+    #         flatshading=False,
+    #         lighting=dict(ambient=0.5, diffuse=0.7, specular=0.9, fresnel=0.4),
+    #         lightposition=dict(x=1000, y=1000, z=1000),
+    #         showlegend=False,
+    #         hoverinfo="skip",
+    #     )
+    # )
     edges = list(zip(face, face[1:])) + [(face[-1], face[0])]
     for a, b in edges:
         fig2.add_trace(
@@ -155,7 +233,7 @@ for i, face in enumerate(dist.faces):
                 y=[W[1, a], W[1, b]],
                 z=[W[2, a], W[2, b]],
                 mode="lines",
-                line=dict(width=1, color="gray"),
+                line=dict(width=2, color="black"),
                 showlegend=False,
                 hoverinfo="skip",
             )
@@ -168,7 +246,32 @@ fig2.update_layout(
         xaxis_title="h₀",
         yaxis_title="h₁",
         zaxis_title="h₂",
+        xaxis=dict(
+            showticklabels=False,
+            ticks="",
+            showbackground=False,
+            showgrid=True,
+            gridcolor="rgba(0,0,0,0.02)",
+        ),
+        yaxis=dict(
+            showticklabels=False,
+            ticks="",
+            showbackground=False,
+            showgrid=True,
+            gridcolor="rgba(0,0,0,0.02)",
+        ),
+        zaxis=dict(
+            showticklabels=False,
+            ticks="",
+            showbackground=False,
+            showgrid=True,
+            gridcolor="rgba(0,0,0,0.02)",
+        ),
         aspectmode="cube",
+        # camera=dict(
+        #     eye=dict(x=1.4, y=0.8, z=-1.1),
+        #     up=dict(x=0, y=0, z=1),
+        # ),
     ),
     height=700,
 )
