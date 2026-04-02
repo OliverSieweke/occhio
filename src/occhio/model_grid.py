@@ -869,7 +869,7 @@ class ModelGrid:
         flattened_models: NDArray[np.object_] = self.models.ravel()
 
         for model in tqdm(
-            flattened_models, desc="Models", unit="model", disable=not verbose
+            flattened_models, desc="Training SAEs", unit="model", disable=not verbose
         ):
             with (
                 suppress_tqdm()
@@ -908,7 +908,7 @@ class ModelGrid:
         flattened_models: NDArray[np.object_] = self.models.ravel()
 
         for model in tqdm(
-            flattened_models, desc="Models", unit="model", disable=not verbose
+            flattened_models, desc="Evaluating SAEs", unit="model", disable=not verbose
         ):
             model.evaluate_saes(labels=labels, num_samples=num_samples, verbose=verbose)
 
