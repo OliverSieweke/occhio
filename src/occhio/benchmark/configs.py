@@ -38,7 +38,7 @@ BenchmarkSAEsInput = (
 )
 
 
-def default_benchmark_saes(device="cpu") -> BenchmarkSAEsInput:
+def default_benchmark_saes() -> BenchmarkSAEsInput:
     return {
         BenchmarkDistributionName.CORRELATED_PAIRS: {
             "Standard": StandardTrainingSAE(
@@ -46,7 +46,6 @@ def default_benchmark_saes(device="cpu") -> BenchmarkSAEsInput:
                     d_in=100,
                     d_sae=648,
                     l1_coefficient=0.4,
-                    device=device,
                 )
             ),
             "Matryoshka": MatryoshkaBatchTopKTrainingSAE(
@@ -60,7 +59,6 @@ def default_benchmark_saes(device="cpu") -> BenchmarkSAEsInput:
                     ],
                     k=2,
                     use_matryoshka_aux_loss=True,
-                    device=device,
                 )
             ),
             "MatchingPursuit": MatchingPursuitTrainingSAE(
@@ -68,7 +66,6 @@ def default_benchmark_saes(device="cpu") -> BenchmarkSAEsInput:
                     d_in=100,
                     d_sae=648,
                     max_iterations=2,
-                    device=device,
                 )
             ),
         },
@@ -78,7 +75,6 @@ def default_benchmark_saes(device="cpu") -> BenchmarkSAEsInput:
                     d_in=100,
                     d_sae=648,
                     l1_coefficient=0.5,
-                    device=device,
                 )
             ),
             "Matryoshka": MatryoshkaBatchTopKTrainingSAE(
@@ -92,7 +88,6 @@ def default_benchmark_saes(device="cpu") -> BenchmarkSAEsInput:
                     ],
                     k=1,
                     use_matryoshka_aux_loss=True,
-                    device=device,
                 )
             ),
             "MatchingPursuit": MatchingPursuitTrainingSAE(
@@ -100,7 +95,6 @@ def default_benchmark_saes(device="cpu") -> BenchmarkSAEsInput:
                     d_in=100,
                     d_sae=648,
                     max_iterations=2,  # check for higher
-                    device=device,
                 )
             ),
         },
@@ -110,7 +104,6 @@ def default_benchmark_saes(device="cpu") -> BenchmarkSAEsInput:
                     d_in=100,
                     d_sae=648,
                     l1_coefficient=0.6,
-                    device=device,
                 )
             ),
             "Matryoshka": MatryoshkaBatchTopKTrainingSAE(
@@ -124,7 +117,6 @@ def default_benchmark_saes(device="cpu") -> BenchmarkSAEsInput:
                     ],
                     k=1,
                     use_matryoshka_aux_loss=True,
-                    device=device,
                 )
             ),
             "MatchingPursuit": MatchingPursuitTrainingSAE(
@@ -132,7 +124,6 @@ def default_benchmark_saes(device="cpu") -> BenchmarkSAEsInput:
                     d_in=100,
                     d_sae=648,
                     max_iterations=5,
-                    device=device,
                 )
             ),
         },
@@ -142,7 +133,6 @@ def default_benchmark_saes(device="cpu") -> BenchmarkSAEsInput:
                     d_in=100,
                     d_sae=648,
                     l1_coefficient=0.9,
-                    device=device,
                 )
             ),
             "Matryoshka": MatryoshkaBatchTopKTrainingSAE(
@@ -156,7 +146,6 @@ def default_benchmark_saes(device="cpu") -> BenchmarkSAEsInput:
                     ],
                     k=2,
                     use_matryoshka_aux_loss=True,
-                    device=device,
                 )
             ),
             "MatchingPursuit": MatchingPursuitTrainingSAE(
@@ -164,7 +153,6 @@ def default_benchmark_saes(device="cpu") -> BenchmarkSAEsInput:
                     d_in=100,
                     d_sae=648,
                     max_iterations=2,
-                    device=device,
                 )
             ),
         },
@@ -174,7 +162,6 @@ def default_benchmark_saes(device="cpu") -> BenchmarkSAEsInput:
                     d_in=100,
                     d_sae=648,
                     l1_coefficient=0.05,
-                    device=device,
                 )
             ),
             "Matryoshka": MatryoshkaBatchTopKTrainingSAE(
@@ -188,7 +175,6 @@ def default_benchmark_saes(device="cpu") -> BenchmarkSAEsInput:
                     ],
                     k=2,
                     use_matryoshka_aux_loss=True,
-                    device=device,
                 )
             ),
             "MatchingPursuit": MatchingPursuitTrainingSAE(
@@ -196,7 +182,6 @@ def default_benchmark_saes(device="cpu") -> BenchmarkSAEsInput:
                     d_in=100,
                     d_sae=648,
                     max_iterations=2,
-                    device=device,
                 )
             ),
         },
@@ -206,7 +191,6 @@ def default_benchmark_saes(device="cpu") -> BenchmarkSAEsInput:
                     d_in=100,
                     d_sae=648,
                     l1_coefficient=0.6,
-                    device=device,
                 )
             ),
             "Matryoshka": MatryoshkaBatchTopKTrainingSAE(
@@ -220,7 +204,6 @@ def default_benchmark_saes(device="cpu") -> BenchmarkSAEsInput:
                     ],
                     k=1,
                     use_matryoshka_aux_loss=True,
-                    device=device,
                 )
             ),
             "MatchingPursuit": MatchingPursuitTrainingSAE(
@@ -228,7 +211,6 @@ def default_benchmark_saes(device="cpu") -> BenchmarkSAEsInput:
                     d_in=100,
                     d_sae=648,
                     max_iterations=3,
-                    device=device,
                 )
             ),
         },
@@ -238,7 +220,6 @@ def default_benchmark_saes(device="cpu") -> BenchmarkSAEsInput:
                     d_in=100,
                     d_sae=648,
                     l1_coefficient=0.05,
-                    device=device,
                 )
             ),
             "Matryoshka": MatryoshkaBatchTopKTrainingSAE(
@@ -252,7 +233,6 @@ def default_benchmark_saes(device="cpu") -> BenchmarkSAEsInput:
                     ],
                     k=2,
                     use_matryoshka_aux_loss=True,
-                    device=device,
                 )
             ),
             "MatchingPursuit": MatchingPursuitTrainingSAE(
@@ -260,7 +240,6 @@ def default_benchmark_saes(device="cpu") -> BenchmarkSAEsInput:
                     d_in=100,
                     d_sae=648,
                     max_iterations=2,
-                    device=device,
                 )
             ),
         },
@@ -270,7 +249,6 @@ def default_benchmark_saes(device="cpu") -> BenchmarkSAEsInput:
                     d_in=100,
                     d_sae=648,
                     l1_coefficient=0.4,
-                    device=device,
                 )
             ),
             "Matryoshka": MatryoshkaBatchTopKTrainingSAE(
@@ -284,7 +262,6 @@ def default_benchmark_saes(device="cpu") -> BenchmarkSAEsInput:
                     ],
                     k=1,
                     use_matryoshka_aux_loss=True,
-                    device=device,
                 )
             ),
             "MatchingPursuit": MatchingPursuitTrainingSAE(
@@ -292,7 +269,6 @@ def default_benchmark_saes(device="cpu") -> BenchmarkSAEsInput:
                     d_in=100,
                     d_sae=648,
                     max_iterations=5,
-                    device=device,
                 )
             ),
         },
