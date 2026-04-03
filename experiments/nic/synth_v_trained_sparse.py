@@ -1,9 +1,10 @@
 # %%
-"""Compare TiedLinearRelu vs SynthAE on SparseUniform with zipfian firing probabilities.
+"""Compare Trained AE vs Constructed AE on SparseUniform with zipfian firing probabilities.
 
-Same experiment structure as synth_v_trained.py but using a simpler SparseUniform
-distribution instead of the full SyntheticDataModel. Uses a soft power-law firing
-decay (p_max=0.2, p_min=0.01). SAEs trained via SAELens StandardTrainingSAE.
+Trained AE (TiedLinearRelu): learns W + bias from data via gradient descent.
+Constructed AE (SynthAE): unit-norm tied weights positioned roughly orthogonally, bias only.
+Uses a soft power-law firing decay (p_max=0.2, p_min=0.01).
+SAEs trained via SAELens StandardTrainingSAE.
 """
 
 import torch
@@ -182,6 +183,17 @@ print(
 
 # %%
 # --- Hooks for evaluation ---
+def every(freq, hook):
+    """Wrap a hook so it only fires every `freq` epochs (returns None otherwise)."""
+
+    def wrapper(data):
+        if data["epoch"] % freq == 0:
+            return hook(data)
+        return None
+
+    return wrapper
+
+
 def eval_hook(data):
     """Compute eval loss on a large fresh sample."""
     tm = data["tm"]
@@ -209,30 +221,35 @@ def geometry_hook(data):
     }
 
 
-# %%
-# --- Train TiedLinearRelu ---
-print("Training TiedLinearRelu...")
-gen1 = torch.Generator(DEVICE).manual_seed(SEED)
-ae_tied = TiedLinearRelu(N_FEATURES, D_HIDDEN, device=DEVICE, generator=gen1)
-tm_tied = ToyModel(distribution=dist, ae=ae_tied, device=DEVICE)
+def normalize_W(tm):
+    """Project W columns to unit norm after each optimizer step."""
+    with torch.no_grad():
+        tm.ae.W.data /= tm.ae.W.data.norm(dim=0, keepdim=True).clamp(min=1e-8)
 
-_, hook_results_tied = tm_tied.fit(
+
+# %%
+# --- Train Trained AE ---
+print("Training Trained AE...")
+gen1 = torch.Generator(DEVICE).manual_seed(SEED)
+ae_trained = TiedLinearRelu(N_FEATURES, D_HIDDEN, device=DEVICE, generator=gen1)
+tm_trained = ToyModel(distribution=dist, ae=ae_trained, device=DEVICE)
+
+_, hook_results_trained = tm_trained.fit(
     30000,
     batch_size=BATCH_SIZE,
-    hooks=[eval_hook, per_feature_hook, geometry_hook],
-    hook_freq=EVAL_FREQ,
+    hooks=[every(EVAL_FREQ, h) for h in [eval_hook, per_feature_hook, geometry_hook]],
     verbose=True,
 )
-eval_losses_tied = hook_results_tied[0]
-per_feature_tied = hook_results_tied[1]
-geometry_tied = hook_results_tied[2]
-print(f"  Final eval loss: {eval_losses_tied[-1]:.6f}")
+eval_losses_trained = hook_results_trained[0]
+per_feature_trained = hook_results_trained[1]
+geometry_trained = hook_results_trained[2]
+print(f"  Final eval loss: {eval_losses_trained[-1]:.6f}")
 
 # %%
-# --- SynthAE (train bias only) ---
-print("Training SynthAE (orthogonalized, bias only)...")
+# --- Constructed AE (bias only) ---
+print("Training Constructed AE...")
 gen3 = torch.Generator(DEVICE).manual_seed(SEED)
-ae_synth_ortho = SynthAE(
+ae_constructed = SynthAE(
     N_FEATURES,
     D_HIDDEN,
     orthogonalize=True,
@@ -241,21 +258,20 @@ ae_synth_ortho = SynthAE(
     device=DEVICE,
     generator=gen3,
 )
-tm_synth_ortho = ToyModel(distribution=dist, ae=ae_synth_ortho, device=DEVICE)
+tm_constructed = ToyModel(distribution=dist, ae=ae_constructed, device=DEVICE)
 print("Initialized")
-N_EPOCHS_SYNTH = 10_000
-_, hook_results_synth = tm_synth_ortho.fit(
-    N_EPOCHS_SYNTH,
+N_EPOCHS_CONSTRUCTED = 10_000
+_, hook_results_constructed = tm_constructed.fit(
+    N_EPOCHS_CONSTRUCTED,
     batch_size=BATCH_SIZE,
-    hooks=[eval_hook, per_feature_hook],
-    hook_freq=EVAL_FREQ,
+    hooks=[every(EVAL_FREQ, h) for h in [eval_hook, per_feature_hook]],
     verbose=True,
 )
-eval_losses_synth = hook_results_synth[0]
-per_feature_synth = hook_results_synth[1]
-loss_synth_ortho = eval_losses_synth[-1]
-pf_synth_ortho = per_feature_synth[-1]
-print(f"  Final eval loss: {loss_synth_ortho:.6f}")
+eval_losses_constructed = hook_results_constructed[0]
+per_feature_constructed = hook_results_constructed[1]
+loss_constructed = eval_losses_constructed[-1]
+pf_constructed = per_feature_constructed[-1]
+print(f"  Final eval loss: {loss_constructed:.6f}")
 
 # %% --- SAE training on both models (SAELens Standard SAE) ---
 N_DICT = 500
@@ -266,7 +282,7 @@ SAE_TRAINING_SAMPLES = 200_000 * SAE_BATCH  # ~200k steps
 
 sae_results = {}
 
-for name, tm in [("Trained AE", tm_tied), ("Constructed AE", tm_synth_ortho)]:
+for name, tm in [("Trained AE", tm_trained), ("Constructed AE", tm_constructed)]:
     print(f"\nTraining SAE on {name}...")
 
     sae_config = StandardTrainingSAEConfig(
@@ -328,21 +344,21 @@ for name, tm in [("Trained AE", tm_tied), ("Constructed AE", tm_synth_ortho)]:
     )
 
 # %%
-# --- Plot: Eval loss curve (TiedLinearRelu) with SynthAE baselines ---
+# --- Plot: Eval loss curve ---
 eval_epochs = list(range(0, N_EPOCHS, EVAL_FREQ)) + [N_EPOCHS - 1]
 
 fig = go.Figure()
 fig.add_trace(
     go.Scatter(
         x=eval_epochs,
-        y=eval_losses_tied,
+        y=eval_losses_trained,
         name="Trained AE",
         mode="lines",
         line=dict(width=2, color=MODEL_COLORS["Trained AE"]),
     )
 )
 fig.add_hline(
-    y=loss_synth_ortho,
+    y=loss_constructed,
     line_dash="dash",
     line_color=MODEL_COLORS["Constructed AE"],
     annotation_text="Constructed AE",
@@ -361,35 +377,37 @@ fig.show()
 fp_np = firing_probs.cpu().numpy()
 sort_idx = np.argsort(-fp_np)
 
-pf_arr = np.array(per_feature_tied).T[sort_idx]  # (N_FEATURES, n_snapshots)
+pf_arr = np.array(per_feature_trained).T[sort_idx]  # (N_FEATURES, n_snapshots)
 make_epoch_slider(
     epoch_arrays={"mse": pf_arr},
-    static_arrays={"mse": pf_synth_ortho[sort_idx]},
+    static_arrays={"mse": pf_constructed[sort_idx]},
     epochs=np.array(eval_epochs),
     titles=["Per-Feature Reconstruction MSE"],
     title="Per-Feature Reconstruction MSE (sorted by firing probability)",
 ).show()
 
 # %%
-# --- Plot: Features recovered (MSE < threshold) vs epoch, with SynthAE baselines ---
+# --- Plot: Features recovered (MSE < threshold) vs epoch ---
 THRESHOLDS = [0.2, 0.5, 1.0]
 COLORS = _THRESH_COLORS
 
 fig = go.Figure()
 for thresh, color in zip(THRESHOLDS, COLORS):
-    n_recovered_tied = [int((np.array(s) < thresh).sum()) for s in per_feature_tied]
+    n_recovered_trained = [
+        int((np.array(s) < thresh).sum()) for s in per_feature_trained
+    ]
     fig.add_trace(
         go.Scatter(
             x=eval_epochs,
-            y=n_recovered_tied,
+            y=n_recovered_trained,
             name=f"Trained AE (τ={thresh})",
             mode="lines",
             line=dict(color=color, width=2),
         )
     )
-    n_recovered_ortho = int((pf_synth_ortho < thresh).sum())
+    n_recovered_constructed = int((pf_constructed < thresh).sum())
     fig.add_hline(
-        y=n_recovered_ortho,
+        y=n_recovered_constructed,
         line_dash="dash",
         line_color=color,
     )
@@ -403,15 +421,15 @@ fig.show()
 
 # %%
 # --- W^T W comparison ---
-models = [("Trained AE", tm_tied), ("Constructed AE", tm_synth_ortho)]
+models = [("Trained AE", tm_trained), ("Constructed AE", tm_constructed)]
 models_dict = dict(models)
 
 fig = make_subplots(rows=1, cols=2, subplot_titles=["Trained AE", "Constructed AE"])
 
 for i, (name, tm) in enumerate(
     [
-        ("Trained AE", tm_tied),
-        ("Constructed AE", tm_synth_ortho),
+        ("Trained AE", tm_trained),
+        ("Constructed AE", tm_constructed),
     ]
 ):
     W = tm.W.detach().cpu().numpy()
@@ -462,22 +480,22 @@ _geom_titles = [
 
 geom_arrays = {}
 for prop in _geom_props:
-    arr = np.array([g[prop] for g in geometry_tied]).T  # (N_FEATURES, n_snapshots)
+    arr = np.array([g[prop] for g in geometry_trained]).T  # (N_FEATURES, n_snapshots)
     geom_arrays[prop] = arr[sort_idx]
 
 n_snapshots = geom_arrays["fd"].shape[1]
 geom_epochs = (np.arange(n_snapshots) * EVAL_FREQ).astype(int)
 
-synth_props = {
-    "fd": tm_synth_ortho.feature_dimensionalities.detach().cpu().numpy()[sort_idx],
-    "fn": tm_synth_ortho.feature_norms.detach().cpu().numpy()[sort_idx],
-    "ti": tm_synth_ortho.total_feature_interferences.detach().cpu().numpy()[sort_idx],
-    "bias": tm_synth_ortho.ae.b.detach().cpu().numpy()[sort_idx],
+constructed_props = {
+    "fd": tm_constructed.feature_dimensionalities.detach().cpu().numpy()[sort_idx],
+    "fn": tm_constructed.feature_norms.detach().cpu().numpy()[sort_idx],
+    "ti": tm_constructed.total_feature_interferences.detach().cpu().numpy()[sort_idx],
+    "bias": tm_constructed.ae.b.detach().cpu().numpy()[sort_idx],
 }
 
 make_epoch_slider(
     epoch_arrays=geom_arrays,
-    static_arrays=synth_props,
+    static_arrays=constructed_props,
     epochs=geom_epochs,
     titles=_geom_titles,
     title="Geometric Properties Over Training (sorted by firing probability)",
@@ -486,11 +504,11 @@ make_epoch_slider(
 # %%
 # --- Plot: ‖w‖² + b over training (epoch slider) ---
 fn2_bias_arr = geom_arrays["fn"] ** 2 + geom_arrays["bias"]  # (N_FEATURES, n_snapshots)
-synth_fn2_bias = synth_props["fn"] ** 2 + synth_props["bias"]
+constructed_fn2_bias = constructed_props["fn"] ** 2 + constructed_props["bias"]
 
 make_epoch_slider(
     epoch_arrays={"fn2b": fn2_bias_arr},
-    static_arrays={"fn2b": synth_fn2_bias},
+    static_arrays={"fn2b": constructed_fn2_bias},
     epochs=geom_epochs,
     titles=["‖w‖² + b"],
     title="‖w‖² + b (sorted by firing probability)",
@@ -500,8 +518,8 @@ make_epoch_slider(
 # --- Summary statistics ---
 print("\n=== Summary ===")
 for name, eval_loss, pf in [
-    ("Trained AE", eval_losses_tied[-1], per_feature_tied[-1]),
-    ("Constructed AE", loss_synth_ortho, pf_synth_ortho),
+    ("Trained AE", eval_losses_trained[-1], per_feature_trained[-1]),
+    ("Constructed AE", loss_constructed, pf_constructed),
 ]:
     final_mse = np.array(pf)
     recovered = "  ".join(f"τ={t}: {int((final_mse < t).sum())}" for t in THRESHOLDS)
@@ -712,6 +730,64 @@ for match_label, sfx in [("abs cos-sim", "_abs"), ("cos-sim", "_cos")]:
             f"{res[f'f1{sfx}']:6.4f}  {res[f'fpr{sfx}']:6.4f}"
         )
 
+
+# %% --- SAE Comparison bar chart ---
+_bar_metrics = [
+    ("recon_mse", "Recon MSE", True),
+    ("l0", "Mean L0", True),
+    ("n_dead", "Dead Features", True),
+    ("explained_var", "Explained Var", False),
+    ("diagonality", "Diagonality", False),
+    ("mcc_cos_cos", "MCC (cosine)", False),
+]
+fig = make_subplots(
+    rows=1,
+    cols=len(_bar_metrics),
+    subplot_titles=[m[1] for m in _bar_metrics],
+)
+for col, (key, label, lower_better) in enumerate(_bar_metrics, 1):
+    for name in names:
+        fig.add_trace(
+            go.Bar(
+                x=[name],
+                y=[sae_results[name].get(key, 0)],
+                name=name,
+                legendgroup=name,
+                marker_color=MODEL_COLORS[name],
+                showlegend=(col == 1),
+            ),
+            row=1,
+            col=col,
+        )
+fig.update_layout(title="SAE Comparison", height=400, width=1400, barmode="group")
+style_fig(fig)
+fig.show()
+
+# %% --- Confusion Matrices ---
+fig = make_subplots(
+    rows=1,
+    cols=len(names),
+    subplot_titles=names,
+)
+for i, name in enumerate(names):
+    cm = sae_results[name]["confusion_cos"]
+    cm_norm = cm / cm.sum()
+    fig.add_trace(
+        go.Heatmap(
+            z=cm_norm,
+            x=["Pred Inactive", "Pred Active"],
+            y=["GT Inactive", "GT Active"],
+            colorscale="Blues",
+            showscale=(i == len(names) - 1),
+            text=[[f"{v:.4f}" for v in row] for row in cm_norm],
+            texttemplate="%{text}",
+        ),
+        row=1,
+        col=i + 1,
+    )
+fig.update_layout(title="Confusion Matrices (cosine matching)", height=400, width=800)
+style_fig(fig)
+fig.show()
 
 # %% --- Encoder-based matching (using SAE activations on one-hot inputs) ---
 for name in names:

@@ -7,7 +7,7 @@ the standard linear bottleneck (LRH-style), the bottom row shows the multi-head
 softmax bottleneck (MRH-style).
 """
 
-from occhio.distributions import SparseUniform, SimplicialComplexDistribution
+from occhio.distributions import SimplicialComplexDistribution
 from occhio.autoencoder import (
     TiedLinearRelu,
     AttnLinearAE,
@@ -59,8 +59,13 @@ N_SAMPLES = 64
 EVAL_BATCH = 2**14
 
 
-def eval_loss_hook(data: dict) -> float:
-    """Evaluate loss on a fresh large batch."""
+HOOK_FREQ = 500
+
+
+def eval_loss_hook(data: dict) -> float | None:
+    """Evaluate loss on a fresh large batch (every HOOK_FREQ epochs)."""
+    if data["epoch"] % HOOK_FREQ != 0:
+        return None
     tm: ToyModel = data["tm"]
     raw = tm.distribution.sample(EVAL_BATCH)
     ae_device = tm.ae.device
@@ -76,8 +81,6 @@ def eval_loss_hook(data: dict) -> float:
     x_hat = tm.ae(x)[0]
     return tm.ae.loss(raw, x_hat, tm.importances).item()
 
-
-HOOK_FREQ = 500
 
 for p_active in p_actives:
     print(f"starting on p_active = {p_active}")
@@ -101,7 +104,6 @@ for p_active in p_actives:
         batch_size=batch_size,
         track_losses=False,
         hooks=[eval_loss_hook],
-        hook_freq=HOOK_FREQ,
     )
     results["TiedLinearRelu"].append(tm_linear.W.detach().cpu().numpy())
     losses["TiedLinearRelu"].append(hook_out[0])
@@ -138,7 +140,6 @@ for p_active in p_actives:
         batch_size=batch_size,
         track_losses=False,
         hooks=[eval_loss_hook],
-        hook_freq=HOOK_FREQ,
     )
     results["AttnLinearAE"].append(tm_mrh.W.detach().cpu().numpy())
     losses["AttnLinearAE"].append(hook_out[0])
@@ -175,7 +176,6 @@ for p_active in p_actives:
         batch_size=batch_size,
         track_losses=False,
         hooks=[eval_loss_hook],
-        hook_freq=HOOK_FREQ,
     )
     results["LinearAttnAE"].append(tm_sym.W.detach().cpu().numpy())
     losses["LinearAttnAE"].append(hook_out[0])
@@ -211,7 +211,6 @@ for p_active in p_actives:
         batch_size=batch_size,
         track_losses=False,
         hooks=[eval_loss_hook],
-        hook_freq=HOOK_FREQ,
     )
     results["AttnAttnAE"].append(tm_aa.W.detach().cpu().numpy())
     losses["AttnAttnAE"].append(hook_out[0])
