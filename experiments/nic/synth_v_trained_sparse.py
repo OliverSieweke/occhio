@@ -55,6 +55,98 @@ def style_fig(fig, nticksx=10, nticksy=8):
     return fig
 
 
+def make_epoch_slider(
+    epoch_arrays,
+    static_arrays,
+    epochs,
+    titles,
+    title,
+    x=None,
+    xlabel="Feature Rank",
+):
+    """Build 1×N subplot figure with epoch slider (animated + static scatter)."""
+    props = list(epoch_arrays.keys())
+    n = len(props)
+    if x is None:
+        x = np.arange(epoch_arrays[props[0]].shape[0])
+
+    fig = make_subplots(rows=1, cols=n, subplot_titles=titles)
+
+    # Stable y-ranges across all snapshots
+    y_ranges = {}
+    for prop in props:
+        vals = [epoch_arrays[prop].ravel()]
+        if static_arrays and prop in static_arrays:
+            vals.append(static_arrays[prop])
+        all_vals = np.concatenate(vals)
+        lo, hi = float(np.nanmin(all_vals)), float(np.nanmax(all_vals))
+        pad = (hi - lo) * 0.05
+        y_ranges[prop] = [lo - pad, hi + pad]
+
+    # Initial traces: Trained AE (animated) + Constructed AE (static) per subplot
+    for i, prop in enumerate(props):
+        fig.add_trace(
+            go.Scatter(
+                x=x,
+                y=epoch_arrays[prop][:, 0],
+                name="Trained AE",
+                legendgroup="Trained AE",
+                mode="markers",
+                marker=dict(size=3.25, opacity=0.6, color=MODEL_COLORS["Trained AE"]),
+                showlegend=(i == 0),
+            ),
+            row=1,
+            col=i + 1,
+        )
+        if static_arrays and prop in static_arrays:
+            fig.add_trace(
+                go.Scatter(
+                    x=x,
+                    y=static_arrays[prop],
+                    name="Constructed AE",
+                    legendgroup="Constructed AE",
+                    mode="markers",
+                    marker=dict(
+                        size=3.25, opacity=0.6, color=MODEL_COLORS["Constructed AE"]
+                    ),
+                    showlegend=(i == 0),
+                ),
+                row=1,
+                col=i + 1,
+            )
+
+    # Slider: update animated traces, re-supply static data to keep them visible
+    has_static = static_arrays is not None
+    steps = []
+    for s in range(len(epochs)):
+        y_update = []
+        for prop in props:
+            y_update.append(epoch_arrays[prop][:, s])
+            if has_static and prop in static_arrays:
+                y_update.append(static_arrays[prop])
+        steps.append(
+            dict(method="update", label=str(epochs[s]), args=[{"y": y_update}])
+        )
+
+    fig.update_layout(
+        title=title,
+        height=500,
+        width=max(600, 350 * n),
+        sliders=[
+            dict(
+                active=0,
+                currentvalue=dict(prefix="Epoch: "),
+                pad=dict(t=50),
+                steps=steps,
+            )
+        ],
+    )
+    for i, prop in enumerate(props):
+        fig.update_yaxes(range=y_ranges[prop], row=1, col=i + 1)
+        fig.update_xaxes(title_text=xlabel, row=1, col=i + 1)
+    return style_fig(fig)
+
+
 # %%
 # --- Configuration ---
 DEVICE = "mps"
@@ -69,7 +161,7 @@ EVAL_FREQ = 250
 # %%
 # --- Zipfian firing probabilities (soft decay) ---
 high = 0.2
-low = 0.5 / N_FEATURES  # softer decay: 20x range instead of 400x
+low = 0.5 / N_FEATURES  # zipfian decay
 alpha = np.log(high / low) / np.log(N_FEATURES)
 print(f"{alpha=}")
 
@@ -115,21 +207,6 @@ def geometry_hook(data):
         "ti": tm.total_feature_interferences.detach().cpu().numpy(),
         "bias": tm.ae.b.detach().cpu().numpy(),
     }
-
-
-# %%
-# --- Helper: evaluate a (non-trained) model once ---
-def evaluate_model(tm):
-    """Return (eval_loss, per_feature_mse) for a model without training."""
-    with torch.no_grad():
-        x = tm.distribution.sample(EVAL_SAMPLES).to(tm.device)
-        x_hat = tm.ae(x)[0]
-        eval_loss = tm.ae.loss(x, x_hat, tm.importances).item()
-
-        eye = torch.eye(N_FEATURES, device=tm.device)
-        e_hat = tm.ae(eye)[0]
-        pf_mse = (eye - e_hat).pow(2).sum(dim=-1).cpu().numpy()
-    return eval_loss, pf_mse
 
 
 # %%
@@ -181,7 +258,7 @@ pf_synth_ortho = per_feature_synth[-1]
 print(f"  Final eval loss: {loss_synth_ortho:.6f}")
 
 # %% --- SAE training on both models (SAELens Standard SAE) ---
-N_DICT = 1100
+N_DICT = 500
 SAE_BATCH = 1024
 SAE_LR = 3e-4
 SAE_L1 = 0.1
@@ -280,39 +357,18 @@ style_fig(fig)
 fig.show()
 
 # %%
-# --- Plot: Per-feature reconstruction MSE ---
-final_tied = np.array(per_feature_tied[-1])
-
-# Sort features by firing probability (most frequent first)
+# --- Plot: Per-feature reconstruction MSE (epoch slider) ---
 fp_np = firing_probs.cpu().numpy()
 sort_idx = np.argsort(-fp_np)
 
-fig = go.Figure()
-fig.add_trace(
-    go.Scatter(
-        x=np.arange(N_FEATURES),
-        y=final_tied[sort_idx],
-        name="Trained AE",
-        mode="markers",
-        marker=dict(size=3.25, opacity=0.6, color=MODEL_COLORS["Trained AE"]),
-    )
-)
-fig.add_trace(
-    go.Scatter(
-        x=np.arange(N_FEATURES),
-        y=pf_synth_ortho[sort_idx],
-        name="Constructed AE",
-        mode="markers",
-        marker=dict(size=3.25, opacity=0.6, color=MODEL_COLORS["Constructed AE"]),
-    )
-)
-fig.update_layout(
+pf_arr = np.array(per_feature_tied).T[sort_idx]  # (N_FEATURES, n_snapshots)
+make_epoch_slider(
+    epoch_arrays={"mse": pf_arr},
+    static_arrays={"mse": pf_synth_ortho[sort_idx]},
+    epochs=np.array(eval_epochs),
+    titles=["Per-Feature Reconstruction MSE"],
     title="Per-Feature Reconstruction MSE (sorted by firing probability)",
-    xaxis_title="Feature Rank ",
-    yaxis_title="MSE",
-)
-style_fig(fig)
-fig.show()
+).show()
 
 # %%
 # --- Plot: Features recovered (MSE < threshold) vs epoch, with SynthAE baselines ---
@@ -341,29 +397,6 @@ fig.update_layout(
     title="Features Recovered (MSE < τ) Over Training",
     xaxis_title="Epoch",
     yaxis_title="# features recovered",
-)
-style_fig(fig)
-fig.show()
-
-# %%
-# --- Plot: Per-feature MSE over training (heatmap, TiedLinearRelu only) ---
-arr = np.array(per_feature_tied).T[:, 1:]  # (N_FEATURES, n_eval_points), skip step 0
-arr_sorted = arr[sort_idx]
-
-fig = go.Figure(
-    go.Heatmap(
-        z=arr_sorted,
-        x=eval_epochs[1:],
-        y=np.arange(N_FEATURES),
-        colorscale="tempo",
-        colorbar=dict(title="MSE"),
-    )
-)
-fig.update_layout(
-    title="Per-Feature MSE Over Training — Trained AE",
-    xaxis_title="Epoch",
-    yaxis_title="Feature rank (firing frequency)",
-    height=500,
 )
 style_fig(fig)
 fig.show()
@@ -427,7 +460,6 @@ _geom_titles = [
     "Learned Bias",
 ]
 
-# Build per-snapshot arrays for Trained AE, sorted by firing prob
 geom_arrays = {}
 for prop in _geom_props:
     arr = np.array([g[prop] for g in geometry_tied]).T  # (N_FEATURES, n_snapshots)
@@ -436,7 +468,6 @@ for prop in _geom_props:
 n_snapshots = geom_arrays["fd"].shape[1]
 geom_epochs = (np.arange(n_snapshots) * EVAL_FREQ).astype(int)
 
-# Static Constructed AE reference (final state)
 synth_props = {
     "fd": tm_synth_ortho.feature_dimensionalities.detach().cpu().numpy()[sort_idx],
     "fn": tm_synth_ortho.feature_norms.detach().cpu().numpy()[sort_idx],
@@ -444,112 +475,26 @@ synth_props = {
     "bias": tm_synth_ortho.ae.b.detach().cpu().numpy()[sort_idx],
 }
 
-# Compute y-axis ranges across all snapshots (both models) for stable axes
-y_ranges = {}
-for prop in _geom_props:
-    all_vals = np.concatenate([geom_arrays[prop].ravel(), synth_props[prop]])
-    lo, hi = float(np.nanmin(all_vals)), float(np.nanmax(all_vals))
-    pad = (hi - lo) * 0.05
-    y_ranges[prop] = [lo - pad, hi + pad]
-
-x_feat = np.arange(N_FEATURES)
-fig = make_subplots(rows=1, cols=4, subplot_titles=_geom_titles)
-
-# Initial traces (epoch 0): 4 Trained AE + 4 Constructed AE = 8 traces
-for i, prop in enumerate(_geom_props):
-    fig.add_trace(
-        go.Scatter(
-            x=x_feat,
-            y=geom_arrays[prop][:, 0],
-            name="Trained AE",
-            legendgroup="Trained AE",
-            mode="markers",
-            marker=dict(size=3.25, opacity=0.6, color=MODEL_COLORS["Trained AE"]),
-            showlegend=(i == 0),
-        ),
-        row=1,
-        col=i + 1,
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=x_feat,
-            y=synth_props[prop],
-            name="Constructed AE",
-            legendgroup="Constructed AE",
-            mode="markers",
-            marker=dict(size=3.25, opacity=0.6, color=MODEL_COLORS["Constructed AE"]),
-            showlegend=(i == 0),
-        ),
-        row=1,
-        col=i + 1,
-    )
-
-# Slider steps — update the 4 Trained AE traces (indices 0, 2, 4, 6)
-steps = []
-for s in range(n_snapshots):
-    step = dict(
-        method="update",
-        label=str(geom_epochs[s]),
-        args=[
-            {
-                "y": [
-                    geom_arrays["fd"][:, s],
-                    None,
-                    geom_arrays["fn"][:, s],
-                    None,
-                    geom_arrays["ti"][:, s],
-                    None,
-                    geom_arrays["bias"][:, s],
-                    None,
-                ]
-            },
-        ],
-    )
-    steps.append(step)
-
-fig.update_layout(
+make_epoch_slider(
+    epoch_arrays=geom_arrays,
+    static_arrays=synth_props,
+    epochs=geom_epochs,
+    titles=_geom_titles,
     title="Geometric Properties Over Training (sorted by firing probability)",
-    height=500,
-    width=1400,
-    sliders=[
-        dict(
-            active=0,
-            currentvalue=dict(prefix="Epoch: "),
-            pad=dict(t=50),
-            steps=steps,
-        )
-    ],
-)
-for i, prop in enumerate(_geom_props):
-    fig.update_yaxes(range=y_ranges[prop], row=1, col=i + 1)
-for col in range(1, 5):
-    fig.update_xaxes(title_text="Feature Rank ", row=1, col=col)
-style_fig(fig)
-fig.show()
+).show()
 
 # %%
-# --- Plot: Feature norms² + bias (TiedLinearRelu) ---
-fn2 = tm_tied.feature_norms.detach().cpu().numpy() ** 2
-b_tied = tm_tied.ae.b.detach().cpu().numpy()  # ty:ignore
-combined = (fn2 + b_tied)[sort_idx]
+# --- Plot: ‖w‖² + b over training (epoch slider) ---
+fn2_bias_arr = geom_arrays["fn"] ** 2 + geom_arrays["bias"]  # (N_FEATURES, n_snapshots)
+synth_fn2_bias = synth_props["fn"] ** 2 + synth_props["bias"]
 
-fig = go.Figure()
-fig.add_trace(
-    go.Scatter(
-        x=np.arange(N_FEATURES),
-        y=combined,
-        mode="markers",
-        marker=dict(size=3.25, opacity=0.6, color=MODEL_COLORS["Trained AE"]),
-        name="‖w‖² + b",
-    )
-)
-fig.update_layout(
-    title="Trained AE: ‖w‖² + b (sorted by firing probability)",
-    xaxis_title="Feature Rank ",
-    yaxis_title="‖w‖² + b",
-)
-style_fig(fig)
-fig.show()
+make_epoch_slider(
+    epoch_arrays={"fn2b": fn2_bias_arr},
+    static_arrays={"fn2b": synth_fn2_bias},
+    epochs=geom_epochs,
+    titles=["‖w‖² + b"],
+    title="‖w‖² + b (sorted by firing probability)",
+).show()
 
 # %%
 # --- Summary statistics ---
@@ -768,82 +713,6 @@ for match_label, sfx in [("abs cos-sim", "_abs"), ("cos-sim", "_cos")]:
         )
 
 
-# %% --- Per-feature detection metrics (sorted by firing probability) ---
-fig = make_subplots(
-    rows=1,
-    cols=4,
-    subplot_titles=["Precision", "Recall (TPR)", "F1 Score", "FPR"],
-)
-
-for name in names:
-    res = sae_results[name]
-    # Re-sort by firing probability for display.
-    feat_order = np.argsort(-fp_np[res["mcc_feat_idx_cos"]])
-    color = MODEL_COLORS[name]
-    x = np.arange(len(feat_order))
-
-    fig.add_trace(
-        go.Scatter(
-            x=x,
-            y=res["precision_per_cos"][feat_order],
-            name=name,
-            legendgroup=name,
-            mode="markers",
-            marker=dict(size=3.25, opacity=0.6, color=color),
-        ),
-        row=1,
-        col=1,
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=x,
-            y=res["recall_per_cos"][feat_order],
-            name=name,
-            legendgroup=name,
-            mode="markers",
-            showlegend=False,
-            marker=dict(size=3.25, opacity=0.6, color=color),
-        ),
-        row=1,
-        col=2,
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=x,
-            y=res["f1_per_cos"][feat_order],
-            name=name,
-            legendgroup=name,
-            mode="markers",
-            showlegend=False,
-            marker=dict(size=3.25, opacity=0.6, color=color),
-        ),
-        row=1,
-        col=3,
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=x,
-            y=res["fpr_per_cos"][feat_order],
-            name=name,
-            legendgroup=name,
-            mode="markers",
-            showlegend=False,
-            marker=dict(size=3.25, opacity=0.6, color=color),
-        ),
-        row=1,
-        col=4,
-    )
-
-fig.update_layout(
-    title="Per-Feature Detection Metrics (sorted by firing prob.)",
-    height=400,
-    width=1400,
-)
-for col in range(1, 5):
-    fig.update_xaxes(title_text="Feature Rank ", row=1, col=col)
-style_fig(fig)
-fig.show()
-
 # %% --- Encoder-based matching (using SAE activations on one-hot inputs) ---
 for name in names:
     res = sae_results[name]
@@ -1002,73 +871,64 @@ for name, res in sae_results.items():
     )
     print()
 
-# %% --- Per-feature detection metrics: encoder vs decoder matching ---
-fig = make_subplots(
-    rows=2,
-    cols=4,
-    subplot_titles=[
-        "Precision (dec)",
-        "Recall (dec)",
-        "F1 (dec)",
-        "FPR (dec)",
-        "Precision (enc)",
-        "Recall (enc)",
-        "F1 (enc)",
-        "FPR (enc)",
-    ],
-)
+# %% --- Per-feature detection metrics (matching method slider) ---
+_det_metrics = ["precision", "recall", "f1", "fpr"]
+_det_titles = ["Precision", "Recall (TPR)", "F1 Score", "FPR"]
+_match_methods = [
+    ("Cosine", "_cos", "mcc_feat_idx_cos"),
+    ("|Cosine|", "_abs", "mcc_feat_idx_abs"),
+    ("Encoder", "_enc", "enc_feat_idx"),
+]
 
-for name in names:
-    res = sae_results[name]
-    color = MODEL_COLORS[name]
+fig = make_subplots(rows=1, cols=4, subplot_titles=_det_titles)
+x = np.arange(N_FEATURES)
 
-    # Row 1: decoder matching (cos)
-    feat_order_dec = np.argsort(-fp_np[res["mcc_feat_idx_cos"]])
-    x = np.arange(len(feat_order_dec))
-    for col, metric in enumerate(
-        ["precision_per_cos", "recall_per_cos", "f1_per_cos", "fpr_per_cos"], 1
-    ):
+# Initial traces: first matching method for all models × metrics
+init_sfx, init_fidx_key = _match_methods[0][1], _match_methods[0][2]
+for col, metric in enumerate(_det_metrics):
+    for name in names:
+        res = sae_results[name]
+        feat_order = np.argsort(-fp_np[res[init_fidx_key]])
         fig.add_trace(
             go.Scatter(
                 x=x,
-                y=res[metric][feat_order_dec],
+                y=res[f"{metric}_per{init_sfx}"][feat_order],
                 name=name,
                 legendgroup=name,
                 mode="markers",
-                marker=dict(size=3.25, opacity=0.6, color=color),
-                showlegend=(col == 1),
+                marker=dict(size=3.25, opacity=0.6, color=MODEL_COLORS[name]),
+                showlegend=(col == 0),
             ),
             row=1,
-            col=col,
+            col=col + 1,
         )
 
-    # Row 2: encoder matching
-    feat_order_enc = np.argsort(-fp_np[res["enc_feat_idx"]])
-    for col, metric in enumerate(
-        ["precision_per_enc", "recall_per_enc", "f1_per_enc", "fpr_per_enc"], 1
-    ):
-        fig.add_trace(
-            go.Scatter(
-                x=x,
-                y=res[metric][feat_order_enc],
-                name=name,
-                legendgroup=name,
-                mode="markers",
-                marker=dict(size=3.25, opacity=0.6, color=color),
-                showlegend=False,
-            ),
-            row=2,
-            col=col,
-        )
+# Slider: one step per matching method
+steps = []
+for label, sfx, fidx_key in _match_methods:
+    y_update = []
+    for metric in _det_metrics:
+        for name in names:
+            res = sae_results[name]
+            feat_order = np.argsort(-fp_np[res[fidx_key]])
+            y_update.append(res[f"{metric}_per{sfx}"][feat_order])
+    steps.append(dict(method="update", label=label, args=[{"y": y_update}]))
 
 fig.update_layout(
-    title="Per-Feature Detection: Decoder (top) vs Encoder (bottom) Matching",
-    height=600,
+    title="Per-Feature Detection Metrics (sorted by firing prob.)",
+    height=400,
     width=1400,
+    sliders=[
+        dict(
+            active=0,
+            currentvalue=dict(prefix="Matching: "),
+            pad=dict(t=50),
+            steps=steps,
+        )
+    ],
 )
-for row in range(1, 3):
-    for col in range(1, 5):
-        fig.update_xaxes(title_text="Feature Rank ", row=row, col=col)
+for col in range(1, 5):
+    fig.update_xaxes(title_text="Feature Rank", row=1, col=col)
 style_fig(fig)
 fig.show()
 
