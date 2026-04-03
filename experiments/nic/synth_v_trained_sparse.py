@@ -518,30 +518,33 @@ make_epoch_slider(
 # %%
 # --- Summary statistics ---
 N_HEAD = 150  # top features by firing probability
+N_TAIL = 150  # bottom features by firing probability
 expected_l0 = float(firing_probs.sum())
-head_idx = sort_idx[:N_HEAD]  # indices of top-N_HEAD features
+head_idx = sort_idx[:N_HEAD]
+tail_idx = sort_idx[-N_TAIL:]
 
-print(f"\n=== Summary  |  E[L0]={expected_l0:.2f}  |  head={N_HEAD} features ===")
+print(f"\n=== Summary  |  E[L0]={expected_l0:.2f}  |  head={N_HEAD}  tail={N_TAIL} ===")
 for name, eval_loss, pf in [
     ("Trained AE", eval_losses_trained[-1], per_feature_trained[-1]),
     ("Constructed AE", loss_constructed, pf_constructed),
 ]:
     final_mse = np.array(pf)
-    head_mse = final_mse[head_idx]
-    recovered = "  ".join(f"τ={t}: {int((final_mse < t).sum())}" for t in THRESHOLDS)
-    head_recovered = "  ".join(
-        f"τ={t}: {int((head_mse < t).sum())}" for t in THRESHOLDS
-    )
-    print(
-        f"{name:25s}  eval_loss={eval_loss:.6f}  "
-        f"mean_MSE={final_mse.mean():.4f}  "
-        f"recovered=[{recovered}]"
-    )
-    print(
-        f"{'  (head)':25s}  "
-        f"mean_MSE={head_mse.mean():.4f}  "
-        f"recovered=[{head_recovered}]"
-    )
+    head_mse, tail_mse = final_mse[head_idx], final_mse[tail_idx]
+    for scope, mse_slice in [
+        ("all", final_mse),
+        ("head", head_mse),
+        ("tail", tail_mse),
+    ]:
+        recovered = "  ".join(
+            f"τ={t}: {int((mse_slice < t).sum())}" for t in THRESHOLDS
+        )
+        label = name if scope == "all" else f"  ({scope})"
+        extra = f"  eval_loss={eval_loss:.6f}" if scope == "all" else ""
+        print(
+            f"{label:25s}{extra}  "
+            f"mean_MSE={mse_slice.mean():.4f}  "
+            f"recovered=[{recovered}]"
+        )
 
 # %% --- Per-feature SAE reconstruction error ---
 names = list(sae_results.keys())
@@ -755,15 +758,20 @@ for match_label, sfx in [("cos-sim", "_cos"), ("|cos-sim|", "_abs")]:
             f"{res[f'precision{sfx}']:6.4f}  {res[f'recall{sfx}']:6.4f}  "
             f"{res[f'f1{sfx}']:6.4f}  {res[f'fpr{sfx}']:6.4f}"
         )
-        pp = res[f"precision_per{sfx}"][:N_HEAD]
-        pr = res[f"recall_per{sfx}"][:N_HEAD]
-        pf = res[f"f1_per{sfx}"][:N_HEAD]
-        pfpr = res[f"fpr_per{sfx}"][:N_HEAD]
-        print(
-            f"{'':20s}  {f'head {N_HEAD}':>7s}  {'':>7s}  {'':>7s}  "
-            f"{pp.mean():6.4f}  {pr.mean():6.4f}  "
-            f"{pf.mean():6.4f}  {pfpr.mean():6.4f}"
-        )
+        for scope, slc in [
+            ("head", slice(None, N_HEAD)),
+            ("tail", slice(-N_TAIL, None)),
+        ]:
+            pp = res[f"precision_per{sfx}"][slc]
+            pr = res[f"recall_per{sfx}"][slc]
+            pf = res[f"f1_per{sfx}"][slc]
+            pfpr = res[f"fpr_per{sfx}"][slc]
+            n = N_HEAD if scope == "head" else N_TAIL
+            print(
+                f"{'':20s}  {f'{scope} {n}':>7s}  {'':>7s}  {'':>7s}  "
+                f"{pp.mean():6.4f}  {pr.mean():6.4f}  "
+                f"{pf.mean():6.4f}  {pfpr.mean():6.4f}"
+            )
 
 
 # %% --- SAE Comparison bar chart ---
