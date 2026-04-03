@@ -10,7 +10,6 @@ SAEs trained via SAELens StandardTrainingSAE.
 import torch
 import numpy as np
 import plotly.graph_objects as go
-import plotly.express as px
 from plotly.subplots import make_subplots
 from scipy.optimize import linear_sum_assignment
 
@@ -345,7 +344,9 @@ for name, tm in [("Trained AE", tm_trained), ("Constructed AE", tm_constructed)]
 
 # %%
 # --- Plot: Eval loss curve ---
-eval_epochs = list(range(0, N_EPOCHS, EVAL_FREQ)) + [N_EPOCHS - 1]
+# Derive eval_epochs from actual hook data (avoids off-by-one with last epoch)
+_n_evals = len(eval_losses_trained)
+eval_epochs = sorted(set(range(0, N_EPOCHS, EVAL_FREQ)) | {N_EPOCHS - 1})[:_n_evals]
 
 fig = go.Figure()
 fig.add_trace(
@@ -516,17 +517,30 @@ make_epoch_slider(
 
 # %%
 # --- Summary statistics ---
-print("\n=== Summary ===")
+N_HEAD = 150  # top features by firing probability
+expected_l0 = float(firing_probs.sum())
+head_idx = sort_idx[:N_HEAD]  # indices of top-N_HEAD features
+
+print(f"\n=== Summary  |  E[L0]={expected_l0:.2f}  |  head={N_HEAD} features ===")
 for name, eval_loss, pf in [
     ("Trained AE", eval_losses_trained[-1], per_feature_trained[-1]),
     ("Constructed AE", loss_constructed, pf_constructed),
 ]:
     final_mse = np.array(pf)
+    head_mse = final_mse[head_idx]
     recovered = "  ".join(f"τ={t}: {int((final_mse < t).sum())}" for t in THRESHOLDS)
+    head_recovered = "  ".join(
+        f"τ={t}: {int((head_mse < t).sum())}" for t in THRESHOLDS
+    )
     print(
         f"{name:25s}  eval_loss={eval_loss:.6f}  "
-        f"recovered=[{recovered}]  "
-        f"mean_feature_MSE={final_mse.mean():.4f}"
+        f"mean_MSE={final_mse.mean():.4f}  "
+        f"recovered=[{recovered}]"
+    )
+    print(
+        f"{'  (head)':25s}  "
+        f"mean_MSE={head_mse.mean():.4f}  "
+        f"recovered=[{head_recovered}]"
     )
 
 # %% --- Per-feature SAE reconstruction error ---
@@ -551,86 +565,90 @@ fig.update_layout(
 style_fig(fig)
 fig.show()
 
-# %% --- SAE activations on one-hot features (matched) ---
-
-
+# %% --- SAE activations on one-hot features (cosine matched) ---
+_cos_match_data = {}
 for name in names:
     tm_ref = models_dict[name]
     sae = tm_ref.saes[name].sae
     with torch.no_grad():
         eye = torch.eye(N_FEATURES, device=DEVICE)
-
-        # SAE activations on one-hot features
-        sae_acts = (
-            sae.encode(tm_ref.ae.encode(eye)).cpu().numpy()
-        )  # (N_FEATURES, N_DICT)
-
-        # Cosine similarity matching
-        D = tm_ref.ae.encode(eye)  # (N_FEATURES, D_HIDDEN)
+        sae_acts = sae.encode(tm_ref.ae.encode(eye)).cpu().numpy()
+        D = tm_ref.ae.encode(eye)
         D_normed = D / D.norm(dim=1, keepdim=True)
-        W_dec = sae.W_dec.data  # (N_DICT, D_HIDDEN)
+        W_dec = sae.W_dec.data
         W_dec_normed = W_dec / W_dec.norm(dim=1, keepdim=True)
-        cosine_sim = (D_normed @ W_dec_normed.T).cpu().numpy()  # (N_FEATURES, N_DICT)
+        cosine_sim = (D_normed @ W_dec_normed.T).cpu().numpy()
 
     feat_idx, dict_idx = linear_sum_assignment(-cosine_sim)
-
-    # Reorder both rows and columns: matched pairs form the top-left diagonal,
-    # then append unmatched features (rows) and unmatched dict elements (cols)
-    matched_feats = set(feat_idx)
-    matched_dicts = set(dict_idx)
+    matched_feats, matched_dicts = set(feat_idx), set(dict_idx)
     unmatched_feats = [f for f in range(N_FEATURES) if f not in matched_feats]
     unmatched_dicts = [d for d in range(N_DICT) if d not in matched_dicts]
-
     row_order = list(feat_idx) + unmatched_feats
     col_order = list(dict_idx) + unmatched_dicts
 
-    sae_acts_matched = sae_acts[np.ix_(row_order, col_order)]
-    row_labels = [f"f{f}" for f in row_order]
-    col_labels = [f"d{d}" for d in col_order]
-
-    # Compute diagonality: fraction of total activation on the matched diagonal
+    acts_matched = sae_acts[np.ix_(row_order, col_order)]
+    cos_matched = cosine_sim[np.ix_(row_order, col_order)]
     n_matched = len(feat_idx)
-    diag_sum = sum(sae_acts_matched[i, i] for i in range(n_matched))
-    total_sum = sae_acts_matched.sum()
+    diag_sum = sum(acts_matched[i, i] for i in range(n_matched))
+    total_sum = acts_matched.sum()
     diagonality = diag_sum / total_sum if total_sum > 0 else 0.0
+    mean_cos = cosine_sim[feat_idx, dict_idx].mean()
     sae_results[name]["diagonality"] = diagonality
 
-    mean_cosine = cosine_sim[feat_idx, dict_idx].mean()
-    print(
-        f"{name}: diagonality = {diagonality:.4f} (diag_sum={diag_sum:.2f}, total={total_sum:.2f})  "
-        f"mean_cosine = {mean_cosine:.4f}"
-    )
+    _cos_match_data[name] = {
+        "acts": acts_matched,
+        "cos": cos_matched,
+        "diag": diagonality,
+        "mean_cos": mean_cos,
+    }
+    print(f"{name}: diag={diagonality:.4f}  mean_cos={mean_cos:.4f}")
 
-    fig_imshow = px.imshow(
-        sae_acts_matched,
-        labels=dict(
-            x="SAE dict element (cosine matched)", y="Feature (cosine matched)"
+fig = make_subplots(
+    rows=2,
+    cols=2,
+    subplot_titles=[
+        f"{n} — Activations (diag={_cos_match_data[n]['diag']:.3f})" for n in names
+    ]
+    + [f"{n} — Cosine Sim (mean={_cos_match_data[n]['mean_cos']:.3f})" for n in names],
+    vertical_spacing=0.12,
+)
+for i, name in enumerate(names):
+    d = _cos_match_data[name]
+    fig.add_trace(
+        go.Heatmap(
+            z=d["acts"],
+            colorscale="ylgnbu_r",
+            showscale=(i == 1),
+            colorbar=dict(y=0.78, len=0.4, title="Act"),
         ),
-        x=col_labels,
-        y=row_labels,
-        title=f"SAE one-hot activations (cosine matched, diag={diagonality:.3f}) — {name}",
-        aspect="auto",
-        color_continuous_scale="ylgnbu_r",
+        row=1,
+        col=i + 1,
     )
-    style_fig(fig_imshow)
-    fig_imshow.show()
-
-    cosine_sim_matched = cosine_sim[np.ix_(row_order, col_order)]
-    fig_imshow = px.imshow(
-        cosine_sim_matched,
-        labels=dict(
-            x="SAE dict element (cosine matched)", y="Feature (cosine matched)"
+    fig.add_trace(
+        go.Heatmap(
+            z=d["cos"],
+            colorscale="RdBu",
+            zmid=0,
+            zmin=-1,
+            zmax=1,
+            showscale=(i == 1),
+            colorbar=dict(y=0.22, len=0.4, title="Cos"),
         ),
-        x=col_labels,
-        y=row_labels,
-        title=f"Cosine similarity (matched, mean={mean_cosine:.3f}) — {name}",
-        aspect="auto",
-        color_continuous_scale="RdBu",
-        zmin=-1,
-        zmax=1,
+        row=2,
+        col=i + 1,
     )
-    style_fig(fig_imshow)
-    fig_imshow.show()
+for row in range(1, 3):
+    for col in range(1, 3):
+        fig.update_xaxes(title_text="Matched SAE Dictionary Element", row=row, col=col)
+        fig.update_yaxes(title_text="Feature", row=row, col=col)
+fig.update_layout(
+    title="Cosine-Matched SAE Heatmaps",
+    height=1000,
+    width=1200,
+    showlegend=False,
+)
+style_fig(fig)
+fig.show()
 
 # %% --- SAE evaluation: MCC, detection metrics ---
 for name, res in sae_results.items():
@@ -711,23 +729,40 @@ for name, res in sae_results.items():
     )
 
 # %% --- SAE summary print ---
-_hdr1 = f"{'Model':25s}  {'MSE↓':>10s}  {'L0↓':>6s}  {'Dead↓':>6s}  {'Alive↑':>6s}  {'ExplVar↑':>8s}  {'Diag↑':>6s}"
-_hdr2 = f"{'':25s}  {'MCC_abs↑':>8s}  {'MCC_cos↑':>8s}  {'Prec↑':>6s}  {'Rec↑':>6s}  {'F1↑':>6s}  {'FPR↓':>6s}"
+print(f"\n{'=' * 80}")
+print(f"SAE Overview  |  L1={SAE_L1}  E[L0]={expected_l0:.2f}  head={N_HEAD}")
+print(f"{'=' * 80}")
+_hdr = f"{'Model':20s}  {'MSE↓':>10s}  {'L0':>6s}  {'Dead':>5s}  {'Alive':>5s}  {'ExplVar↑':>8s}  {'Diag↑':>6s}"
+print(_hdr)
+print("-" * len(_hdr))
+for name, res in sae_results.items():
+    print(
+        f"{name:20s}  {res['recon_mse']:10.6f}  {res['l0']:6.1f}  "
+        f"{res['n_dead']:5d}  {res['n_alive']:5d}  {res['explained_var']:8.4f}  "
+        f"{res.get('diagonality', 0):6.4f}"
+    )
 
-for match_label, sfx in [("abs cos-sim", "_abs"), ("cos-sim", "_cos")]:
-    print(f"\n|| SAE Summary (matched on {match_label}) || L1 = {SAE_L1}")
-    print(_hdr1)
-    print(_hdr2)
+for match_label, sfx in [("cos-sim", "_cos"), ("|cos-sim|", "_abs")]:
+    print(f"\nDetection ({match_label})")
+    _dhdr = f"{'Model':20s}  {'Scope':>7s}  {'|cos|↑':>7s}  {'cos↑':>7s}  {'Prec↑':>6s}  {'Rec↑':>6s}  {'F1↑':>6s}  {'FPR↓':>6s}"
+    print(_dhdr)
+    print("-" * len(_dhdr))
     for name, res in sae_results.items():
+        mcc_abs = res.get(f"mcc{sfx}_abs", 0)
+        mcc_cos = res.get(f"mcc{sfx}_cos", 0)
         print(
-            f"{name:25s}  {res['recon_mse']:10.6f}  {res['l0']:6.1f}  "
-            f"{res['n_dead']:6d}  {res['n_alive']:6d}  {res['explained_var']:8.4f}  "
-            f"{res.get('diagonality', 0):6.4f}"
-        )
-        print(
-            f"{'':25s}  {res.get(f'mcc{sfx}_abs', 0):8.4f}  {res.get(f'mcc{sfx}_cos', 0):8.4f}  "
+            f"{name:20s}  {'all':>7s}  {mcc_abs:7.4f}  {mcc_cos:7.4f}  "
             f"{res[f'precision{sfx}']:6.4f}  {res[f'recall{sfx}']:6.4f}  "
             f"{res[f'f1{sfx}']:6.4f}  {res[f'fpr{sfx}']:6.4f}"
+        )
+        pp = res[f"precision_per{sfx}"][:N_HEAD]
+        pr = res[f"recall_per{sfx}"][:N_HEAD]
+        pf = res[f"f1_per{sfx}"][:N_HEAD]
+        pfpr = res[f"fpr_per{sfx}"][:N_HEAD]
+        print(
+            f"{'':20s}  {f'head {N_HEAD}':>7s}  {'':>7s}  {'':>7s}  "
+            f"{pp.mean():6.4f}  {pr.mean():6.4f}  "
+            f"{pf.mean():6.4f}  {pfpr.mean():6.4f}"
         )
 
 
@@ -867,7 +902,8 @@ for name in names:
         f"{n_agree_abs}/{N_FEATURES} with |cos-sim|"
     )
 
-# %% --- Encoder-matched SAE activations heatmap ---
+# %% --- Encoder-matched SAE heatmaps (activations + cosine similarity) ---
+_enc_match_data = {}
 for name in names:
     res = sae_results[name]
     tm = models_dict[name]
@@ -877,38 +913,82 @@ for name in names:
         eye = torch.eye(N_FEATURES, device=DEVICE)
         sae_acts = sae.encode(tm.ae.encode(eye)).cpu().numpy()
 
+        # Cosine similarity matrix (same as MCC computation)
+        D = tm.W.detach()
+        W_dec_t = sae.W_dec.detach().T
+        D_norm = D / D.norm(dim=0, keepdim=True).clamp(min=1e-8)
+        W_norm = W_dec_t / W_dec_t.norm(dim=0, keepdim=True).clamp(min=1e-8)
+        cos_sim = (D_norm.T @ W_norm).cpu().numpy()
+
     enc_fi, enc_di = res["enc_feat_idx"], res["enc_dict_idx"]
-    matched_feats = set(enc_fi)
-    matched_dicts = set(enc_di)
+    matched_feats, matched_dicts = set(enc_fi), set(enc_di)
     unmatched_feats = [f for f in range(N_FEATURES) if f not in matched_feats]
     unmatched_dicts = [d for d in range(N_DICT) if d not in matched_dicts]
-
     row_order = list(enc_fi) + unmatched_feats
     col_order = list(enc_di) + unmatched_dicts
 
-    sae_acts_matched = sae_acts[np.ix_(row_order, col_order)]
-    row_labels = [f"f{f}" for f in row_order]
-    col_labels = [f"d{d}" for d in col_order]
-
+    acts_matched = sae_acts[np.ix_(row_order, col_order)]
+    cos_matched = cos_sim[np.ix_(row_order, col_order)]
     n_matched = len(enc_fi)
-    diag_sum = sum(sae_acts_matched[i, i] for i in range(n_matched))
-    total_sum = sae_acts_matched.sum()
+    diag_sum = sum(acts_matched[i, i] for i in range(n_matched))
+    total_sum = acts_matched.sum()
     diag_enc = diag_sum / total_sum if total_sum > 0 else 0.0
+    mean_cos_enc = cos_sim[enc_fi, enc_di].mean()
     res["diagonality_enc"] = diag_enc
 
-    fig_imshow = px.imshow(
-        sae_acts_matched,
-        labels=dict(
-            x="SAE dict element (encoder matched)", y="Feature (encoder matched)"
+    _enc_match_data[name] = {
+        "acts": acts_matched,
+        "cos": cos_matched,
+        "diag": diag_enc,
+        "mean_cos": mean_cos_enc,
+    }
+
+fig = make_subplots(
+    rows=2,
+    cols=2,
+    subplot_titles=[
+        f"{n} — Activations (diag={_enc_match_data[n]['diag']:.3f})" for n in names
+    ]
+    + [f"{n} — Cosine Sim (mean={_enc_match_data[n]['mean_cos']:.3f})" for n in names],
+    vertical_spacing=0.12,
+)
+for i, name in enumerate(names):
+    d = _enc_match_data[name]
+    fig.add_trace(
+        go.Heatmap(
+            z=d["acts"],
+            colorscale="ylgnbu_r",
+            showscale=(i == 1),
+            colorbar=dict(y=0.78, len=0.4, title="Act"),
         ),
-        x=col_labels,
-        y=row_labels,
-        title=f"SAE one-hot activations (encoder matched, diag={diag_enc:.3f}) — {name}",
-        aspect="auto",
-        color_continuous_scale="ylgnbu_r",
+        row=1,
+        col=i + 1,
     )
-    style_fig(fig_imshow)
-    fig_imshow.show()
+    fig.add_trace(
+        go.Heatmap(
+            z=d["cos"],
+            colorscale="RdBu",
+            zmid=0,
+            zmin=-1,
+            zmax=1,
+            showscale=(i == 1),
+            colorbar=dict(y=0.22, len=0.4, title="Cos"),
+        ),
+        row=2,
+        col=i + 1,
+    )
+for row in range(1, 3):
+    for col in range(1, 3):
+        fig.update_xaxes(title_text="Matched SAE Dictionary Element", row=row, col=col)
+        fig.update_yaxes(title_text="Feature", row=row, col=col)
+fig.update_layout(
+    title="Encoder-Matched SAE Heatmaps",
+    height=1000,
+    width=1200,
+    showlegend=False,
+)
+style_fig(fig)
+fig.show()
 
 # %% --- Comparison table: decoder vs encoder matching ---
 print(f"\n{'=' * 90}")

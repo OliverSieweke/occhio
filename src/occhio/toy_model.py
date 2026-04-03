@@ -268,7 +268,12 @@ class ToyModel:
             if hooks:
                 with torch.no_grad():
                     hook_data = dict(
-                        tm=self, epoch=ep, loss=loss.detach(), x=x, x_hat=x_hat
+                        tm=self,
+                        epoch=ep,
+                        n_epochs=n_epochs,
+                        loss=loss.detach(),
+                        x=x,
+                        x_hat=x_hat,
                     )
                     for i, h in enumerate(hooks):
                         result = h(hook_data)
