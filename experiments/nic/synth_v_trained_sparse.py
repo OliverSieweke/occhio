@@ -273,7 +273,6 @@ tm_trained = ToyModel(
     ae=ae_trained,
     device=DEVICE,
     hooks=[normalize_W],
-    # distribution=dist, ae=ae_trained, device=DEVICE
 )
 
 _, hook_results_trained = tm_trained.fit(
@@ -320,7 +319,7 @@ print(f"  Final eval loss: {loss_constructed:.6f}")
 N_DICT = 500
 SAE_BATCH = 1024
 SAE_LR = 3e-4
-SAE_L1 = 0.1
+SAE_L1 = 0.2
 SAE_TRAINING_SAMPLES = 200_000 * SAE_BATCH  # ~200k steps
 
 sae_results = {}
