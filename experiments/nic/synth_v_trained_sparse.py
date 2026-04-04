@@ -170,6 +170,15 @@ firing_probs = torch.tensor(firing_probs, dtype=torch.float32)
 
 dist = SparseUniform(N_FEATURES, p_active=firing_probs, device=DEVICE)
 
+# Sort features by firing probability (most frequent first) — used throughout
+fp_np = firing_probs.cpu().numpy()
+sort_idx = np.argsort(-fp_np)
+# Inverse map: rank_of[feature_idx] = its rank by firing probability
+rank_of = torch.empty(N_FEATURES, device=DEVICE)
+rank_of[torch.from_numpy(sort_idx).to(DEVICE)] = torch.arange(
+    N_FEATURES, device=DEVICE, dtype=torch.float32
+)
+
 # %%
 # Quick sanity check
 activations = dist.sample(1024)
@@ -209,14 +218,42 @@ def per_feature_hook(data):
     return (eye - x_hat).pow(2).sum(dim=-1).cpu().numpy()
 
 
+_GEOM_N_GROUPS = 100
+_GEOM_GROUP_SIZE = N_FEATURES // _GEOM_N_GROUPS
+
+
+def _interference_group_matrix(I_sq_np):
+    """Compute N_GROUPS×N_GROUPS mean squared interference between frequency groups."""
+    I_sorted = I_sq_np[np.ix_(sort_idx, sort_idx)]
+    mat = np.zeros((_GEOM_N_GROUPS, _GEOM_N_GROUPS))
+    for a in range(_GEOM_N_GROUPS):
+        for b in range(_GEOM_N_GROUPS):
+            block = I_sorted[
+                a * _GEOM_GROUP_SIZE : (a + 1) * _GEOM_GROUP_SIZE,
+                b * _GEOM_GROUP_SIZE : (b + 1) * _GEOM_GROUP_SIZE,
+            ]
+            if a == b:
+                mask = ~np.eye(_GEOM_GROUP_SIZE, dtype=bool)
+                mat[a, b] = block[mask].mean()
+            else:
+                mat[a, b] = block.mean()
+    return mat
+
+
 def geometry_hook(data):
-    """Capture feature dimensionalities, norms, total interference, and bias."""
+    """Capture geometric properties, mean partner rank, and group interference matrix."""
     tm = data["tm"]
+    I_sq = tm.interferences_sq.detach().clone()
+    I_sq.fill_diagonal_(0)
+    mpr = (I_sq * rank_of.unsqueeze(0)).sum(dim=1) / I_sq.sum(dim=1).clamp(min=1e-8)
+    I_sq_np = tm.interferences_sq.detach().cpu().numpy()
     return {
         "fd": tm.feature_dimensionalities.detach().cpu().numpy(),
         "fn": tm.feature_norms.detach().cpu().numpy(),
         "ti": tm.total_feature_interferences.detach().cpu().numpy(),
         "bias": tm.ae.b.detach().cpu().numpy(),
+        "mpr": mpr.cpu().numpy(),
+        "group_mat": _interference_group_matrix(I_sq_np),
     }
 
 
@@ -232,7 +269,11 @@ print("Training Trained AE...")
 gen1 = torch.Generator(DEVICE).manual_seed(SEED)
 ae_trained = TiedLinearRelu(N_FEATURES, D_HIDDEN, device=DEVICE, generator=gen1)
 tm_trained = ToyModel(
-    distribution=dist, ae=ae_trained, device=DEVICE, hooks=[normalize_W]
+    distribution=dist,
+    ae=ae_trained,
+    device=DEVICE,
+    hooks=[normalize_W],
+    # distribution=dist, ae=ae_trained, device=DEVICE
 )
 
 _, hook_results_trained = tm_trained.fit(
@@ -265,11 +306,12 @@ N_EPOCHS_CONSTRUCTED = 10_000
 _, hook_results_constructed = tm_constructed.fit(
     N_EPOCHS_CONSTRUCTED,
     batch_size=BATCH_SIZE,
-    hooks=[every(EVAL_FREQ, h) for h in [eval_hook, per_feature_hook]],
+    hooks=[every(EVAL_FREQ, h) for h in [eval_hook, per_feature_hook, geometry_hook]],
     verbose=True,
 )
 eval_losses_constructed = hook_results_constructed[0]
 per_feature_constructed = hook_results_constructed[1]
+geometry_constructed = hook_results_constructed[2]
 loss_constructed = eval_losses_constructed[-1]
 pf_constructed = per_feature_constructed[-1]
 print(f"  Final eval loss: {loss_constructed:.6f}")
@@ -377,8 +419,6 @@ fig.show()
 
 # %%
 # --- Plot: Per-feature reconstruction MSE (epoch slider) ---
-fp_np = firing_probs.cpu().numpy()
-sort_idx = np.argsort(-fp_np)
 
 pf_arr = np.array(per_feature_trained).T[sort_idx]  # (N_FEATURES, n_snapshots)
 make_epoch_slider(
@@ -443,7 +483,7 @@ for i, (name, tm) in enumerate(
         col=i + 1,
     )
 
-fig.update_layout(title="W^T W Comparison", height=400, width=900)
+fig.update_layout(title="W^T W Comparison", height=700, width=1400)
 style_fig(fig)
 fig.show()
 
@@ -473,12 +513,13 @@ fig.show()
 
 # %%
 # --- Plot: Geometric properties + bias over training (slider) ---
-_geom_props = ["fd", "fn", "ti", "bias"]
+_geom_props = ["fd", "fn", "ti", "bias", "mpr"]
 _geom_titles = [
     "Feature Dimensionalities",
     "Feature Norms",
     "Total Interference",
     "Learned Bias",
+    "Mean Partner Rank",
 ]
 
 geom_arrays = {}
@@ -489,12 +530,8 @@ for prop in _geom_props:
 n_snapshots = geom_arrays["fd"].shape[1]
 geom_epochs = (np.arange(n_snapshots) * EVAL_FREQ).astype(int)
 
-constructed_props = {
-    "fd": tm_constructed.feature_dimensionalities.detach().cpu().numpy()[sort_idx],
-    "fn": tm_constructed.feature_norms.detach().cpu().numpy()[sort_idx],
-    "ti": tm_constructed.total_feature_interferences.detach().cpu().numpy()[sort_idx],
-    "bias": tm_constructed.ae.b.detach().cpu().numpy()[sort_idx],
-}
+_gc_final = geometry_constructed[-1]
+constructed_props = {prop: _gc_final[prop][sort_idx] for prop in _geom_props}
 
 make_epoch_slider(
     epoch_arrays=geom_arrays,
@@ -516,6 +553,97 @@ make_epoch_slider(
     titles=["‖w‖² + b"],
     title="‖w‖² + b (sorted by firing probability)",
 ).show()
+
+# %%
+# --- Frequency-group interference heatmap (epoch slider) ---
+group_labels = [str(i * _GEOM_GROUP_SIZE) for i in range(_GEOM_N_GROUPS)]
+
+group_mats_trained = np.array([g["group_mat"] for g in geometry_trained])
+# Constructed AE: W is frozen, so interference is static — use final state
+group_mat_constructed = geometry_constructed[-1]["group_mat"]
+
+# Stable color range across all snapshots + constructed
+_all_group_vals = np.concatenate(
+    [group_mats_trained.ravel(), group_mat_constructed.ravel()]
+)
+_bz_min, _bz_max = float(_all_group_vals.min()), float(_all_group_vals.max())
+
+fig = make_subplots(
+    rows=1, cols=2, subplot_titles=["Trained AE (animated)", "Constructed AE (static)"]
+)
+fig.add_trace(
+    go.Heatmap(
+        z=group_mats_trained[0],
+        x=group_labels,
+        y=group_labels,
+        colorscale="Viridis",
+        zmin=_bz_min,
+        zmax=_bz_max,
+        showscale=False,
+    ),
+    row=1,
+    col=1,
+)
+fig.add_trace(
+    go.Heatmap(
+        z=group_mat_constructed,
+        x=group_labels,
+        y=group_labels,
+        colorscale="Viridis",
+        zmin=_bz_min,
+        zmax=_bz_max,
+        showscale=True,
+    ),
+    row=1,
+    col=2,
+)
+
+_group_steps = []
+for s in range(len(group_mats_trained)):
+    _group_steps.append(
+        dict(
+            method="update",
+            label=str(geom_epochs[s]),
+            args=[{"z": [group_mats_trained[s], group_mat_constructed]}],
+        )
+    )
+
+for col in range(1, 3):
+    fig.update_xaxes(title_text="Feature Rank Group", row=1, col=col)
+    fig.update_yaxes(title_text="Partner Rank Group", row=1, col=col)
+fig.update_layout(
+    title="Mean Squared Interference by Frequency Group (groups of 10)",
+    height=700,
+    width=1400,
+    showlegend=False,
+    sliders=[
+        dict(
+            active=0,
+            currentvalue=dict(prefix="Epoch: "),
+            pad=dict(t=50),
+            steps=_group_steps,
+        )
+    ],
+)
+style_fig(fig)
+fig.show()
+
+# %%
+# --- Interference entropy per feature ---
+# Normalized entropy of each feature's interference distribution (0=concentrated, 1=uniform)
+for name, tm in models:
+    I_sq = tm.interferences_sq.detach().clone()
+    I_sq.fill_diagonal_(0)
+    p = I_sq / I_sq.sum(dim=1, keepdim=True).clamp(min=1e-8)  # normalize rows
+    log_p = torch.log(p.clamp(min=1e-12))
+    H = -(p * log_p).sum(dim=1)  # Shannon entropy per feature
+    H_max = np.log(N_FEATURES - 1)  # max possible entropy (uniform over N-1 partners)
+    H_norm = (H / H_max).cpu().numpy()
+    print(
+        f"{name:20s}  mean_entropy={H_norm.mean():.4f}  "
+        f"head_150={H_norm[sort_idx[:150]].mean():.4f}  "
+        f"tail_150={H_norm[sort_idx[-150:]].mean():.4f}"
+    )
 
 # %%
 # --- Summary statistics ---
