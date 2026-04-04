@@ -231,7 +231,9 @@ def normalize_W(tm):
 print("Training Trained AE...")
 gen1 = torch.Generator(DEVICE).manual_seed(SEED)
 ae_trained = TiedLinearRelu(N_FEATURES, D_HIDDEN, device=DEVICE, generator=gen1)
-tm_trained = ToyModel(distribution=dist, ae=ae_trained, device=DEVICE)
+tm_trained = ToyModel(
+    distribution=dist, ae=ae_trained, device=DEVICE, hooks=[normalize_W]
+)
 
 _, hook_results_trained = tm_trained.fit(
     30000,
