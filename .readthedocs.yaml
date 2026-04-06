@@ -9,11 +9,9 @@ build:
     python: "3.10"
   jobs:
     create_environment:
-      - asdf plugin add uv
-      - asdf install uv latest
-      - asdf global uv latest
-      - uv sync --only-group docs
-      - uv pip install -e . --no-deps
+      - curl -LsSf https://astral.sh/uv/install.sh | sh
+      - source $HOME/.local/bin/env
+      - uv sync --group docs --no-dev
     build:
       html:
         - uv run --no-sync sphinx-build -b html docs $READTHEDOCS_OUTPUT/html
