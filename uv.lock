@@ -3186,7 +3186,6 @@ dependencies = [
     { name = "safetensors" },
     { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "scipy", version = "1.17.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "sphinx-copybutton" },
     { name = "torch" },
     { name = "tqdm" },
 ]
@@ -3221,6 +3220,7 @@ docs = [
     { name = "sphinx-autodoc-typehints", version = "3.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "sphinx-autodoc-typehints", version = "3.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
     { name = "sphinx-autodoc-typehints", version = "3.9.11", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "sphinx-copybutton" },
     { name = "sphinx-llm" },
     { name = "sphinx-notfound-page" },
     { name = "sphinx-rtd-theme" },
@@ -3239,7 +3239,6 @@ requires-dist = [
     { name = "sae-lens", specifier = ">=6.38.0" },
     { name = "safetensors", specifier = ">=0.4.0" },
     { name = "scipy", specifier = ">=1.15.3" },
-    { name = "sphinx-copybutton", extras = ["docs"], specifier = ">=0.5.2" },
     { name = "torch", specifier = ">=2.10.0" },
     { name = "tqdm", specifier = ">=4.67.3" },
 ]
@@ -3268,6 +3267,7 @@ docs = [
     { name = "sphinx", specifier = ">=8.1.3" },
     { name = "sphinx-autobuild", specifier = ">=2024.10.3" },
     { name = "sphinx-autodoc-typehints", specifier = ">=2.0" },
+    { name = "sphinx-copybutton", specifier = ">=0.5.2" },
     { name = "sphinx-llm", specifier = ">=0.3.0" },
     { name = "sphinx-notfound-page", specifier = ">=1.1.0" },
     { name = "sphinx-rtd-theme", specifier = ">=3.1.0" },

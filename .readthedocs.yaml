@@ -13,9 +13,7 @@ build:
       - asdf install uv latest
       - asdf global uv latest
       - uv sync --only-group docs
+      - uv pip install -e . --no-deps
     build:
       html:
         - uv run --no-sync sphinx-build -b html docs $READTHEDOCS_OUTPUT/html
-
-sphinx:
-  configuration: docs/conf.py

@@ -71,6 +71,18 @@ templates_path = ["_templates"]
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 
 # Check these...
+autodoc_mock_imports = [
+    "torch",
+    "numpy",
+    "plotly",
+    "safetensors",
+    "tqdm",
+    "sae_lens",
+    "einops",
+    "scipy",
+    "networkx",
+]
+
 autodoc_default_options = {
     "members": True,
     "undoc-members": True,

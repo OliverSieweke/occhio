@@ -25,7 +25,6 @@ dependencies = [
     "ipython>=8.38.0",
     "sae-lens>=6.38.0",
     "safetensors>=0.4.0",
-    "sphinx-copybutton[docs]>=0.5.2",
 ]
 keywords = ["superposition", "toy-model", "mechanistic-interpretability", "sparse autoencoder", "sae", "autoencoder", "distribution", "geometry", "interference", "phase-change", "sparsity", "visualization"]
 classifiers = [
@@ -64,6 +63,7 @@ docs = [
     "sphinx-notfound-page>=1.1.0",
     "sphinx-llm>=0.3.0",
     "sphinx-autodoc-typehints>=2.0",
+    "sphinx-copybutton>=0.5.2",
 ]
 dev = [
     "pre-commit>=4.5.1",
