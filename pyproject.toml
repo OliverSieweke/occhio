@@ -4,6 +4,7 @@ version = "0.2.3"
 description = "Experiment with Toy Models of Superposition"
 requires-python = ">=3.10"
 readme = "README.md"
+license = { file = "LICENSE" }
 authors = [
     { name = "Niclas Kupper" },
     { name = "Kaushik Reddy" },
@@ -26,17 +27,44 @@ dependencies = [
     "safetensors>=0.4.0",
     "sphinx-copybutton[docs]>=0.5.2",
 ]
+keywords = ["superposition", "toy-model", "mechanistic-interpretability", "sparse autoencoder", "sae", "autoencoder", "distribution", "geometry", "interference", "phase-change", "sparsity", "visualization"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Education",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Visualization",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Typing :: Typed",
+    "Operating System :: OS Independent",
+]
 
 [project.urls]
 Homepage = "https://docs.occhio.dev"
 Repository = "https://github.com/OliverSieweke/occhio"
 Documentation = "https://docs.occhio.dev"
+"Bug Tracker" = "https://github.com/OliverSieweke/occhio/issues"
+
 
 [build-system]
 requires = ["uv_build"]
 build-backend = "uv_build"
 
 [dependency-groups]
+docs = [
+    "sphinx>=8.1.3",
+    "myst-parser>=4.0.1",
+    "sphinx-autobuild>=2024.10.3",
+    "sphinx-rtd-theme>=3.1.0",
+    "sphinx-notfound-page>=1.1.0",
+    "sphinx-llm>=0.3.0",
+    "sphinx-autodoc-typehints>=2.0",
+]
 dev = [
     "pre-commit>=4.5.1",
     "jupyter>=1.1.1",
@@ -60,19 +88,6 @@ dev = [
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 asyncio_mode = "auto"
-
-
-# For read the docs deployment with pip
-[project.optional-dependencies]
-docs = [
-    "sphinx>=8.1.3",
-    "myst-parser>=4.0.1",
-    "sphinx-autobuild>=2024.10.3",
-    "sphinx-rtd-theme>=3.1.0",
-    "sphinx-notfound-page>=1.1.0",
-    "sphinx-llm>=0.3.0",
-    "sphinx-autodoc-typehints>=2.0",
-]
 
 
 # Occhio MCP Server

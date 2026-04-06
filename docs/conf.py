@@ -100,6 +100,7 @@ html_logo = "_static/logo.svg"
 html_favicon = "_static/logo.svg"
 html_show_sphinx = False
 html_show_copyright = False
+html_show_sourcelink = False
 html_last_updated_fmt = "%b %d, %Y"
 
 html_theme_options = {
