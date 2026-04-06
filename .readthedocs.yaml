@@ -10,7 +10,7 @@ build:
   jobs:
     create_environment:
       - curl -LsSf https://astral.sh/uv/install.sh | sh
-      - source $HOME/.local/bin/env
+      - . $HOME/.local/bin/env
       - uv sync --group docs --no-dev
     build:
       html:
