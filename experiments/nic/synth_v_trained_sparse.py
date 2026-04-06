@@ -55,8 +55,8 @@ LINE_WIDTH = 2
 # --- Configuration ---
 DEVICE = "mps"
 SEED = 42
-N_FEATURES = 500
-D_HIDDEN = 64
+N_FEATURES = 1296
+D_HIDDEN = 100
 N_EPOCHS = 30_000
 BATCH_SIZE = 512
 EVAL_SAMPLES = 2**14
@@ -65,8 +65,8 @@ EVAL_FREQ = 250
 # %%
 # --- Zipfian firing probabilities ---
 # Matches the SyntheticDataModel zipfian config: p_max=0.4, p_min=0.5/N, alpha=0.5
-high = 0.46
-low = 1.0 / N_FEATURES
+high = 0.3
+low = 1.28 / N_FEATURES
 alpha = np.log(high / low) / np.log(N_FEATURES)
 print(f"{alpha=}")
 firing_probs = [high / (i + 1) ** alpha for i in range(N_FEATURES)]
@@ -77,9 +77,9 @@ dist = SparseUniform(N_FEATURES, p_active=firing_probs, device=DEVICE)
 
 # %%
 # Quick sanity check
-activations = dist.sample(1024)
+activations = dist.sample(100_000)
 print(f"Activations shape: {activations.shape}")
-print(f"Mean L0: {(activations > 0).float().sum(dim=-1).mean():.1f}")
+print(f"Mean L0: {(activations > 0).float().sum(dim=-1).mean():.2f}")
 print(
     f"Mean L2 norm: {activations.norm(dim=-1).mean():.2f} ± {activations.norm(dim=-1).std():.2f}"
 )
@@ -683,6 +683,21 @@ for name in names:
     diagonality = diag_sum / total_sum if total_sum > 0 else 0.0
     sae_results[name]["diagonality"] = diagonality
 
+    # Diagonality for abs-cosine matching
+    feat_idx_abs, dict_idx_abs = linear_sum_assignment(-np.abs(cosine_sim))
+    matched_feats_abs = set(feat_idx_abs)
+    matched_dicts_abs = set(dict_idx_abs)
+    unmatched_feats_abs = [f for f in range(N_FEATURES) if f not in matched_feats_abs]
+    unmatched_dicts_abs = [d for d in range(N_DICT) if d not in matched_dicts_abs]
+    row_order_abs = list(feat_idx_abs) + unmatched_feats_abs
+    col_order_abs = list(dict_idx_abs) + unmatched_dicts_abs
+    sae_acts_matched_abs = sae_acts[np.ix_(row_order_abs, col_order_abs)]
+    n_matched_abs = len(feat_idx_abs)
+    diag_sum_abs = sum(sae_acts_matched_abs[i, i] for i in range(n_matched_abs))
+    total_sum_abs = sae_acts_matched_abs.sum()
+    diagonality_abs = diag_sum_abs / total_sum_abs if total_sum_abs > 0 else 0.0
+    sae_results[name]["diagonality_abs"] = diagonality_abs
+
     mean_cosine = cosine_sim[feat_idx, dict_idx].mean()
     print(
         f"{name}: diagonality = {diagonality:.4f} (diag_sum={diag_sum:.2f}, total={total_sum:.2f})  "
@@ -1037,7 +1052,7 @@ for name, res in sae_results.items():
     print(
         f"{'':25s}  {'dec_abs':>8s}  {res['mcc_abs_abs']:9.4f}  {res['mcc_abs_cos']:8.4f}  "
         f"{res['precision_abs']:6.4f}  {res['recall_abs']:6.4f}  "
-        f"{res['f1_abs']:6.4f}  {res['fpr_abs']:6.4f}  {'':>6s}"
+        f"{res['f1_abs']:6.4f}  {res['fpr_abs']:6.4f}  {res.get('diagonality_abs', 0):6.4f}"
     )
     # Encoder matching
     print(

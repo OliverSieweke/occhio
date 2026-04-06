@@ -1,6 +1,4 @@
 # %%
-
-# %%
 """TiedLinearRelu on CorrelatedPairs — basic experiment boilerplate."""
 
 from sae_lens import SAE
@@ -52,7 +50,7 @@ DEVICE = "mps"
 SEED = 42
 N_FEATURES = 1296
 D_HIDDEN = 100
-N_EPOCHS = 15_000
+N_EPOCHS = 25_000
 BATCH_SIZE = 512
 
 # %%
@@ -143,6 +141,11 @@ _ss_tot = np.sum((_y - _y.mean()) ** 2)
 _r2 = 1 - _ss_res / _ss_tot
 _n = len(_x)
 _se_slope = np.sqrt(_ss_res / (_n - 2) / np.sum((_x - _x.mean()) ** 2))
+_corr = np.corrcoef(_x, _y)[0, 1]
+_z = np.arctanh(_corr)
+_z_se = 1.0 / np.sqrt(_n - 3)
+_corr_lo = np.tanh(_z - 1.96 * _z_se)
+_corr_hi = np.tanh(_z + 1.96 * _z_se)
 
 fig = px.scatter(
     x=_x,
@@ -156,7 +159,7 @@ fig.update_traces(marker_size=3, selector=dict(mode="markers"))
 fig.update_traces(opacity=0.8, selector=dict(mode="lines"))
 fig.add_hline(y=0, line_color="gray", line_width=1, layer="below")
 fig.add_annotation(
-    text=f"slope = {_slope:.3f} ± {1.96 * _se_slope:.3f}<br>R² = {_r2:.3f}",
+    text=f"slope = {_slope:.3f} ± {1.96 * _se_slope:.3f}<br>R² = {_r2:.3f}<br>r = {_corr:.3f} [{_corr_lo:.3f}, {_corr_hi:.3f}]",
     xref="paper",
     yref="paper",
     x=0.95,
