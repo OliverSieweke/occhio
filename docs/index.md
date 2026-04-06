@@ -25,17 +25,24 @@ Sparsity
 : The fraction of inputs for which a given feature is inactive.
 
 ```{eval-rst}
-.. autosummary::
-   :toctree: _autosummary
-   :recursive:
+.. toctree::
+   :maxdepth: 2
 
-   occhio
+   source/template.md
 ```
 
 ```{eval-rst}
 .. toctree::
    :maxdepth: 2
+   :caption: API Reference
 
-   source/template.md
-   todos.md
+   api_reference.md
+```
+
+```{eval-rst}
+.. toctree::
+   :maxdepth: 2
+   :caption: Development
+
+   dev/todos.md
 ```

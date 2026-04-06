@@ -3,4 +3,12 @@
     overflow: hidden;
 }
 
+.wy-menu-vertical p.caption {
+    color: #81a1c1;
+}
+
+.wy-nav-side {
+    background: #2e3440;
+}
+
 

@@ -70,6 +70,8 @@ nitpicky = True
 templates_path = ["_templates"]
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 
+_is_readthedocs = bool(os.environ.get("READTHEDOCS", False))
+
 # Check these...
 autodoc_default_options = {
     "members": True,
@@ -84,8 +86,12 @@ autodoc_class_signature = "separated"  # Put class signature on its own line
 # Docstrings
 napoleon_google_docstring = True
 napoleon_numpy_docstring = False
-todo_include_todos = not os.environ.get("READTHEDOCS", False)
-todo_emit_warnings = not os.environ.get("READTHEDOCS", False)
+todo_include_todos = not _is_readthedocs
+todo_emit_warnings = not _is_readthedocs
+if _is_readthedocs:
+    exclude_patterns.append("dev")
+    suppress_warnings = ["toc.excluded"]
+
 
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
