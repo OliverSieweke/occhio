@@ -10,8 +10,7 @@ build:
   jobs:
     create_environment:
       - curl -LsSf https://astral.sh/uv/install.sh | sh
-      - . $HOME/.local/bin/env
-      - uv sync --group docs --no-dev
+      - $HOME/.local/bin/uv sync --group docs --no-dev
     build:
       html:
-        - uv run --no-sync sphinx-build -b html docs $READTHEDOCS_OUTPUT/html
+        - $HOME/.local/bin/uv run --no-sync sphinx-build -b html docs $READTHEDOCS_OUTPUT/html
