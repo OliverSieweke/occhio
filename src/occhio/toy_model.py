@@ -321,6 +321,7 @@ class ToyModel:
                         hook_returns[i].append(h(hook_data))
 
         losses = loss_buffer.cpu().tolist() if loss_buffer is not None else []
+        self.distribution.clear_buffer()
         return losses, hook_returns
 
     def sample_latent(self, batch_size) -> Tensor:
@@ -456,6 +457,7 @@ class ToyModel:
                     params=params,
                     losses=captured_losses,
                 )
+                self.distribution.clear_buffer()
 
     def evaluate_saes(
         self,
@@ -504,6 +506,7 @@ class ToyModel:
                     num_samples=num_samples,
                 )
                 results[label] = sae_record.results
+                self.distribution.clear_buffer()
 
         return results
 

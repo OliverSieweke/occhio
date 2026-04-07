@@ -25,6 +25,12 @@ class HuggingFaceDistribution(Distribution):
         revision: Optional branch, tag, or commit hash.
         device: Torch device for returned samples.
         generator: Optional generator for reproducible sampling order.
+        buffer_size: Number of randomly-selected samples to pre-load onto
+            ``device`` at once, refilling lazily when exhausted. Avoids a
+            CPU→device transfer on every call to :meth:`sample`. Must be >=
+            any ``batch_size`` passed to :meth:`sample`. On non-CPU devices
+            defaults to ~1 GB worth of samples (computed from ``n_features``
+            and dtype); ``None`` (per-batch transfer) on CPU.
 
     Example:
         >>> dist = HuggingFaceDistribution(
@@ -43,6 +49,7 @@ class HuggingFaceDistribution(Distribution):
         data_key: str = "samples",
         device: torch.device | str | None = None,
         generator: torch.Generator | None = None,
+        buffer_size: int | None = None,
     ):
 
         # [2026-04-07 | OliverSieweke] TODO: Method should depend on repo type here / use dataset_info
@@ -93,6 +100,18 @@ class HuggingFaceDistribution(Distribution):
         self.repo_type = repo_type
         self.data_key = data_key
         self.revision = resolved_revision
+        if buffer_size is None and self.device is not None and self.device.type != "cpu":
+            target_bytes = 1 * 1024**3  # 1 GB
+            bytes_per_sample = self.n_features * samples.element_size()
+            buffer_size = target_bytes // bytes_per_sample
+        self.buffer_size = buffer_size
+        self._buffer: torch.Tensor | None = None
+        self._buffer_ptr: int = 0
+
+    def _refill_buffer(self) -> None:
+        indices = self._randint(0, self._n_samples, (self.buffer_size,))
+        self._buffer = self._samples[indices.cpu()].to(self.device)
+        self._buffer_ptr = 0
 
     def sample(self, batch_size: int) -> Tensor:
         """Return random samples with replacement from the cached data.
@@ -103,19 +122,44 @@ class HuggingFaceDistribution(Distribution):
         Returns:
             Tensor of shape ``(batch_size, n_features)``.
         """
-        indices = self._randint(0, self._n_samples, (batch_size,))
-        batch = self._samples[indices.cpu()]
-        return batch.to(self.device) if self.device else batch
+        if self.buffer_size is None:
+            indices = self._randint(0, self._n_samples, (batch_size,))
+            batch = self._samples[indices.cpu()]
+            return batch.to(self.device) if self.device else batch
+
+        if batch_size > self.buffer_size:
+            raise ValueError(
+                f"batch_size ({batch_size}) exceeds buffer_size ({self.buffer_size}). "
+                "Increase buffer_size or reduce batch_size."
+            )
+
+        if self._buffer is None or self._buffer_ptr + batch_size > self.buffer_size:
+            self._refill_buffer()
+
+        batch = self._buffer[self._buffer_ptr : self._buffer_ptr + batch_size]
+        self._buffer_ptr += batch_size
+        return batch
+
+    def clear_buffer(self) -> None:
+        """Release the GPU buffer, freeing device memory.
+
+        The buffer is refilled lazily on the next :meth:`sample` call.
+        """
+        self._buffer = None
+        self._buffer_ptr = 0
 
     def to(self, device: torch.device | str) -> "HuggingFaceDistribution":
         # _samples intentionally stays on CPU — moving it would load the full
         # dataset onto the device, defeating the memory optimisation.
         self.device = torch.device(device)
+        self.clear_buffer()  # buffer was built for the old device
         return self
 
     def __getstate__(self) -> dict:
         state = self.__dict__.copy()
         del state["_samples"]
+        del state["_buffer"]
+        del state["_buffer_ptr"]
         return state
 
     def __setstate__(self, state: dict) -> None:
@@ -129,6 +173,8 @@ class HuggingFaceDistribution(Distribution):
         # [2026-04-02 | OliverSieweke] TODO: make this a method to reuse?
         data = load_file(path)
         self._samples = data[state["data_key"]]
+        self._buffer = None
+        self._buffer_ptr = 0
 
     def __repr__(self) -> str:
         return (

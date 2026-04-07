@@ -3,9 +3,9 @@ from occhio.benchmark.configs import BenchmarkDistributionName, matryoshka_targe
 
 benchmark.evaluate(
     saes=matryoshka_targeted,
-    training_samples=10000,
     distributions=[BenchmarkDistributionName.HIERARCHICAL_PAIRS],
+    training_samples=15_000_000,
     verbose=True,
-    n_loss_snapshots=300,
     export_dir="experiments/benchmark/sweep-analysis/data/matryoshka_targeted",
+    device="cuda"
 )
