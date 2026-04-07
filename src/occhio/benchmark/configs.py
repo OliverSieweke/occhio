@@ -1,4 +1,5 @@
 from enum import Enum, unique
+from itertools import product
 from typing import Callable
 
 from sae_lens import (
@@ -36,6 +37,35 @@ BenchmarkSAEsInput = (
     | dict[BenchmarkDistributionName, list[SAEEntry]]
     | dict[BenchmarkDistributionName, Callable[[ToyModel], list[SAEEntry]]]
 )
+
+k_values = [2, 3, 4, 5, 6, 7]
+width_configs = {
+    "2-level": [162, 648],
+    "3-level": [81, 162, 648],
+    "4-level": [162, 324, 648, 1296],
+}
+
+matryoshka_targeted: BenchmarkSAEsInput = [
+    # aux_loss=True: sweep over all threshold_lr values
+    *[
+        SAEEntry(
+            sae=MatryoshkaBatchTopKTrainingSAE(
+                MatryoshkaBatchTopKTrainingSAEConfig(
+                    d_in=100,
+                    d_sae=1296,
+                    matryoshka_widths=list(widths),
+                    k=k,
+                )
+            ),
+            type="Matryoshka",
+            params={
+                "k": k,
+                "widths": widths_name,
+            },
+        )
+        for k, (widths_name, widths) in product(k_values, width_configs.items())
+    ],
+]
 
 
 def default_benchmark_saes() -> BenchmarkSAEsInput:

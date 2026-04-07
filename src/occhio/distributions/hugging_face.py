@@ -39,12 +39,16 @@ class HuggingFaceDistribution(Distribution):
         repo_id: str,
         filename: str,
         revision: str | None = None,
-        repo_type: str = "dataset",
+        repo_type: str = "model",
         data_key: str = "samples",
         device: torch.device | str | None = None,
         generator: torch.Generator | None = None,
     ):
-        resolved_revision = HfApi().dataset_info(repo_id, revision=revision).sha
+
+        # [2026-04-07 | OliverSieweke] TODO: Method should depend on repo type here / use dataset_info
+        resolved_revision = (
+            HfApi().repo_info(repo_id, revision=revision, repo_type=repo_type).sha
+        )
 
         path = hf_hub_download(
             repo_id=repo_id,

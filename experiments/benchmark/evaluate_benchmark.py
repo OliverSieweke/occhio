@@ -1,3 +1,11 @@
 from occhio import benchmark
+from occhio.benchmark.configs import BenchmarkDistributionName, matryoshka_targeted
 
-benchmark.evaluate(training_samples=100_000, verbose=True, export_dir="test")
+benchmark.evaluate(
+    saes=matryoshka_targeted,
+    training_samples=10000,
+    distributions=[BenchmarkDistributionName.HIERARCHICAL_PAIRS],
+    verbose=True,
+    n_loss_snapshots=300,
+    export_dir="experiments/benchmark/sweep-analysis/data/matryoshka_targeted",
+)

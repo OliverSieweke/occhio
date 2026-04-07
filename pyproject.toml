@@ -45,6 +45,7 @@ dev = [
     "statsmodels>=0.14.6",
     "ty>=0.0.14",
     "graphviz>=0.21",
+    "huggingface-hub[cli]>=0.36.2",
 ]
 
 [tool.pytest.ini_options]
