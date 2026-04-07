@@ -21,9 +21,9 @@ from occhio.toy_model import ToyModel
 
 # --- Publication-ready figure styling ---
 MODEL_COLORS = {
-    "Trained AE": "#2563EB",
-    "Constructed AE": "#16A34A",
-    "Trained AE (normed)": "#DC2626",
+    "Trained AE": "#000c7a",
+    "Constructed AE": "#fcba03",
+    "Trained AE w/ Scalar Bias": "#297a58",
 }
 _THRESH_COLORS = ["#3B82F6", "#F59E0B", "#EF4444"]
 
@@ -54,6 +54,7 @@ def style_fig(fig, nticksx=10, nticksy=8):
             bordercolor="#D1D5DB",
             borderwidth=1,
             itemsizing="constant",
+            font=dict(size=16),
         ),
     )
     fig.update_xaxes(**_AXIS, nticks=nticksx)
@@ -66,7 +67,6 @@ def make_epoch_slider(
     static_arrays,
     epochs,
     titles,
-    title,
     x=None,
     xlabel="Feature Rank",
     extra_animated=None,
@@ -102,6 +102,7 @@ def make_epoch_slider(
         pad = (hi - lo) * 0.05
         y_ranges[prop] = [lo - pad, hi + pad]
 
+    _ms = 2.8  # 3.25 * 0.85 — 15% smaller radius
     # Initial traces: Trained AE (animated) + extra animated + Constructed AE (static)
     for i, prop in enumerate(props):
         fig.add_trace(
@@ -111,7 +112,7 @@ def make_epoch_slider(
                 name="Trained AE",
                 legendgroup="Trained AE",
                 mode="markers",
-                marker=dict(size=3.25, opacity=0.6, color=MODEL_COLORS["Trained AE"]),
+                marker=dict(size=_ms, opacity=1.0, color=MODEL_COLORS["Trained AE"]),
                 showlegend=(i == 0),
             ),
             row=1,
@@ -126,9 +127,7 @@ def make_epoch_slider(
                         name=ea_name,
                         legendgroup=ea_name,
                         mode="markers",
-                        marker=dict(
-                            size=3.25, opacity=0.6, color=MODEL_COLORS[ea_name]
-                        ),
+                        marker=dict(size=_ms, opacity=1.0, color=MODEL_COLORS[ea_name]),
                         showlegend=(i == 0),
                     ),
                     row=1,
@@ -143,7 +142,7 @@ def make_epoch_slider(
                     legendgroup="Constructed AE",
                     mode="markers",
                     marker=dict(
-                        size=3.25, opacity=0.6, color=MODEL_COLORS["Constructed AE"]
+                        size=_ms, opacity=1.0, color=MODEL_COLORS["Constructed AE"]
                     ),
                     showlegend=(i == 0),
                 ),
@@ -168,7 +167,6 @@ def make_epoch_slider(
         )
 
     fig.update_layout(
-        title=title,
         height=500,
         width=max(600, 350 * n),
         sliders=[
@@ -180,9 +178,23 @@ def make_epoch_slider(
             )
         ],
     )
+    # Subplot titles 40% larger than base
+    for ann in fig.layout.annotations:
+        ann.font = dict(size=22)
     for i, prop in enumerate(props):
         fig.update_yaxes(range=y_ranges[prop], row=1, col=i + 1)
-        fig.update_xaxes(title_text=xlabel, row=1, col=i + 1)
+        fig.update_xaxes(title_text=None, row=1, col=i + 1)
+    # Single shared x-axis label centered below all subplots (clear of tick labels)
+    fig.add_annotation(
+        text=xlabel,
+        xref="paper",
+        yref="paper",
+        x=0.5,
+        y=-0.23,
+        showarrow=False,
+        font=dict(size=22),
+    )
+    fig.update_layout(margin=dict(b=100))
     return style_fig(fig)
 
 
@@ -290,7 +302,7 @@ def geometry_hook(data):
         "fd": tm.feature_dimensionalities.detach().cpu().numpy(),
         "fn": tm.feature_norms.detach().cpu().numpy(),
         "ti": tm.total_feature_interferences.detach().cpu().numpy(),
-        "bias": tm.ae.b.detach().cpu().numpy(),
+        "bias": tm.ae.b.detach().cpu().numpy() * np.ones(tm.ae.n_features),
         "mpr": mpr.cpu().numpy(),
         "group_mat": _interference_group_matrix(I_sq_np),
     }
@@ -312,12 +324,6 @@ tm_trained = ToyModel(
     device=DEVICE,
     # hooks=[normalize_W],
 )
-tm_trained_normed = ToyModel(
-    distribution=dist,
-    ae=TiedLinearRelu(N_FEATURES, D_HIDDEN, device=DEVICE, generator=gen1),
-    device=DEVICE,
-    hooks=[normalize_W],
-)
 _, hook_results_trained = tm_trained.fit(
     30000,
     batch_size=BATCH_SIZE,
@@ -330,18 +336,22 @@ geometry_trained = hook_results_trained[2]
 print(f"  Final eval loss: {eval_losses_trained[-1]:.6f}")
 
 # %%
-# --- Train Trained AE (normed) ---
-print("Training Trained AE (normed)...")
-_, hook_results_normed = tm_trained_normed.fit(
+# --- Train Trained AE (scalar bias) ---
+print("Training TiedLinearRelu (scalar bias shared across features)...")
+gen2 = torch.Generator(DEVICE).manual_seed(SEED)
+ae_scalar_bias = TiedLinearRelu(N_FEATURES, D_HIDDEN, device=DEVICE, generator=gen2)
+ae_scalar_bias.b = torch.nn.Parameter(torch.zeros(1, device=DEVICE))
+tm_scalar_bias = ToyModel(distribution=dist, ae=ae_scalar_bias, device=DEVICE)
+_, hook_results_scalar_bias = tm_scalar_bias.fit(
     30000,
     batch_size=BATCH_SIZE,
     hooks=[every(EVAL_FREQ, h) for h in [eval_hook, per_feature_hook, geometry_hook]],
     verbose=True,
 )
-eval_losses_normed = hook_results_normed[0]
-per_feature_normed = hook_results_normed[1]
-geometry_normed = hook_results_normed[2]
-print(f"  Final eval loss: {eval_losses_normed[-1]:.6f}")
+eval_losses_scalar_bias = hook_results_scalar_bias[0]
+per_feature_scalar_bias = hook_results_scalar_bias[1]
+geometry_scalar_bias = hook_results_scalar_bias[2]
+print(f"  Final eval loss: {eval_losses_scalar_bias[-1]:.6f}")
 
 # %%
 # --- Constructed AE (bias only) ---
@@ -482,7 +492,6 @@ make_epoch_slider(
     static_arrays={"mse": pf_constructed[sort_idx]},
     epochs=np.array(eval_epochs),
     titles=["Per-Feature Reconstruction MSE"],
-    title="Per-Feature Reconstruction MSE (sorted by firing probability)",
 ).show()
 
 # %%
@@ -569,13 +578,13 @@ fig.show()
 
 # %%
 # --- Plot: Geometric properties + bias over training (slider) ---
-_geom_props = ["fd", "fn", "ti", "bias", "mpr"]
+_geom_props = ["fn", "ti", "bias", "mpr", "fd"]
 _geom_titles = [
-    "Feature Dimensionalities",
     "Feature Norms",
     "Total Interference",
     "Learned Bias",
     "Mean Partner Rank",
+    "Feature Dimensionalities",
 ]
 
 geom_arrays = {}
@@ -583,10 +592,10 @@ for prop in _geom_props:
     arr = np.array([g[prop] for g in geometry_trained]).T  # (N_FEATURES, n_snapshots)
     geom_arrays[prop] = arr[sort_idx]
 
-geom_arrays_normed = {}
+geom_arrays_scalar_bias = {}
 for prop in _geom_props:
-    arr = np.array([g[prop] for g in geometry_normed]).T
-    geom_arrays_normed[prop] = arr[sort_idx]
+    arr = np.array([g[prop] for g in geometry_scalar_bias]).T
+    geom_arrays_scalar_bias[prop] = arr[sort_idx]
 
 n_snapshots = geom_arrays["fd"].shape[1]
 geom_epochs = (np.arange(n_snapshots) * EVAL_FREQ).astype(int)
@@ -599,8 +608,7 @@ make_epoch_slider(
     static_arrays=constructed_props,
     epochs=geom_epochs,
     titles=_geom_titles,
-    title="Geometric Properties Over Training",
-    extra_animated=[("Trained AE (normed)", geom_arrays_normed)],
+    extra_animated=[("Trained AE w/ Scalar Bias", geom_arrays_scalar_bias)],
 ).show()
 
 # %%
@@ -613,7 +621,6 @@ make_epoch_slider(
     static_arrays={"fn2b": constructed_fn2_bias},
     epochs=geom_epochs,
     titles=["‖w‖² + b"],
-    title="‖w‖² + b (sorted by firing probability)",
 ).show()
 
 # %%
