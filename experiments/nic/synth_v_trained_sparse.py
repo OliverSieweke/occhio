@@ -102,7 +102,7 @@ def make_epoch_slider(
         pad = (hi - lo) * 0.05
         y_ranges[prop] = [lo - pad, hi + pad]
 
-    _ms = 2.8  # 3.25 * 0.85 — 15% smaller radius
+    _ms = 4  # 3.25 * 0.85 — 15% smaller radius
     # Initial traces: Trained AE (animated) + extra animated + Constructed AE (static)
     for i, prop in enumerate(props):
         fig.add_trace(
@@ -335,23 +335,44 @@ per_feature_trained = hook_results_trained[1]
 geometry_trained = hook_results_trained[2]
 print(f"  Final eval loss: {eval_losses_trained[-1]:.6f}")
 
+# # %%
+# # --- Train Trained AE (scalar bias) ---
+# print("Training TiedLinearRelu (scalar bias shared across features)...")
+# gen2 = torch.Generator(DEVICE).manual_seed(SEED)
+# ae_scalar_bias = TiedLinearRelu(N_FEATURES, D_HIDDEN, device=DEVICE, generator=gen2)
+# ae_scalar_bias.b = torch.nn.Parameter(torch.zeros(1, device=DEVICE))
+# tm_scalar_bias = ToyModel(distribution=dist, ae=ae_scalar_bias, device=DEVICE)
+# _, hook_results_scalar_bias = tm_scalar_bias.fit(
+#     30000,
+#     batch_size=BATCH_SIZE,
+#     hooks=[every(EVAL_FREQ, h) for h in [eval_hook, per_feature_hook, geometry_hook]],
+#     verbose=True,
+# )
+# eval_losses_scalar_bias = hook_results_scalar_bias[0]
+# per_feature_scalar_bias = hook_results_scalar_bias[1]
+# geometry_scalar_bias = hook_results_scalar_bias[2]
+# print(f"  Final eval loss: {eval_losses_scalar_bias[-1]:.6f}")
+
 # %%
-# --- Train Trained AE (scalar bias) ---
-print("Training TiedLinearRelu (scalar bias shared across features)...")
+# --- Train Trained AE (unit norms) ---
+print("Training Trained AE w/ Unit Norms...")
 gen2 = torch.Generator(DEVICE).manual_seed(SEED)
-ae_scalar_bias = TiedLinearRelu(N_FEATURES, D_HIDDEN, device=DEVICE, generator=gen2)
-ae_scalar_bias.b = torch.nn.Parameter(torch.zeros(1, device=DEVICE))
-tm_scalar_bias = ToyModel(distribution=dist, ae=ae_scalar_bias, device=DEVICE)
-_, hook_results_scalar_bias = tm_scalar_bias.fit(
+tm_unit_norm = ToyModel(
+    distribution=dist,
+    ae=TiedLinearRelu(N_FEATURES, D_HIDDEN, device=DEVICE, generator=gen2),
+    device=DEVICE,
+    hooks=[normalize_W],
+)
+_, hook_results_unit_norm = tm_unit_norm.fit(
     30000,
     batch_size=BATCH_SIZE,
     hooks=[every(EVAL_FREQ, h) for h in [eval_hook, per_feature_hook, geometry_hook]],
     verbose=True,
 )
-eval_losses_scalar_bias = hook_results_scalar_bias[0]
-per_feature_scalar_bias = hook_results_scalar_bias[1]
-geometry_scalar_bias = hook_results_scalar_bias[2]
-print(f"  Final eval loss: {eval_losses_scalar_bias[-1]:.6f}")
+eval_losses_unit_norm = hook_results_unit_norm[0]
+per_feature_unit_norm = hook_results_unit_norm[1]
+geometry_unit_norm = hook_results_unit_norm[2]
+print(f"  Final eval loss: {eval_losses_unit_norm[-1]:.6f}")
 
 # %%
 # --- Constructed AE (bias only) ---
