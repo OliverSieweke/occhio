@@ -1,7 +1,7 @@
 """SAE metrics visualization.
 
-This module provides plotting utilities for visualizing SAE evaluation metrics
-from toy models, including F1, precision, recall, explained variance, L0, and dead latents.
+Plotting utilities for SAE evaluation metrics: F1, precision, recall,
+explained variance, L0, and dead latents.
 """
 
 from dataclasses import dataclass
@@ -25,24 +25,24 @@ class MetricConfig:
 class SAEClassificationMetricsPlot(BasePlot):
     """Plot SAE evaluation metrics as grouped bar charts.
 
-    Creates a visualization with:
-    - Main bars for classification metrics (F1, precision, recall) and reconstruction metrics
-      (explained variance, L0)
-    - Separate display for dead latent counts
+    Creates a visualization with main bars for classification metrics (F1, precision,
+    recall) and reconstruction metrics (explained variance, L0), plus a separate
+    display for dead latent counts.
 
-    Example::
+    Example:
+        .. code-block:: python
 
-        from occhio import ToyModel
-        from occhio.visualization_2.plots import SAEMetricsPlot
+            from occhio import ToyModel
+            from occhio.visualization_2.plots import SAEMetricsPlot
 
-        # Create and train toy model with SAEs
-        tm = ToyModel(distribution, ae)
-        tm.fit(n_epochs=1000)
-        tm.train_saes({"default": sae1, "topk": sae2})
-        tm.evaluate_saes()
+            # Create and train toy model with SAEs
+            tm = ToyModel(distribution, ae)
+            tm.fit(n_epochs=1000)
+            tm.train_saes({"default": sae1, "topk": sae2})
+            tm.evaluate_saes()
 
-        # Plot metrics
-        SAEMetricsPlot()(tm)
+            # Plot metrics
+            SAEMetricsPlot()(tm)
     """
 
     sae_labels: list[str] | None

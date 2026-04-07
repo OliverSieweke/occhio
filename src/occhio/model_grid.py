@@ -67,26 +67,28 @@ class ModelGrid:
 
     Args:
         create_model: A factory function that accepts a ``dict[str, Any]`` containing
-         axes values at a given grid point, and returns an initialised ``ToyModel``.
+            axes values at a given grid point, and returns an initialised ``ToyModel``.
         axes: An ordered list of ``Axis`` objects defining the grid dimensions.
             At least one axis must be provided.
 
-    Example::
-        def create_model(params):
-            return ToyModel(
-                distribution=SparseUniform(5, p_active=params["Density"]),
-                ae=TiedLinearRelu(5, 2),
-                importances=params["Relative Importance" ** torch.arange(5),
+    Example:
+        .. code-block:: python
+
+            def create_model(params):
+                return ToyModel(
+                    distribution=SparseUniform(5, p_active=params["Density"]),
+                    ae=TiedLinearRelu(5, 2),
+                    importances=params["Relative Importance"] * torch.arange(5),
+                )
+
+
+            model_grid = ModelGrid(
+                create_model,
+                axes=[
+                    Axis(label="Density", values=logspace(0, -2, 32)),
+                    Axis(label="Relative Importance", values=logspace(-1, 1, 32)),
+                ],
             )
-
-
-        model_grid = ModelGrid(
-            create_model,
-            axes=[
-                Axis(label="Density", values=logspace(0, -2, 32)),
-                Axis(label="Relative Importance", values=logspace(-1, 1, 32)),
-            ],
-        )
     """
 
     models: NDArray[np.object_]
@@ -106,17 +108,19 @@ class ModelGrid:
             ValueError: If the iterable is empty or has inconsistent dimensions.
             TypeError: If leaf elements are not ToyModels.
 
-        Example::
-            # 1D grid from a list
-            grid = ModelGrid.from_iterable([model1, model2, model3])
+        Example:
+            .. code-block:: python
 
-            # 2D grid from nested lists
-            grid = ModelGrid.from_iterable(
-                [
-                    [model_a1, model_a2],
-                    [model_b1, model_b2],
-                ]
-            )
+                # 1D grid from a list
+                grid = ModelGrid.from_iterable([model1, model2, model3])
+
+                # 2D grid from nested lists
+                grid = ModelGrid.from_iterable(
+                    [
+                        [model_a1, model_a2],
+                        [model_b1, model_b2],
+                    ]
+                )
         """
 
         def _to_nested_list(obj: Any) -> list | ToyModel:
@@ -303,19 +307,15 @@ class ModelGrid:
                 )
 
     def _build_broadcast(self) -> tuple[list[Distribution], Tensor]:
-        """
-        Groups models by which unique distribution instance they use, so that sample
-        broadcasting (i.e., generating samples only once per set of equivalent distributions)
-        is efficient during training.
-
-        Returns:
-            (broadcasters, broadcast_map):
-                broadcasters: a list of unique Distribution objects used by the models.
-                broadcast_map: a tensor that, for each model (flattened), gives the index
-                                  into broadcasters for its distribution.
+        """Groups models by unique distribution instance for efficient sample broadcasting.
 
         Generator-less distributions are never grouped together because their
         sampling state cannot be synchronized — each gets its own broadcaster slot.
+
+        Returns:
+            Tuple of ``(broadcasters, broadcast_map)`` where ``broadcasters`` is a list
+            of unique Distribution objects and ``broadcast_map`` is a tensor mapping each
+            flattened model to its broadcaster index.
         """
         flattened_models: NDArray[np.object_] = self.models.ravel()
         # Maps each unique distribution hash to its assigned broadcaster index

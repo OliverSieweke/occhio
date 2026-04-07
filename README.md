@@ -1,3 +1,6 @@
+![](https://app.readthedocs.org/projects/occhio/badge/?version=latest&style=flat-square)
+
+
 > [!CAUTION]
 >
 > Work in Progress
@@ -82,3 +85,4 @@ uv run --extra mcp fastmcp dev inspector src/occhio/mcp/server.py
 ## For AI Agents
 
 See `AGENTS.md` for specific AI agent instructions.
+

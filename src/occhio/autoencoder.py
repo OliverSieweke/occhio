@@ -225,13 +225,10 @@ class AutoEncoderBase(nn.Module, ABC):
         with the desired architecture — this method only overwrites
         parameter data in-place.
 
-        Parameters
-        ----------
-        path : str | Path
-            Path to a ``.safetensors`` file (extension auto-appended).
-        strict : bool
-            Passed to ``nn.Module.load_state_dict``.  When *True* (default),
-            raises on missing or unexpected keys.
+        Args:
+            path: Path to a ``.safetensors`` file (extension auto-appended).
+            strict: Passed to ``nn.Module.load_state_dict``.  When *True* (default),
+                raises on missing or unexpected keys.
         """
         path = Path(path)
         if path.suffix != ".safetensors":
@@ -431,11 +428,9 @@ class TiedMLPEncoder(AutoEncoderBase):
     This gives the MLP extra capacity over TiedLinearRelu while preserving
     the encoder-decoder symmetry that helps with superposition geometry.
 
-    Parameters
-    ----------
-    dims : list[int]
-        Layer dimensions from input to latent, e.g. [200, 200, 20].
-        The decoder mirrors this in reverse.
+    Args:
+        dims: Layer dimensions from input to latent, e.g. [200, 200, 20].
+            The decoder mirrors this in reverse.
     """
 
     def __init__(self, dims: list[int], **kwargs):
@@ -493,26 +488,21 @@ class TiedMLPEncoder(AutoEncoderBase):
 
 
 class ComputeAutoEncoder(AutoEncoderBase):
-    """
-    Autoencoder with a tied encoder/decoder and a linear compute step.
+    """Autoencoder with a tied encoder/decoder and a linear compute step.
 
     Subclasses occhio's AutoEncoderBase so it exposes encode/decode and slots
     into ToyModel for geometric analysis (feature norms, interferences, etc.).
 
-    Parameters
-    ----------
-    N : int   — number of features
-    k : int   — hidden / latent dimension
-    decode_activation : "softmax" | "relu"
-        "softmax" — outputs a probability simplex; use for one-hot targets (CE/MSE).
-        "relu"    — outputs non-negative values; use for continuous targets like x @ P.
-    seed : int — weight init seed
+    Weights: W (k, N) tied encoder/decoder, Z (k, k) linear compute step,
+    b (N,) decode bias.
 
-    Weights
-    -------
-    W : (k, N) — tied encoder / decoder
-    Z : (k, k) — linear compute step
-    b : (N,)   — decode bias
+    Args:
+        N: Number of features.
+        k: Hidden / latent dimension.
+        decode_activation: ``"softmax"`` outputs a probability simplex (use for
+            one-hot targets with CE/MSE); ``"relu"`` outputs non-negative values
+            (use for continuous targets like ``x @ P``).
+        seed: Weight init seed.
     """
 
     def __init__(
@@ -598,16 +588,11 @@ class AttnLinearAE(AutoEncoderBase):
 
     The softmax constraint forces each head's contribution to be a convex combination of its dictionary vectors, providing the architectural inductive bias for Minkowski-style tile representations.
 
-    Parameters
-    ----------
-    n_features : int
-        Input / output dimensionality.
-    n_hidden : int
-        Total latent dimensionality (must be divisible by ``n_heads``).
-    n_heads : int
-        Number of independent softmax heads.
-    dict_size : int
-        Number of dictionary elements (archetypes) per head.
+    Args:
+        n_features: Input / output dimensionality.
+        n_hidden: Total latent dimensionality (must be divisible by ``n_heads``).
+        n_heads: Number of independent softmax heads.
+        dict_size: Number of dictionary elements (archetypes) per head.
     """
 
     def __init__(
@@ -720,16 +705,11 @@ class AttnAttnAE(AutoEncoderBase):
     Both encoder and decoder use independent per-head softmax-weighted
     dictionary lookups with separate parameters.
 
-    Parameters
-    ----------
-    n_features : int
-        Input / output dimensionality.
-    n_hidden : int
-        Total latent dimensionality (must be divisible by ``n_heads``).
-    n_heads : int
-        Number of independent softmax heads.
-    dict_size : int
-        Number of dictionary elements (archetypes) per head.
+    Args:
+        n_features: Input / output dimensionality.
+        n_hidden: Total latent dimensionality (must be divisible by ``n_heads``).
+        n_heads: Number of independent softmax heads.
+        dict_size: Number of dictionary elements (archetypes) per head.
     """
 
     def __init__(
@@ -843,16 +823,11 @@ class LinearAttnAE(AutoEncoderBase):
     This is the complement of ``AttnLinearAE`` which uses attention for
     encoding and a linear projection for decoding.
 
-    Parameters
-    ----------
-    n_features : int
-        Input / output dimensionality.
-    n_hidden : int
-        Total latent dimensionality (must be divisible by ``n_heads``).
-    n_heads : int
-        Number of independent softmax heads in the decoder.
-    dict_size : int
-        Number of dictionary elements (archetypes) per decoder head.
+    Args:
+        n_features: Input / output dimensionality.
+        n_hidden: Total latent dimensionality (must be divisible by ``n_heads``).
+        n_heads: Number of independent softmax heads in the decoder.
+        dict_size: Number of dictionary elements (archetypes) per decoder head.
     """
 
     def __init__(
@@ -943,22 +918,14 @@ class SynthAE(AutoEncoderBase):
     Uses a chunked implementation to reduce memory from O(N^2) to
     O(chunk_size × N).
 
-    Parameters
-    ----------
-    n_features : int
-        Number of ground-truth features N.
-    n_hidden : int
-        Hidden dimension D (must satisfy N ≥ D for meaningful superposition).
-    orthogonalize : bool
-        Run the orthogonalization procedure on init.
-    ortho_lambda : float
-        Norm penalty weight λ in L_ortho.
-    ortho_steps : int
-        Number of gradient descent iterations.
-    ortho_lr : float
-        Learning rate for the orthogonalization optimizer.
-    ortho_chunk_size : int
-        Block size for chunked pairwise dot products.
+    Args:
+        n_features: Number of ground-truth features N.
+        n_hidden: Hidden dimension D (must satisfy N ≥ D for meaningful superposition).
+        orthogonalize: Run the orthogonalization procedure on init.
+        ortho_lambda: Norm penalty weight λ in L_ortho.
+        ortho_steps: Number of gradient descent iterations.
+        ortho_lr: Learning rate for the orthogonalization optimizer.
+        ortho_chunk_size: Block size for chunked pairwise dot products.
     """
 
     def __init__(
@@ -1046,7 +1013,7 @@ class SynthAE(AutoEncoderBase):
     def rho_mm(self) -> float:
         """Mean max absolute cosine similarity (superposition metric).
 
-        ρ_mm = (1/N) Σ_i max_{j≠i} |d_i^T d_j|
+        $\\rho_{mm} = \\frac{1}{N} \\sum_i \\max_{j \\neq i} |d_i^T d_j|$
 
         Returns 0 for fully orthogonal features, approaches 1 for full superposition.
         """

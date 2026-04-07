@@ -40,10 +40,12 @@ Sphinx configuration is in `docs/conf.py`:
 ## Docstring Convention
 
 Use **Google style** docstrings throughout. References:
+
 - [Google Python Style Guide — Docstrings](https://google.github.io/styleguide/pyguide.html#38-comments-and-docstrings)
 - [Napoleon docs](https://sphinxcontrib-napoleon.readthedocs.io/)
 
 Example:
+
 ```python
 def sample(self, batch_size: int, generator: Generator | None = None) -> Tensor:
     """Sample a batch of features.
@@ -58,7 +60,6 @@ def sample(self, batch_size: int, generator: Generator | None = None) -> Tensor:
 ```
 
 - Types are **not** repeated in the docstring body — rely on type hints instead.
-- Rendered by `sphinx.ext.napoleon` (must be enabled in `docs/conf.py`).
 
 ## When to Build Docs
 

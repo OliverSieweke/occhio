@@ -129,8 +129,8 @@ class CompositePlot:
         """Parse the raw layout into plot entries and Plotly specs.
 
         Returns:
-            entries: List of SubplotSpec instances.
-            specs: 2D list suitable for make_subplots(specs=...).
+            A tuple of a SubplotSpec list and a 2D Plotly specs grid suitable
+            for make_subplots(specs=...).
         """
         subplots: list[SubplotSpec] = []
         specs: PlotlySpecsGrid = [

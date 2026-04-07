@@ -62,8 +62,11 @@ docs = [
     "sphinx-rtd-theme>=3.1.0",
     "sphinx-notfound-page>=1.1.0",
     "sphinx-llm>=0.3.0",
-    "sphinx-autodoc-typehints>=2.0",
+    "sphinx-autodoc2>=0.5",
     "sphinx-copybutton>=0.5.2",
+    "linkify-it-py>=2.1.0",
+    "sphinx-design>=0.6.1",
+    "sphinxcontrib-bibtex>=2.6.3",
 ]
 dev = [
     "pre-commit>=4.5.1",
@@ -83,6 +86,8 @@ dev = [
     "statsmodels>=0.14.6",
     "ty>=0.0.14",
     "graphviz>=0.21",
+    "fastmcp>=2.0",
+    "httpx>=0.27",
 ]
 
 [tool.pytest.ini_options]
@@ -91,9 +96,5 @@ asyncio_mode = "auto"
 
 
 # Occhio MCP Server
-mcp = [
-    "fastmcp>=2.0",
-    "httpx>=0.27",
-]
 [project.scripts]
 occhio-mcp = "occhio.mcp.server:main"

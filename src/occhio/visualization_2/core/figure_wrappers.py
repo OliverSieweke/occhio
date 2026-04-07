@@ -7,12 +7,11 @@ from IPython.display import HTML, display
 class FigureProxy:
     """Proxy that intercepts subplot-aware Plotly methods to auto-inject row/col.
 
-    Automatically handles:
-    - **Legend deduplication**: Same trace names across subplots show only once
-    - **Axis label deduplication**: X-axis labels only on bottom row, y-axis labels
-      only on left column. Applied automatically after each add_trace() call and
-      when update_xaxes()/update_yaxes() is called without explicit showticklabels.
-      Override by passing showticklabels=True explicitly.
+    Automatically handles legend deduplication (same trace names show only once)
+    and axis label deduplication (x-axis labels only on bottom row, y-axis labels
+    only on left column). Applied after each ``add_trace()`` call and when
+    ``update_xaxes()``/``update_yaxes()`` is called without explicit
+    ``showticklabels``. Override by passing ``showticklabels=True`` explicitly.
 
     Subclasses of BasePlot can simply add traces and configure axes without
     worrying about grid context.

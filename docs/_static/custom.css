@@ -1,3 +1,14 @@
+:root {
+    --sd-color-card-border-hover: #88c0d0;
+}
+
+.sd-card-footer {
+    font-size: 0.8em;
+    font-style: italic;
+    opacity: 0.8;
+    background-color: #edeff3;
+}
+
 .wy-side-nav-search a.icon img {
     border-radius: 50%;
     overflow: hidden;
@@ -7,8 +18,33 @@
     color: #81a1c1;
 }
 
+.wy-menu-vertical a.caption-link {
+    all: unset;
+    display: block;
+    cursor: pointer;
+}
+
+.wy-menu-vertical a.caption-link:hover p.caption {
+    opacity: 0.8;
+}
+
+.wy-menu-vertical a.caption-link:hover .caption-text {
+    text-decoration: underline;
+}
+
 .wy-nav-side {
     background: #2e3440;
 }
+
+.card-footer-icon {
+    color: #d18770;
+    margin-right: 0.5rem;
+}
+
+.page-icon {
+    color: #a3be8c;
+    margin-right: 0.3rem;
+}
+
 
 
