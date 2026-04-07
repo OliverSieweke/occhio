@@ -64,7 +64,6 @@ EVAL_FREQ = 250
 
 # %%
 # --- Zipfian firing probabilities ---
-# Matches the SyntheticDataModel zipfian config: p_max=0.4, p_min=0.5/N, alpha=0.5
 high = 0.3
 low = 1.28 / N_FEATURES
 alpha = np.log(high / low) / np.log(N_FEATURES)
