@@ -3,6 +3,8 @@ from itertools import product
 from typing import Callable
 
 from sae_lens import (
+    BatchTopKTrainingSAE,
+    BatchTopKTrainingSAEConfig,
     MatchingPursuitTrainingSAE,
     MatchingPursuitTrainingSAEConfig,
     MatryoshkaBatchTopKTrainingSAE,
@@ -46,22 +48,22 @@ width_configs = {
 }
 
 matryoshka_targeted: BenchmarkSAEsInput = [
-        SAEEntry(
-            sae=MatryoshkaBatchTopKTrainingSAE(
-                MatryoshkaBatchTopKTrainingSAEConfig(
-                    d_in=100,
-                    d_sae=648,
-                    matryoshka_widths=widths,
-                    k=k,
-                )
-            ),
-            type="Matryoshka",
-            params={
-                "k": k,
-                "widths": widths_name,
-            },
-        )
-        for k, (widths_name, widths) in product(k_values, width_configs.items())
+    SAEEntry(
+        sae=MatryoshkaBatchTopKTrainingSAE(
+            MatryoshkaBatchTopKTrainingSAEConfig(
+                d_in=100,
+                d_sae=648,
+                matryoshka_widths=widths,
+                k=k,
+            )
+        ),
+        type="Matryoshka",
+        params={
+            "k": k,
+            "widths": widths_name,
+        },
+    )
+    for k, (widths_name, widths) in product(k_values, width_configs.items())
 ]
 
 

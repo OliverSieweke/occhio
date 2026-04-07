@@ -871,7 +871,7 @@ class ModelGrid:
             flattened_models, desc="Training SAEs", unit="model", disable=not verbose
         ):
             model.train_saes(
-                saes=saes,
+                saes=deepcopy(saes),
                 training_samples=training_samples,
                 batch_size=batch_size,
                 lr=lr,
