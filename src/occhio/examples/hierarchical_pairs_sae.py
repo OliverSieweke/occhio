@@ -18,19 +18,55 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+# --- Paper-quality plot defaults ---
+FONT = dict(family="Times New Roman, serif", size=24, color="#333333")
+AXIS_STYLE = dict(
+    showgrid=True,
+    gridcolor="rgba(0,0,0,0.02)",
+    gridwidth=1,
+    zeroline=False,
+    linecolor="#666666",
+    linewidth=1,
+    ticks="outside",
+    ticklen=4,
+    tickwidth=1,
+    tickcolor="#666666",
+    minor=dict(ticks="outside", ticklen=2),
+    tickfont_size=18,
+)
+LAYOUT_DEFAULTS = dict(
+    template="plotly_white",
+    font=FONT,
+    title_font_size=18,
+    legend=dict(
+        x=0.95,
+        y=0.95,
+        xanchor="right",
+        yanchor="top",
+        bgcolor="rgba(255,255,255,0.9)",
+        bordercolor="#cccccc",
+        borderwidth=1,
+        font_size=20,
+        itemsizing="constant",
+    ),
+    margin=dict(l=60, r=20, t=50, b=50),
+    plot_bgcolor="white",
+    paper_bgcolor="white",
+)
+
 # %%
 torch.set_printoptions(3, sci_mode=False)
 gen = torch.Generator()
-gen.manual_seed(3)
+gen.manual_seed(4)
 
-N_FEAT = 2
-N_HIDDEN = 2
+N_FEAT = 8
+N_HIDDEN = 4
 
 dist = HierarchicalPairs(
     n_features=N_FEAT,
     p_active=0.8,
     p_follow=0.6,
-    beta=0.99,
+    beta=0.9,
     generator=gen,
 )
 
@@ -40,7 +76,11 @@ tm = ToyModel(dist, ae, importances=0.99 ** torch.arange(N_FEAT))
 losses = tm.fit(25_000, verbose=True)[0]
 
 # %%
-px.line(losses, title="ToyModel loss")
+fig_loss = px.line(losses, title="ToyModel loss")
+fig_loss.update_layout(**LAYOUT_DEFAULTS)
+fig_loss.update_xaxes(**AXIS_STYLE)
+fig_loss.update_yaxes(**AXIS_STYLE)
+fig_loss
 
 # %%
 W = tm.W  # (n_hidden, n_features)
@@ -55,52 +95,112 @@ for p in range(N_FEAT // 2):
 
 # %%
 emb = tm.W.detach().numpy()
-px.scatter(
+fig_emb = px.scatter(
     x=emb[0],
     y=emb[1],
     hover_name=[f"f{i}" for i in range(N_FEAT)],
     color=[f"f{i}" for i in range(N_FEAT)],
     title="Feature embeddings",
 )
+fig_emb.update_layout(**LAYOUT_DEFAULTS)
+fig_emb.update_xaxes(**AXIS_STYLE)
+fig_emb.update_yaxes(**AXIS_STYLE)
+fig_emb
 
 # %%
 gen_sae = torch.Generator()
 gen_sae.manual_seed(4)
 
-sae = SAESimple(N_HIDDEN, N_FEAT + 4, l1_coef=0.05, generator=gen_sae)
+sae = SAESimple(N_HIDDEN, N_FEAT + 4, l1_coef=0.15, generator=gen_sae)
 sae_losses = sae.train_sae(tm.sample_latent, 20_000)
 
-px.line(sae_losses, title="SAE loss")
+fig_sae_loss = px.line(sae_losses, title="SAE loss")
+fig_sae_loss.update_layout(**LAYOUT_DEFAULTS)
+fig_sae_loss.update_xaxes(**AXIS_STYLE)
+fig_sae_loss.update_yaxes(**AXIS_STYLE)
+fig_sae_loss
 
 # %%
-samples = dist.sample(512)
+samples = dist.sample(128)
 embedded = tm.encode(samples).detach().numpy().T
-reconstructed = sae.decode(sae.encode(tm.encode(samples))).detach().numpy().T
+W_np = tm.W.detach().numpy()  # (n_hidden, n_features)
 
 fig = go.Figure()
+
+
+# Arrows for each W column (feature direction)
+for j in range(N_FEAT):
+    color_rgba = "rgba(33,102,172,0.9)" if j % 2 == 0 else "rgba(214,96,77,0.9)"
+    color_solid = "#2166ac" if j % 2 == 0 else "#d6604d"
+    # Line from origin to W column
+
+    # Arrowhead at the tip
+    fig.add_annotation(
+        x=W_np[0, j],
+        y=W_np[1, j],
+        ax=W_np[0, j] * 0.0,
+        ay=W_np[1, j] * 0.0,
+        xref="x",
+        yref="y",
+        axref="x",
+        ayref="y",
+        showarrow=True,
+        arrowhead=3,
+        arrowsize=1.5,
+        arrowwidth=2.5,
+        arrowcolor=color_rgba,
+        opacity=1.0,
+        text="",
+    )
+    # Label (offset beyond the arrow tip)
+    label_offset = 1.1
+    fig.add_trace(
+        go.Scatter(
+            x=[W_np[0, j] * 0.9 + (W_np[0, 0] + W_np[0, 1]) * 0.1],
+            y=[W_np[1, j] * 0.9 + (W_np[1, 0] + W_np[1, 1]) * 0.1],
+            mode="text",
+            text=["parent" if j == 0 else "child"],
+            textposition="middle center",
+            textfont=dict(size=24, color=color_solid),
+            showlegend=False,
+        )
+    )
 fig.add_trace(
-    go.Scatter(x=embedded[0], y=embedded[1], mode="markers", name="Ground Truth")
+    go.Scatter(
+        x=embedded[0],
+        y=embedded[1],
+        mode="markers",
+        name="Encoded samples",
+        marker=dict(size=8, opacity=0.5, color="#111111"),
+        showlegend=False,
+    )
 )
-fig.add_trace(
-    go.Scatter(x=reconstructed[0], y=reconstructed[1], mode="markers", name="SAE")
+fig.update_layout(
+    **LAYOUT_DEFAULTS,
+    # title="Latent space with feature directions (W columns)",
 )
-fig.update_layout(title="Latent space: ground truth vs SAE reconstruction")
+fig.update_xaxes(**AXIS_STYLE)
+fig.update_yaxes(**AXIS_STYLE)
 fig
 
 # %%
 patterns = torch.eye(N_FEAT)
 encoded_patterns = sae.encode(tm.encode(patterns)).detach().numpy()
-px.imshow(
+fig_imshow = px.imshow(
     encoded_patterns,
     title="Feature -> SAE Dictionary",
     labels=dict(x="Dictionary Dim", y="Feature"),
 )
+fig_imshow.update_layout(**LAYOUT_DEFAULTS)
+fig_imshow
 
 # %% --- Feature embeddings + matched SAE decoder + decoder bias ---
 
 feat_idx, dict_idx = linear_sum_assignment(-encoded_patterns)
 matched_W_dec = sae.W_dec.detach().numpy()[dict_idx]  # (n_matched, n_hidden)
 b_dec_np = sae.b_dec.detach().numpy()
+
+LABEL_SIZE = 26
 
 fig_match = go.Figure()
 
@@ -123,10 +223,11 @@ fig_match.add_trace(
         x=emb[0],
         y=emb[1],
         mode="markers+text",
-        marker=dict(size=12, color="blue"),
-        text=[f"f{i}" for i in range(N_FEAT)],
+        marker=dict(size=14, color="blue"),
+        text=["parent", "child"],
         textposition="top center",
-        name="AE features (W)",
+        textfont=dict(size=LABEL_SIZE),
+        name="AE features",
     )
 )
 
@@ -136,10 +237,10 @@ fig_match.add_trace(
         x=matched_W_dec[:, 0],
         y=matched_W_dec[:, 1],
         mode="markers+text",
-        marker=dict(size=12, symbol="diamond", color="red"),
-        text=[f"d{d}→f{f}" for f, d in zip(feat_idx, dict_idx)],
-        textposition="bottom center",
-        name="SAE dict (matched)",
+        marker=dict(size=14, symbol="diamond", color="red"),
+        text=[" ", " "],
+        textposition="top center",
+        name="SAE latents",
     )
 )
 
@@ -174,10 +275,11 @@ fig_match.add_trace(
         x=[f0f1_sum[0]],
         y=[f0f1_sum[1]],
         mode="markers+text",
-        marker=dict(size=12, symbol="star", color="purple"),
-        text=["f0+f1"],
+        marker=dict(size=18, symbol="star", color="purple"),
+        text=["parent+child"],
         textposition="top center",
-        name="f0 + f1",
+        textfont=dict(size=LABEL_SIZE),
+        name="Joint Firing",
     )
 )
 
@@ -187,20 +289,24 @@ fig_match.add_trace(
         x=[b_dec_np[0]],
         y=[b_dec_np[1]],
         mode="markers+text",
-        marker=dict(size=12, color="green", symbol="cross"),
+        marker=dict(size=14, color="green", symbol="cross"),
         text=["b_dec"],
-        textposition="top center",
-        name="SAE decoder bias",
+        textposition="middle right",
+        textfont=dict(size=LABEL_SIZE),
+        name="SAE bias",
     )
 )
 
 mcc = float(np.abs(encoded_patterns)[feat_idx, dict_idx].mean())
 fig_match.update_layout(
-    title=f"Feature embeddings vs matched SAE decoder (MCC={mcc:.3f})",
+    **LAYOUT_DEFAULTS,
+    # title=f"Feature embeddings vs matched SAE decoder (MCC={mcc:.3f})",
     xaxis_title="h₀",
     yaxis_title="h₁",
     height=600,
 )
+fig_match.update_xaxes(**AXIS_STYLE)
+fig_match.update_yaxes(**AXIS_STYLE)
 fig_match
 
 # %%
@@ -224,13 +330,15 @@ for p in range(n_pairs):
 
 patterns = torch.stack(rows)
 encoded = sae.encode(ae.encode(patterns)).detach().numpy()
-px.imshow(
+fig_pc = px.imshow(
     encoded,
     title="Parent vs Parent+Child -> SAE activations",
     labels=dict(x="Dictionary Dim", y="Pattern"),
     y=labels,
     color_continuous_scale="Reds",
 )
+fig_pc.update_layout(**LAYOUT_DEFAULTS)
+fig_pc
 
 # %%
 # Phase transition: angle between parent-child pairs vs beta
@@ -288,17 +396,21 @@ for p in range(n_pairs):
         )
     )
 fig.update_layout(
+    **LAYOUT_DEFAULTS,
     title="Parent-Child Pair Angle vs Beta",
     xaxis_title="Beta",
     yaxis_title="Angle (degrees)",
 )
+fig.update_xaxes(**AXIS_STYLE)
+fig.update_yaxes(**AXIS_STYLE)
 fig
 
 # %%
 # Phase transition: angle vs beta AND p_active (2D grid)
 
 BETA_VALUES_2D = torch.linspace(0.0, 1.0, 9)
-P_ACTIVE_VALUES = torch.logspace(np.log10(0.05), np.log10(0.95), 9)
+# P_ACTIVE_VALUES = torch.logspace(np.log10(0.05), np.log10(0.95), 9)
+P_ACTIVE_VALUES = torch.linspace(0.05, 0.95, 9)
 
 
 def create_model_2d(params: dict):
@@ -327,6 +439,7 @@ grid_2d = ModelGrid(
 grid_2d.fit(25_000, verbose=True)
 
 # %%
+# --- Plot: phase transition ---
 n_pairs = N_FEAT // 2
 n_pa = len(P_ACTIVE_VALUES)
 n_beta = len(BETA_VALUES_2D)
@@ -348,18 +461,24 @@ for pa_idx in range(n_pa):
                 torch.acos(cos.clamp(-1, 1)).item() * 180 / torch.pi
             )
 
+n_cols = (n_pairs + 1) // 2
+n_rows = 2 if n_pairs > 1 else 1
+
 fig = make_subplots(
-    rows=1,
-    cols=n_pairs,
-    subplot_titles=[f"Pair {p}: f{2 * p}–f{2 * p + 1}" for p in range(n_pairs)],
+    rows=n_rows,
+    cols=n_cols,
+    subplot_titles=[f"Pair {p}" for p in range(n_pairs)],
     shared_yaxes=True,
-    horizontal_spacing=0.05,
+    horizontal_spacing=0.08,
+    vertical_spacing=0.12,
 )
 
 beta_labels = [f"{v:.2f}" for v in BETA_VALUES_2D.tolist()]
 pa_labels = [f"{v:.2f}" for v in P_ACTIVE_VALUES.tolist()]
 
 for p in range(n_pairs):
+    r = p // n_cols + 1
+    c = p % n_cols + 1
     fig.add_trace(
         go.Heatmap(
             z=angle_grids[p].numpy(),
@@ -367,18 +486,26 @@ for p in range(n_pairs):
             y=pa_labels,
             coloraxis="coloraxis",
         ),
-        row=1,
-        col=p + 1,
+        row=r,
+        col=c,
     )
-    fig.update_xaxes(title_text="Beta", row=1, col=p + 1)
+    if r == n_rows:
+        fig.update_xaxes(title_text="Beta", row=r, col=c)
+    else:
+        fig.update_xaxes(showticklabels=False, row=r, col=c)
+    if c == 1:
+        fig.update_yaxes(title_text="p_active", row=r, col=c)
 
-fig.update_yaxes(title_text="p_active", row=1, col=1)
 fig.update_layout(
-    title="Parent-Child Pair Angle (degrees) vs Beta and p_active",
+    **LAYOUT_DEFAULTS,
+    # title="Parent-Child Pair Angle (degrees) vs Beta and p_active",
     coloraxis=dict(colorscale="Reds", colorbar_title="Angle (°)"),
-    height=450,
-    width=300 * n_pairs,
+    height=300 * n_rows,
+    width=300 * n_cols,
 )
+fig.update_annotations(font_size=24)
+fig.update_xaxes(tickfont_size=18)
+fig.update_yaxes(tickfont_size=18)
 fig
 
 # %% --- Phase transition: angle vs beta AND p_follow (averaged over seeds) ---
@@ -461,6 +588,7 @@ for p in range(n_pairs):
 
 fig.update_yaxes(title_text="p_follow", row=1, col=1)
 fig.update_layout(
+    **LAYOUT_DEFAULTS,
     title=f"Parent-Child Pair Angle (degrees) vs Beta and p_follow (avg over {len(TRAINING_SEEDS)} seeds)",
     coloraxis=dict(colorscale="Reds", colorbar_title="Angle (°)"),
     height=450,

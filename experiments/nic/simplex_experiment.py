@@ -5,16 +5,53 @@ import numpy as np
 import torch
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from scipy.optimize import linear_sum_assignment
 
 from occhio.autoencoder import TiedLinearRelu
 from occhio.distributions import SimplexDistribution, SimplicialComplexDistribution
 from occhio.toy_model import ToyModel
 
+# --- Paper-quality plot defaults ---
+FONT = dict(family="Times New Roman, serif", size=24, color="#333333")
+AXIS_STYLE = dict(
+    showgrid=False,
+    gridcolor="rgba(0,0,0,0.02)",
+    gridwidth=1,
+    zeroline=False,
+    linecolor="#666666",
+    linewidth=1,
+    ticks="outside",
+    ticklen=4,
+    tickwidth=1,
+    tickcolor="#666666",
+    minor=dict(ticks="outside", ticklen=2),
+    tickfont_size=18,
+)
+LAYOUT_DEFAULTS = dict(
+    template="plotly_white",
+    font=FONT,
+    title_font_size=18,
+    legend=dict(
+        x=0.95,
+        y=0.95,
+        xanchor="right",
+        yanchor="top",
+        bgcolor="rgba(255,255,255,0.9)",
+        bordercolor="#cccccc",
+        borderwidth=1,
+        font_size=20,
+        itemsizing="constant",
+    ),
+    margin=dict(l=60, r=20, t=50, b=50),
+    plot_bgcolor="white",
+    paper_bgcolor="white",
+)
+
 # %%
 DEVICE = "mps"
 gen = torch.Generator(DEVICE)
-gen.manual_seed(6)
+gen.manual_seed(1)
 
 # 3 simplices of size 3 → 9 features total
 # simplex_sizes = [2, 2, 2]
@@ -23,11 +60,20 @@ n_features = 9
 n_hidden = 3
 
 
-random.seed(7)
 FACE_DIM = 1
 N_FACES = n_features
 p_active = 1 / (N_FACES)
 faces = [(0, 1, 2), (1, 2, 3), (4, 5, 6), (6, 7, 8)]
+# faces = [
+#     (0, 1, 2),
+#     (0, 2, 3),
+#     (0, 3, 4),
+#     (0, 4, 1),
+#     (5, 1, 2),
+#     (5, 2, 3),
+#     (5, 3, 4),
+#     (5, 4, 1),
+# ]
 
 dist = SimplicialComplexDistribution(
     n_vertices=n_features,
@@ -42,17 +88,20 @@ ae = TiedLinearRelu(n_features, n_hidden, generator=gen, device=DEVICE)
 tm = ToyModel(distribution=dist, ae=ae, device=DEVICE)
 
 # %%
-losses, _ = tm.fit(25_000, 256, verbose=True)
+losses, _ = tm.fit(30_000, 256, verbose=True)
 
 # %%
-px.line(y=losses, labels={"x": "Epoch", "y": "Loss"}, title="Training loss").show()
-
-# %%
-W = tm.W.detach().cpu().numpy()  # (n_hidden, n_features)
-
+fig_loss = px.line(y=losses, labels={"x": "Epoch", "y": "Loss"}, title="Training loss")
+fig_loss.update_layout(**LAYOUT_DEFAULTS)
+fig_loss.update_xaxes(**AXIS_STYLE)
+fig_loss.update_yaxes(**AXIS_STYLE)
+fig_loss
 
 # %%
 # Sample 256 points, encode into hidden space, and visualise
+W = tm.W.detach().cpu().numpy()  # (n_hidden, n_features)
+
+
 with torch.no_grad():
     samples = dist.sample(512)
     hidden = tm.ae.encode(samples).cpu().numpy()
@@ -65,13 +114,74 @@ for row in samples_cpu:
     active_verts.append(",".join(verts) if verts else "none")
 
 fig2 = go.Figure()
+
+# # Wall projection (shadow on h₀–h₂ plane at y-min) for depth cue
+# y_wall = float(hidden[:, 1].min()) - 0.05
+# fig2.add_trace(
+#     go.Scatter3d(
+#         x=hidden[:, 0],
+#         y=[y_wall] * len(hidden),
+#         z=hidden[:, 2],
+#         mode="markers",
+#         marker=dict(size=1.5, opacity=0.15, color="black"),
+#         showlegend=False,
+#         hoverinfo="skip",
+#     )
+# )
+
+# # Shadow of face edges on the y-wall
+# for i, face in enumerate(dist.faces):
+#     edges = list(zip(face, face[1:])) + [(face[-1], face[0])]
+#     for a, b in edges:
+#         fig2.add_trace(
+#             go.Scatter3d(
+#                 x=[W[0, a], W[0, b]],
+#                 y=[y_wall, y_wall],
+#                 z=[W[2, a], W[2, b]],
+#                 mode="lines",
+#                 line=dict(width=1.5, color="rgba(0,0,0,0.15)"),
+#                 showlegend=False,
+#                 hoverinfo="skip",
+#             )
+#         )
+
+# # Back wall projection (shadow on h₁–h₂ plane at x-min) for depth cue
+# x_wall = float(hidden[:, 0].min()) - 0.05
+# fig2.add_trace(
+#     go.Scatter3d(
+#         x=[x_wall] * len(hidden),
+#         y=hidden[:, 1],
+#         z=hidden[:, 2],
+#         mode="markers",
+#         marker=dict(size=1.5, opacity=0.15, color="black"),
+#         showlegend=False,
+#         hoverinfo="skip",
+#     )
+# )
+
+# # Shadow of face edges on the x-wall
+# for i, face in enumerate(dist.faces):
+#     edges = list(zip(face, face[1:])) + [(face[-1], face[0])]
+#     for a, b in edges:
+#         fig2.add_trace(
+#             go.Scatter3d(
+#                 x=[x_wall, x_wall],
+#                 y=[W[1, a], W[1, b]],
+#                 z=[W[2, a], W[2, b]],
+#                 mode="lines",
+#                 line=dict(width=1.5, color="rgba(0,0,0,0.15)"),
+#                 showlegend=False,
+#                 hoverinfo="skip",
+#             )
+#         )
+
 fig2.add_trace(
     go.Scatter3d(
         x=hidden[:, 0],
         y=hidden[:, 1],
         z=hidden[:, 2],
         mode="markers",
-        marker=dict(size=2, opacity=0.3, color="gray"),
+        marker=dict(size=2, opacity=0.3, color="black"),
         text=active_verts,
         hovertemplate="Active vertices: %{text}<extra></extra>",
         name="Encoded samples",
@@ -85,27 +195,36 @@ fig2.add_trace(
         y=W[1],
         z=W[2],
         mode="markers+text",
-        marker=dict(size=6),
+        marker=dict(size=8, opacity=0.9, color="red"),
         text=[f"v{j}" for j in range(n_features)],
         textposition="top center",
         name="Vertices",
     )
 )
-# for j in range(n_features):
-#     fig2.add_trace(
-#         go.Scatter3d(
-#             x=[0, W[0, j]],
-#             y=[0, W[1, j]],
-#             z=[0, W[2, j]],
-#             mode="lines",
-#             line=dict(width=2),
-#             showlegend=False,
-#             hoverinfo="skip",
-#         )
-#     )
 
-# Draw edges between vertices that share a face
+# Draw filled triangles and edges for each face
+face_colors = [
+    "rgba(31,119,180,0.9)",
+    "rgba(255,127,14,0.8)",
+    "rgba(44,160,44,0.8)",
+    "rgba(214,39,40,0.9)",
+]
 for i, face in enumerate(dist.faces):
+    verts = list(face)
+    # fig2.add_trace(
+    #     go.Mesh3d(
+    #         x=W[0, verts],
+    #         y=W[1, verts],
+    #         z=W[2, verts],
+    #         i=[0], j=[1], k=[2],
+    #         color=face_colors[i % len(face_colors)],
+    #         flatshading=False,
+    #         lighting=dict(ambient=0.5, diffuse=0.7, specular=0.9, fresnel=0.4),
+    #         lightposition=dict(x=1000, y=1000, z=1000),
+    #         showlegend=False,
+    #         hoverinfo="skip",
+    #     )
+    # )
     edges = list(zip(face, face[1:])) + [(face[-1], face[0])]
     for a, b in edges:
         fig2.add_trace(
@@ -114,45 +233,73 @@ for i, face in enumerate(dist.faces):
                 y=[W[1, a], W[1, b]],
                 z=[W[2, a], W[2, b]],
                 mode="lines",
-                line=dict(width=1, color="gray"),
+                line=dict(width=2, color="black"),
                 showlegend=False,
                 hoverinfo="skip",
             )
         )
 
 fig2.update_layout(
+    **LAYOUT_DEFAULTS,
     title="Encoded samples in hidden space",
     scene=dict(
         xaxis_title="h₀",
         yaxis_title="h₁",
         zaxis_title="h₂",
+        xaxis=dict(
+            showticklabels=False,
+            ticks="",
+            showbackground=False,
+            showgrid=True,
+            gridcolor="rgba(0,0,0,0.02)",
+        ),
+        yaxis=dict(
+            showticklabels=False,
+            ticks="",
+            showbackground=False,
+            showgrid=True,
+            gridcolor="rgba(0,0,0,0.02)",
+        ),
+        zaxis=dict(
+            showticklabels=False,
+            ticks="",
+            showbackground=False,
+            showgrid=True,
+            gridcolor="rgba(0,0,0,0.02)",
+        ),
         aspectmode="cube",
+        # camera=dict(
+        #     eye=dict(x=1.4, y=0.8, z=-1.1),
+        #     up=dict(x=0, y=0, z=1),
+        # ),
     ),
     height=700,
 )
-fig2.show()
+fig2
 
 # %%
 WtW = (tm.W.T @ tm.W).detach().cpu().numpy()
-px.imshow(
+fig_wtw = px.imshow(
     WtW,
     title="W^T W (feature cosine structure)",
     labels=dict(x="Feature", y="Feature"),
     x=[f"v{j}" for j in range(n_features)],
     y=[f"v{j}" for j in range(n_features)],
-).show()
+)
+fig_wtw.update_layout(**LAYOUT_DEFAULTS)
+fig_wtw
 
 # %% --- SAE training ---
 from occhio.sae.sae import SAESimple
 
 N_DICT = 5
-SAE_STEPS = 20_000
+SAE_STEPS = 40_000
 SAE_BATCH = 1024
 SAE_LR = 3e-4
 SAE_L1 = 0.15
 
 gen_sae = torch.Generator()
-gen_sae.manual_seed(0)
+gen_sae.manual_seed(9)
 
 sae = SAESimple(
     n_latent=n_hidden,
@@ -179,14 +326,19 @@ sae_losses = sae.train_sae(
 )
 
 # %%
-px.line(
+fig_sae_loss = px.line(
     y=sae_losses,
     title="SAE Training Loss",
     labels={"x": "Step", "y": "Loss"},
     log_y=True,
-).show()
+)
+fig_sae_loss.update_layout(**LAYOUT_DEFAULTS)
+fig_sae_loss.update_xaxes(**AXIS_STYLE)
+fig_sae_loss.update_yaxes(**AXIS_STYLE)
+fig_sae_loss
 
-# %% --- SAE metrics ---
+# %%
+# --- SAE metrics ---
 with torch.no_grad():
     test_x = dist.sample(10_000).to(DEVICE)
     test_hidden = tm.ae.encode(test_x)
@@ -207,7 +359,8 @@ print(
     f"L0={l0:.1f}  Dead={n_dead}/{N_DICT}  MSE={recon_mse:.6f}  ExplVar={explained_var:.4f}"
 )
 
-# %% --- MCC: cosine similarity matching between SAE decoder and ground-truth features ---
+# %%
+# --- MCC: cosine similarity matching between SAE decoder and ground-truth features ---
 with torch.no_grad():
     D = tm.W.detach()  # (n_hidden, n_features) — columns are feature directions
     W_dec_t = sae.W_dec.detach().T  # (n_hidden, N_DICT)
@@ -221,7 +374,8 @@ with torch.no_grad():
 
 print(f"MCC (|cos|)={mcc:.4f}  MCC (cos)={mcc_signed:.4f}")
 
-# %% --- SAE activations on one-hot features (cosine-matched) ---
+# %%
+# --- SAE activations on one-hot features (cosine-matched) ---
 with torch.no_grad():
     eye = torch.eye(n_features, device=DEVICE)
     sae_acts = sae.encode(tm.ae.encode(eye)).cpu().numpy()  # (n_features, N_DICT)
@@ -244,35 +398,40 @@ total_sum = sae_acts_matched.sum()
 diagonality = diag_sum / total_sum if total_sum > 0 else 0.0
 print(f"Diagonality={diagonality:.4f}")
 
-px.imshow(
+fig_acts = px.imshow(
     sae_acts_matched,
     labels=dict(x="SAE dict element (cosine matched)", y="Feature (cosine matched)"),
     x=col_labels,
     y=row_labels,
-    title=f"SAE one-hot activations (cosine matched, diag={diagonality:.3f})",
+    title=f"SAE activations (cosine matched, diag={diagonality:.3f})",
     aspect="auto",
     color_continuous_scale="ylgnbu_r",
-).show()
+)
+fig_acts.update_layout(**LAYOUT_DEFAULTS)
+fig_acts
 
-# %% --- Dual: one-hot SAE latents → decoded feature activations (unmatched) ---
+# %%
+# --- Dual: one-hot SAE latents → decoded feature activations (unmatched) ---
 with torch.no_grad():
-    eye_dict = torch.eye(N_DICT, device=DEVICE) * torch.tensor(
-        [0.4, 0.4, 0.7, 0.7, 0.4], device="mps"
-    )
+    eye_dict = torch.eye(N_DICT, device=DEVICE) * 0.5
+
+    # * torch.tensor( [0.8, 0.7, 0.7, 0.7, 0.8], device="mps")
     decoded_acts = (
         tm.ae.decode(sae.decode(eye_dict)).cpu().numpy()
     )  # (N_DICT, n_features)
     decoded_acts = np.maximum(decoded_acts, 0)
 
-px.imshow(
+fig_dual = px.imshow(
     decoded_acts,
     labels=dict(x="Feature", y="SAE dict element"),
     x=[f"v{f}" for f in range(n_features)],
     y=[f"d{d}" for d in range(N_DICT)],
-    title="Dual: one-hot SAE latent → ae.decode(sae.decode(·))",
+    # title="Dual: one-hot SAE latent → ae.decode(sae.decode(·))",
     aspect="auto",
     color_continuous_scale="Blues",
-).show()
+)
+fig_dual.update_layout(**LAYOUT_DEFAULTS)
+fig_dual
 
 # %% --- Activation-based matching (Hungarian on one-hot SAE activations) ---
 feat_idx_act, dict_idx_act = linear_sum_assignment(-sae_acts)
@@ -305,121 +464,19 @@ print(
 print(f"[Cosine matching]     Diagonality={diagonality:.4f}")
 print(f"[Cosine matching]     MCC (|cos|)={mcc:.4f}  MCC (cos)={mcc_signed:.4f}")
 
-px.imshow(
-    sae_acts_matched_act,
-    labels=dict(
-        x="SAE dict element (activation matched)", y="Feature (activation matched)"
-    ),
-    x=col_labels_act,
-    y=row_labels_act,
-    title=f"SAE one-hot activations (activation matched, diag={diagonality_act:.3f})",
-    aspect="auto",
-    color_continuous_scale="ylgnbu_r",
-).show()
 
-# %% --- Cosine similarity matrix (matched order) + encoder bias ---
-from plotly.subplots import make_subplots
-
+# %% --- Detection metrics (both matchings) ---
 cos_sim_matched = cos_sim_raw[np.ix_(row_order, col_order)]
 
 with torch.no_grad():
     b_enc_np = sae.b_enc.detach().cpu().numpy()[col_order]
 
-fig_cos = make_subplots(
-    rows=2,
-    cols=1,
-    row_heights=[0.85, 0.15],
-    shared_xaxes=True,
-    vertical_spacing=0.02,
-)
 
-fig_cos.add_trace(
-    go.Heatmap(
-        z=cos_sim_matched,
-        x=col_labels,
-        y=row_labels,
-        colorscale="RdBu",
-        zmin=-1,
-        zmax=1,
-        colorbar=dict(title="cos sim"),
-    ),
-    row=1,
-    col=1,
-)
-
-fig_cos.add_trace(
-    go.Bar(
-        x=col_labels,
-        y=b_enc_np,
-        marker_color="green",
-        name="b_enc",
-    ),
-    row=2,
-    col=1,
-)
-
-fig_cos.update_layout(
-    title=f"Cosine similarity (matched, mean={mcc_signed:.3f})",
-    height=700,
-    showlegend=False,
-)
-fig_cos.update_yaxes(title_text="Feature (matched)", row=1, col=1)
-fig_cos.update_yaxes(title_text="b_enc", row=2, col=1)
-fig_cos.update_xaxes(title_text="SAE dict element (matched)", row=2, col=1)
-fig_cos.show()
-
-# %% --- Cosine similarity matrix (activation-matched order) + encoder bias ---
 cos_sim_matched_act = cos_sim_raw[np.ix_(row_order_act, col_order_act)]
 
 with torch.no_grad():
     b_enc_np_act = sae.b_enc.detach().cpu().numpy()[col_order_act]
 
-fig_cos_act = make_subplots(
-    rows=2,
-    cols=1,
-    row_heights=[0.85, 0.15],
-    shared_xaxes=True,
-    vertical_spacing=0.02,
-)
-
-fig_cos_act.add_trace(
-    go.Heatmap(
-        z=cos_sim_matched_act,
-        x=col_labels_act,
-        y=row_labels_act,
-        colorscale="RdBu",
-        zmin=-1,
-        zmax=1,
-        colorbar=dict(title="cos sim"),
-    ),
-    row=1,
-    col=1,
-)
-
-fig_cos_act.add_trace(
-    go.Bar(
-        x=col_labels_act,
-        y=b_enc_np_act,
-        marker_color="green",
-        name="b_enc",
-    ),
-    row=2,
-    col=1,
-)
-
-fig_cos_act.update_layout(
-    title=f"Cosine similarity (activation matched, mean={cos_mcc_act_signed:.3f})",
-    height=700,
-    showlegend=False,
-)
-fig_cos_act.update_yaxes(title_text="Feature (activation matched)", row=1, col=1)
-fig_cos_act.update_yaxes(title_text="b_enc", row=2, col=1)
-fig_cos_act.update_xaxes(
-    title_text="SAE dict element (activation matched)", row=2, col=1
-)
-fig_cos_act.show()
-
-# %% --- Detection metrics (both matchings) ---
 with torch.no_grad():
     det_x = dist.sample(50_000).to(DEVICE)
     det_hidden = tm.ae.encode(det_x)
@@ -444,7 +501,8 @@ for label, fi, di in [
         f"[{label:10s}] Precision={prec.mean():.4f}  Recall={rec.mean():.4f}  F1={f1.mean():.4f}"
     )
 
-# %% --- Plot W embedding + matched SAE decoder dictionary ---
+# %%
+# --- Plot W embedding + matched SAE decoder dictionary ---
 with torch.no_grad():
     W_dec_np = sae.W_dec.detach().cpu().numpy()  # (N_DICT, n_hidden)
 
@@ -473,7 +531,7 @@ fig3.add_trace(
         marker=dict(size=2, opacity=0.3, color="gray"),
         text=active_verts,
         hovertemplate="Active vertices: %{text}<extra></extra>",
-        name="Encoded samples",
+        name="Samples",
     )
 )
 
@@ -487,7 +545,7 @@ fig3.add_trace(
         marker=dict(size=6, color="blue"),
         text=[f"v{j}" for j in range(n_features)],
         textposition="top center",
-        name="AE features (W)",
+        name="AE features",
     )
 )
 
@@ -501,7 +559,7 @@ fig3.add_trace(
         marker=dict(size=6, symbol="diamond", color="red"),
         text=[f"d{d}→v{f}" for f, d in zip(feat_idx, dict_idx)],
         textposition="bottom center",
-        name="SAE dict (matched)",
+        name="SAE dict",
     )
 )
 
@@ -517,7 +575,7 @@ fig3.add_trace(
         marker=dict(size=8, color="green", symbol="cross"),
         text=["b_dec"],
         textposition="top center",
-        name="SAE decoder bias",
+        name="SAE bias",
     )
 )
 
@@ -536,7 +594,24 @@ for i in range(len(feat_idx)):
         )
     )
 
+# Draw simplex edges
+for i, face in enumerate(dist.faces):
+    edges = list(zip(face, face[1:])) + [(face[-1], face[0])]
+    for a, b in edges:
+        fig3.add_trace(
+            go.Scatter3d(
+                x=[W[0, a], W[0, b]],
+                y=[W[1, a], W[1, b]],
+                z=[W[2, a], W[2, b]],
+                mode="lines",
+                line=dict(width=2, color="black"),
+                showlegend=False,
+                hoverinfo="skip",
+            )
+        )
+
 fig3.update_layout(
+    **LAYOUT_DEFAULTS,
     title="AE embedding (W) vs matched SAE decoder dictionary",
     scene=dict(
         xaxis_title="h₀",
@@ -546,7 +621,7 @@ fig3.update_layout(
     ),
     height=700,
 )
-fig3.show()
+fig3
 
 # %% --- Plot W embedding + activation-matched SAE decoder dictionary ---
 matched_W_dec_act = W_dec_np[dict_idx_act]  # (n_matched, n_hidden)
@@ -620,6 +695,7 @@ for i in range(len(feat_idx_act)):
     )
 
 fig4.update_layout(
+    **LAYOUT_DEFAULTS,
     title="AE embedding (W) vs activation-matched SAE decoder dictionary",
     scene=dict(
         xaxis_title="h₀",
@@ -629,6 +705,6 @@ fig4.update_layout(
     ),
     height=700,
 )
-fig4.show()
+fig4
 
 # %%

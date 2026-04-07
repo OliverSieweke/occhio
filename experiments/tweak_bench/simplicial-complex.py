@@ -14,13 +14,44 @@ from occhio.autoencoder import TiedLinearRelu
 from occhio.distributions import SimplicialComplexDistribution
 from occhio.toy_model import ToyModel
 
+# --- Paper-quality plot defaults ---
+FONT = dict(family="Times New Roman, serif", size=24, color="#333333")
+AXIS_STYLE = dict(
+    showgrid=False,
+    gridcolor="rgba(0,0,0,0.08)",
+    gridwidth=1,
+    zeroline=False,
+    linecolor="#666666",
+    linewidth=1,
+    ticks="outside",
+    ticklen=4,
+    tickwidth=1,
+    tickcolor="#666666",
+    tickfont_size=18,
+    minor=dict(ticks="outside", ticklen=2),
+)
+LAYOUT_DEFAULTS = dict(
+    template="plotly_white",
+    font=FONT,
+    title_font_size=24,
+    legend=dict(
+        bgcolor="rgba(255,255,255,0.9)",
+        bordercolor="#cccccc",
+        borderwidth=1,
+        font_size=24,
+    ),
+    margin=dict(l=60, r=20, t=50, b=50),
+    plot_bgcolor="white",
+    paper_bgcolor="white",
+)
+
 # %%
 # --- Configuration ---
 DEVICE = "mps"
 SEED = 42
 N_FEATURES = 1296
 D_HIDDEN = 100
-N_EPOCHS = 15_000
+N_EPOCHS = 20_000
 BATCH_SIZE = 512
 
 # %%
@@ -103,6 +134,57 @@ fig.update_layout(
 )
 fig.show()
 
+
+# %%
+# --- Plot: Empirical correlation vs interference ---
+empirical_corr = torch.corrcoef(samples.T.cpu())
+interferences = tm.interferences.detach().cpu()
+rows_i, rows_j = torch.triu_indices(N_FEATURES, N_FEATURES, offset=1)
+pair_corr = empirical_corr[rows_i, rows_j].numpy()
+pair_interf = interferences[rows_i, rows_j].numpy()
+
+_x = pair_corr[:100_000]
+_y = pair_interf[:100_000]
+_slope, _intercept = np.polyfit(_x, _y, 1)
+_resid = _y - (_slope * _x + _intercept)
+_ss_res = np.sum(_resid**2)
+_ss_tot = np.sum((_y - _y.mean()) ** 2)
+_r2 = 1 - _ss_res / _ss_tot
+_n = len(_x)
+_se_slope = np.sqrt(_ss_res / (_n - 2) / np.sum((_x - _x.mean()) ** 2))
+_corr = np.corrcoef(_x, _y)[0, 1]
+_z = np.arctanh(_corr)
+_z_se = 1.0 / np.sqrt(_n - 3)
+_corr_lo = np.tanh(_z - 1.96 * _z_se)
+_corr_hi = np.tanh(_z + 1.96 * _z_se)
+
+fig = px.scatter(
+    x=_x,
+    y=_y,
+    labels={"x": "Empirical correlation", "y": "Interference"},
+    opacity=0.8,
+    trendline="ols",
+    trendline_color_override="black",
+)
+fig.update_traces(marker_size=3, selector=dict(mode="markers"))
+fig.update_traces(opacity=0.8, selector=dict(mode="lines"))
+fig.add_hline(y=0, line_color="gray", line_width=1, layer="below")
+fig.add_annotation(
+    text=f"slope = {_slope:.3f} ± {1.96 * _se_slope:.3f}<br>R² = {_r2:.3f}<br>r = {_corr:.3f} [{_corr_lo:.3f}, {_corr_hi:.3f}]",
+    xref="paper",
+    yref="paper",
+    x=0.95,
+    y=0.05,
+    showarrow=False,
+    font=dict(size=22),
+    bgcolor="rgba(255,255,255,0.8)",
+    bordercolor="#cccccc",
+    borderwidth=1,
+)
+fig.update_layout(**LAYOUT_DEFAULTS)
+fig.update_xaxes(**AXIS_STYLE)
+fig.update_yaxes(**AXIS_STYLE)
+fig.show()
 
 # %%
 # --- SAE Training ---
