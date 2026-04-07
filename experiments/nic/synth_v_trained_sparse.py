@@ -20,7 +20,11 @@ from occhio.distributions.sparse import SparseUniform
 from occhio.toy_model import ToyModel
 
 # --- Publication-ready figure styling ---
-MODEL_COLORS = {"Trained AE": "#2563EB", "Constructed AE": "#16A34A"}
+MODEL_COLORS = {
+    "Trained AE": "#2563EB",
+    "Constructed AE": "#16A34A",
+    "Trained AE (normed)": "#DC2626",
+}
 _THRESH_COLORS = ["#3B82F6", "#F59E0B", "#EF4444"]
 
 _AXIS = dict(
@@ -33,6 +37,8 @@ _AXIS = dict(
     tickcolor="#374151",
     minor=dict(ticks="outside", tickcolor="#9CA3AF"),
     zeroline=False,
+    tickfont=dict(size=15),
+    title_font=dict(size=15),
 )
 
 
@@ -41,7 +47,7 @@ def style_fig(fig, nticksx=10, nticksy=8):
     fig.update_layout(
         plot_bgcolor="white",
         paper_bgcolor="white",
-        font=dict(family="Arial, Helvetica, sans-serif", size=13, color="#1F2937"),
+        font=dict(family="Times New Roman, Times, serif", size=13, color="#1F2937"),
         title_font=dict(size=15),
         legend=dict(
             bgcolor="rgba(255,255,255,0.95)",
@@ -63,10 +69,20 @@ def make_epoch_slider(
     title,
     x=None,
     xlabel="Feature Rank",
+    extra_animated=None,
 ):
-    """Build 1×N subplot figure with epoch slider (animated + static scatter)."""
+    """Build 1×N subplot figure with epoch slider (animated + static scatter).
+
+    Parameters
+    ----------
+    extra_animated : list of (name, epoch_arrays_dict), optional
+        Additional animated series. Each entry's epoch_arrays_dict has the same
+        structure as *epoch_arrays* (``{prop: (N, n_snapshots)}``).
+    """
     props = list(epoch_arrays.keys())
     n = len(props)
+    if extra_animated is None:
+        extra_animated = []
     if x is None:
         x = np.arange(epoch_arrays[props[0]].shape[0])
 
@@ -78,12 +94,15 @@ def make_epoch_slider(
         vals = [epoch_arrays[prop].ravel()]
         if static_arrays and prop in static_arrays:
             vals.append(static_arrays[prop])
+        for _, ea in extra_animated:
+            if prop in ea:
+                vals.append(ea[prop].ravel())
         all_vals = np.concatenate(vals)
         lo, hi = float(np.nanmin(all_vals)), float(np.nanmax(all_vals))
         pad = (hi - lo) * 0.05
         y_ranges[prop] = [lo - pad, hi + pad]
 
-    # Initial traces: Trained AE (animated) + Constructed AE (static) per subplot
+    # Initial traces: Trained AE (animated) + extra animated + Constructed AE (static)
     for i, prop in enumerate(props):
         fig.add_trace(
             go.Scatter(
@@ -98,6 +117,23 @@ def make_epoch_slider(
             row=1,
             col=i + 1,
         )
+        for ea_name, ea in extra_animated:
+            if prop in ea:
+                fig.add_trace(
+                    go.Scatter(
+                        x=x,
+                        y=ea[prop][:, 0],
+                        name=ea_name,
+                        legendgroup=ea_name,
+                        mode="markers",
+                        marker=dict(
+                            size=3.25, opacity=0.6, color=MODEL_COLORS[ea_name]
+                        ),
+                        showlegend=(i == 0),
+                    ),
+                    row=1,
+                    col=i + 1,
+                )
         if static_arrays and prop in static_arrays:
             fig.add_trace(
                 go.Scatter(
@@ -115,13 +151,16 @@ def make_epoch_slider(
                 col=i + 1,
             )
 
-    # Slider: update animated traces, re-supply static data to keep them visible
+    # Slider: update all animated + static traces
     has_static = static_arrays is not None
     steps = []
     for s in range(len(epochs)):
         y_update = []
         for prop in props:
             y_update.append(epoch_arrays[prop][:, s])
+            for _, ea in extra_animated:
+                if prop in ea:
+                    y_update.append(ea[prop][:, s])
             if has_static and prop in static_arrays:
                 y_update.append(static_arrays[prop])
         steps.append(
@@ -151,7 +190,7 @@ def make_epoch_slider(
 # --- Configuration ---
 DEVICE = "mps"
 SEED = 42
-N_FEATURES = 1000
+N_FEATURES = 500
 D_HIDDEN = 64
 N_EPOCHS = 30_000
 BATCH_SIZE = 512
@@ -160,8 +199,8 @@ EVAL_FREQ = 250
 
 # %%
 # --- Zipfian firing probabilities (soft decay) ---
-high = 0.2
-low = 0.5 / N_FEATURES  # zipfian decay
+high = 0.3
+low = 1.28 / N_FEATURES  # zipfian decay
 alpha = np.log(high / low) / np.log(N_FEATURES)
 print(f"{alpha=}")
 
@@ -267,14 +306,18 @@ def normalize_W(tm):
 # --- Train Trained AE ---
 print("Training Trained AE...")
 gen1 = torch.Generator(DEVICE).manual_seed(SEED)
-ae_trained = TiedLinearRelu(N_FEATURES, D_HIDDEN, device=DEVICE, generator=gen1)
 tm_trained = ToyModel(
     distribution=dist,
-    ae=ae_trained,
+    ae=TiedLinearRelu(N_FEATURES, D_HIDDEN, device=DEVICE, generator=gen1),
+    device=DEVICE,
+    # hooks=[normalize_W],
+)
+tm_trained_normed = ToyModel(
+    distribution=dist,
+    ae=TiedLinearRelu(N_FEATURES, D_HIDDEN, device=DEVICE, generator=gen1),
     device=DEVICE,
     hooks=[normalize_W],
 )
-
 _, hook_results_trained = tm_trained.fit(
     30000,
     batch_size=BATCH_SIZE,
@@ -285,6 +328,20 @@ eval_losses_trained = hook_results_trained[0]
 per_feature_trained = hook_results_trained[1]
 geometry_trained = hook_results_trained[2]
 print(f"  Final eval loss: {eval_losses_trained[-1]:.6f}")
+
+# %%
+# --- Train Trained AE (normed) ---
+print("Training Trained AE (normed)...")
+_, hook_results_normed = tm_trained_normed.fit(
+    30000,
+    batch_size=BATCH_SIZE,
+    hooks=[every(EVAL_FREQ, h) for h in [eval_hook, per_feature_hook, geometry_hook]],
+    verbose=True,
+)
+eval_losses_normed = hook_results_normed[0]
+per_feature_normed = hook_results_normed[1]
+geometry_normed = hook_results_normed[2]
+print(f"  Final eval loss: {eval_losses_normed[-1]:.6f}")
 
 # %%
 # --- Constructed AE (bias only) ---
@@ -316,7 +373,7 @@ pf_constructed = per_feature_constructed[-1]
 print(f"  Final eval loss: {loss_constructed:.6f}")
 
 # %% --- SAE training on both models (SAELens Standard SAE) ---
-N_DICT = 500
+N_DICT = N_FEATURES // 2
 SAE_BATCH = 1024
 SAE_LR = 3e-4
 SAE_L1 = 0.2
@@ -526,6 +583,11 @@ for prop in _geom_props:
     arr = np.array([g[prop] for g in geometry_trained]).T  # (N_FEATURES, n_snapshots)
     geom_arrays[prop] = arr[sort_idx]
 
+geom_arrays_normed = {}
+for prop in _geom_props:
+    arr = np.array([g[prop] for g in geometry_normed]).T
+    geom_arrays_normed[prop] = arr[sort_idx]
+
 n_snapshots = geom_arrays["fd"].shape[1]
 geom_epochs = (np.arange(n_snapshots) * EVAL_FREQ).astype(int)
 
@@ -537,7 +599,8 @@ make_epoch_slider(
     static_arrays=constructed_props,
     epochs=geom_epochs,
     titles=_geom_titles,
-    title="Geometric Properties Over Training (sorted by firing probability)",
+    title="Geometric Properties Over Training",
+    extra_animated=[("Trained AE (normed)", geom_arrays_normed)],
 ).show()
 
 # %%
