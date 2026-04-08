@@ -50,8 +50,17 @@ def model_domain_center(
         if subplot is None:
             continue
 
-        x_domain = fig.layout[subplot.xaxis.plotly_name].domain
-        y_domain = fig.layout[subplot.yaxis.plotly_name].domain
+        # Domain subplots (e.g., Indicator, Pie) have x/y directly
+        # XY subplots have xaxis/yaxis that reference layout axes
+        if hasattr(subplot, "xaxis") and hasattr(subplot, "yaxis"):
+            x_domain = fig.layout[subplot.xaxis.plotly_name].domain
+            y_domain = fig.layout[subplot.yaxis.plotly_name].domain
+        elif hasattr(subplot, "x") and hasattr(subplot, "y"):
+            # SubplotDomain: x and y are tuples like (0.0, 0.45)
+            x_domain = subplot.x
+            y_domain = subplot.y
+        else:
+            continue
 
         left, right = (min(left, x_domain[0]), max(right, x_domain[1]))
         bottom, top = (min(bottom, y_domain[0]), max(top, y_domain[1]))

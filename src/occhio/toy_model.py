@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from safetensors.torch import load_file
@@ -17,6 +18,7 @@ from sae_lens.synthetic import (
     eval_sae_on_synthetic_data,
     train_toy_sae,
 )
+from sae_lens.training.sae_trainer import SAETrainer, TrainStepInput
 from torch import Tensor
 from torch.optim import AdamW, Optimizer
 from tqdm.auto import tqdm
@@ -26,6 +28,51 @@ from .distributions import Distribution
 from .sae_lens_adapter.activation_generator import ActivationGeneratorWrapper
 from .sae_lens_adapter.feature_dictionary import FeatureDictionaryWrapper
 from .utils.device import _same_device
+from .utils.logging import suppress_tqdm
+
+
+@dataclass
+class SAEEntry:
+    """Declares an SAE to train, with optional sweep metadata.
+
+    Args:
+        sae: The SAE instance to train.
+        type: SAE type name (e.g. "Matryoshka", "Standard").
+        params: Optional dict of sweep parameters (e.g. ``{"k": 2}``).
+            These are propagated to :class:`SAERecord` and flattened into
+            DataFrame columns by :meth:`ModelGrid.sae_results_to_dataframe`.
+        label: Optional human-readable label. If *None*, auto-generated as
+            ``"{type}_{index}"`` where index is per-type.
+    """
+
+    sae: TrainingSAE
+    type: str
+    params: dict[str, Any] | None = None
+    label: str | None = None
+
+
+def _resolve_sae_entries(
+    entries: list[SAEEntry],
+) -> dict[str, tuple[TrainingSAE, str, dict[str, Any] | None]]:
+    """Convert a list of :class:`SAEEntry` to a labelled dict.
+
+    Returns a dict mapping ``label -> (sae, sae_type, params)``.
+    Labels are auto-generated as ``"{type}_{per_type_index}"`` when not
+    explicitly set on the entry.
+    """
+    type_counts: dict[str, int] = {}
+    result: dict[str, tuple[TrainingSAE, str, dict[str, Any] | None]] = {}
+    for entry in entries:
+        if entry.label is not None:
+            label = entry.label
+        else:
+            idx = type_counts.get(entry.type, 0)
+            type_counts[entry.type] = idx + 1
+            label = f"{entry.type}_{idx}"
+        if label in result:
+            raise ValueError(f"Duplicate SAE label: '{label}'")
+        result[label] = (entry.sae, entry.type, entry.params)
+    return result
 
 
 @dataclass
@@ -33,7 +80,10 @@ class SAERecord:
     """Holds an SAE and its evaluation results."""
 
     sae: TrainingSAE
+    sae_type: str | None = None
+    params: dict[str, Any] | None = None
     results: SyntheticDataEvalResult | None = None
+    losses: list[tuple[int, float]] | None = None
 
 
 class ToyModel:
@@ -271,6 +321,7 @@ class ToyModel:
                         hook_returns[i].append(h(hook_data))
 
         losses = loss_buffer.cpu().tolist() if loss_buffer is not None else []
+        self.distribution.clear_buffer()
         return losses, hook_returns
 
     def sample_latent(self, batch_size) -> Tensor:
@@ -303,7 +354,7 @@ class ToyModel:
 
     def train_saes(
         self,
-        saes: dict[str, TrainingSAE],
+        saes: list[SAEEntry] | Callable[["ToyModel"], list[SAEEntry]],
         training_samples: int = 10_000_000,
         batch_size: int = 1024,
         lr: float = 0.0003,
@@ -314,11 +365,13 @@ class ToyModel:
         autocast_sae: bool = False,
         autocast_data: bool = False,
         verbose: bool = False,
+        n_loss_snapshots: int | None = None,
     ) -> None:
         """Train SAE(s) on this model's hidden activations using SAE Lens.
 
         Args:
-            saes: Dict mapping labels to SAEs.
+            saes: A list of :class:`SAEEntry` instances, or a callable that
+                takes a :class:`ToyModel` and returns such a list.
             training_samples: Number of training samples (sae_lens param, default: 10M).
             batch_size: Training batch size (sae_lens param, default: 1024).
             lr: Learning rate (sae_lens param, default: 0.0003).
@@ -329,11 +382,24 @@ class ToyModel:
             autocast_sae: Use autocast for SAE (sae_lens param, default: False).
             autocast_data: Use autocast for data (sae_lens param, default: False).
             verbose: Whether to show progress bars. Defaults to False.
+            n_loss_snapshots: If set, record the overall loss at this many
+                evenly-spaced snapshots and store in SAERecord.losses. None (default)
+                disables loss tracking.
 
         Returns:
             None
         """
-        for label, sae in saes.items():
+        resolved = _resolve_sae_entries(saes(self) if callable(saes) else saes)
+
+        pbar = tqdm(
+            resolved.items(),
+            desc="SAEs",
+            unit="SAE",
+            leave=False,
+            disable=not verbose,
+        )
+        for label, (sae, sae_type, params) in pbar:
+            pbar.set_description(f"SAE: {label}")
             if label in self.saes.keys():
                 warnings.warn(
                     f"An sae with the label '{label}' was already trained on this model and is being overwritten.",
@@ -341,22 +407,57 @@ class ToyModel:
                     stacklevel=2,
                 )
 
-            train_toy_sae(
-                sae=sae,
-                feature_dict=FeatureDictionaryWrapper(self.ae),
-                activations_generator=ActivationGeneratorWrapper(self.distribution),
-                training_samples=training_samples,
-                batch_size=batch_size,
-                lr=lr,
-                lr_warm_up_steps=lr_warm_up_steps,
-                lr_decay_steps=lr_decay_steps,
-                device=self.device,
-                n_snapshots=n_snapshots,
-                snapshot_fn=snapshot_fn,
-                autocast_sae=autocast_sae,
-                autocast_data=autocast_data,
-            )
-            self.saes[label] = SAERecord(sae=sae)
+            if n_loss_snapshots is not None:
+                captured_losses: list[tuple[int, float]] = []
+
+                def _loss_snapshot_fn(trainer: SAETrainer) -> None:
+                    batch = next(trainer.data_provider).to(trainer.sae.device)
+                    with torch.no_grad():
+                        output = trainer.sae.training_forward_pass(
+                            TrainStepInput(
+                                sae_in=batch,
+                                dead_neuron_mask=trainer.dead_neurons,
+                                coefficients=trainer.get_coefficients(),
+                                n_training_steps=trainer.n_training_steps,
+                                is_logging_step=False,
+                            )
+                        )
+                    captured_losses.append(
+                        (trainer.n_training_steps, output.loss.item())
+                    )
+
+                effective_n_snapshots = n_loss_snapshots
+                effective_snapshot_fn = _loss_snapshot_fn
+            else:
+                captured_losses = None
+                effective_n_snapshots = n_snapshots
+                effective_snapshot_fn = snapshot_fn
+
+            with (
+                suppress_tqdm()
+            ):  # SAE Lens tqdm gets very verbose when training on a grid
+                train_toy_sae(
+                    sae=sae,
+                    feature_dict=FeatureDictionaryWrapper(self.ae),
+                    activations_generator=ActivationGeneratorWrapper(self.distribution),
+                    training_samples=training_samples,
+                    batch_size=batch_size,
+                    lr=lr,
+                    lr_warm_up_steps=lr_warm_up_steps,
+                    lr_decay_steps=lr_decay_steps,
+                    device=self.device,
+                    n_snapshots=effective_n_snapshots,
+                    snapshot_fn=effective_snapshot_fn,
+                    autocast_sae=autocast_sae,
+                    autocast_data=autocast_data,
+                )
+                self.saes[label] = SAERecord(
+                    sae=sae,
+                    sae_type=sae_type,
+                    params=params,
+                    losses=captured_losses,
+                )
+                self.distribution.clear_buffer()
 
     def evaluate_saes(
         self,
@@ -389,6 +490,7 @@ class ToyModel:
             labels, desc="SAEs", unit="SAE", leave=False, disable=not verbose
         ) as pbar:
             for label in pbar:
+                pbar.set_description(f"SAE: {label}")
                 sae_record = self.saes[label]
                 if sae_record.results is not None:
                     warnings.warn(
@@ -404,6 +506,7 @@ class ToyModel:
                     num_samples=num_samples,
                 )
                 results[label] = sae_record.results
+                self.distribution.clear_buffer()
 
         return results
 
@@ -488,6 +591,37 @@ class ToyModel:
     @torch.no_grad()
     def total_feature_interferences_including_self(self) -> Tensor:
         return self.interferences_sq.sum(dim=1)
+
+    @property
+    @torch.no_grad()
+    def cosine_similarity_matrix(self) -> Tensor:
+        """Cosine similarity between all pairs of feature embeddings.
+
+        Returns:
+            Tensor of shape (n_features, n_features) where entry (i, j) is d_i^T d_j
+            with d_i, d_j being the normalized feature embeddings.
+        """
+        return self.W_normalized_features.T @ self.W_normalized_features
+
+    @property
+    @torch.no_grad()
+    def superposition(self) -> Tensor:
+        """Mean max absolute cosine similarity (ρmm), measuring degree of superposition.
+
+        ρmm = (1/N) * Σ_i max_{j≠i} |d_i^T d_j|
+
+        where d_i are the normalized feature embeddings. 0 ≤ ρmm ≤ 1, with ρmm = 0
+        indicating no superposition (all features mutually orthogonal).
+
+        Returns:
+            Scalar tensor with the mean max absolute cosine similarity.
+        """
+        cos_sim = self.cosine_similarity_matrix.abs()
+        # Zero out the diagonal to exclude self-similarity
+        cos_sim.fill_diagonal_(0.0)
+        # For each feature, find max cosine similarity to any other feature
+        max_cos_sim = cos_sim.max(dim=1).values
+        return max_cos_sim.mean()
 
     # ----------------------------------------------------------------------------------
     # SAE Metrics ----------------------------------------------------------------------
@@ -591,3 +725,90 @@ class ToyModel:
             for label, sae_record in self.saes.items()
             if sae_record.results is not None
         }
+
+    @property
+    @torch.no_grad()
+    def saes_feature_similarity(self) -> dict[str, Tensor]:
+        """Cosine similarity between SAE decoder weights and true feature embeddings.
+
+        For each SAE, computes the cosine similarity matrix between SAE decoder
+        weight vectors and ground-truth feature embedding vectors.
+
+        Returns:
+            Dict mapping SAE label to tensor of shape (n_sae_latents, n_features)
+            with values in [-1, 1].
+        """
+        true_features = self.W.T  # (n_features, n_hidden)
+        return {
+            label: F.normalize(sae_record.sae.W_dec, dim=1)
+            @ F.normalize(true_features, dim=1).T
+            for label, sae_record in self.saes.items()
+        }
+
+    @property
+    @torch.no_grad()
+    def saes_feature_similarity_ordering(self) -> dict[str, Tensor]:
+        """Indices to reorder SAE latents for diagonal alignment with true features.
+
+        For each SAE latent, finds the best-matching true feature (by absolute
+        cosine similarity), then sorts latents by that feature index. This produces
+        a reordering where the diagonal of the similarity matrix shows the best
+        matches.
+
+        Returns:
+            Dict mapping SAE label to tensor of shape (n_sae_latents,) containing
+            indices that reorder the SAE latents.
+        """
+        from scipy.optimize import linear_sum_assignment
+
+        result = {}
+        for label, cos_sim in self.saes_feature_similarity.items():
+            # cos_sim: (n_sae_latents, n_features)
+            # Use Hungarian algorithm to find optimal assignment maximizing similarity
+            cost_matrix = -cos_sim.abs().cpu().numpy()
+            row_ind, col_ind = linear_sum_assignment(cost_matrix)
+            # row_ind[i] is the SAE latent assigned to true feature col_ind[i]
+            # We want to reorder SAE latents so latent matching feature 0 comes first, etc.
+            # Create ordering: for each feature index (sorted), get the matched SAE latent
+            ordering = np.empty(len(row_ind), dtype=np.int64)
+            ordering[col_ind] = row_ind
+            result[label] = torch.from_numpy(ordering).to(cos_sim.device)
+        return result
+
+    @property
+    def feature_frequencies(self) -> Tensor:
+        """Activation frequency per ground-truth feature.
+
+        Returns the fraction of samples where each feature is active.
+        If the distribution has a `p_active` attribute (e.g., SparseUniform),
+        uses that directly. Otherwise, computes empirically over 10,000 samples.
+
+        Returns:
+            Tensor of shape (n_features,) with values in [0, 1].
+        """
+        # Try to get analytical probabilities from distribution
+        if hasattr(self.distribution, "p_active"):
+            p_active = self.distribution.p_active
+            if isinstance(p_active, Tensor):
+                return p_active.detach().clone()
+            return torch.tensor(p_active, device=self.device)
+
+        # Compute empirically
+        return self._compute_feature_frequencies(num_samples=10_000)
+
+    @torch.no_grad()
+    def _compute_feature_frequencies(
+        self, num_samples: int = 10_000, batch_size: int = 2048
+    ) -> Tensor:
+        """Compute empirical feature activation frequencies."""
+        activations_gen = ActivationGeneratorWrapper(self.distribution)
+        counts = torch.zeros(self.n_features, device=self.device)
+
+        num_processed = 0
+        while num_processed < num_samples:
+            current_batch = min(batch_size, num_samples - num_processed)
+            feature_acts = activations_gen.sample(current_batch)
+            counts += (feature_acts > 0).float().sum(dim=0).to(self.device)
+            num_processed += current_batch
+
+        return counts / num_samples

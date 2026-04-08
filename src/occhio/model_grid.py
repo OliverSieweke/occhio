@@ -9,17 +9,19 @@ import datetime
 import pickle
 from collections.abc import Iterable, Sequence
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from functools import cached_property
 from inspect import signature
 from itertools import product
+from pathlib import Path
 from typing import Any, Callable
 from warnings import warn
 
+import dill
 import numpy as np
+import pandas as pd
 import torch
 from numpy.typing import NDArray
-from sae_lens import TrainingSAE
 from torch import Tensor, meshgrid
 from torch.func import functional_call, stack_module_state
 from torch.optim import AdamW
@@ -27,24 +29,28 @@ from tqdm.auto import tqdm
 
 from occhio.autoencoder import AutoEncoderBase
 from occhio.distributions.base import Distribution
-from occhio.toy_model import ToyModel
-from occhio.utils.logging import suppress_tqdm
+from occhio.toy_model import SAEEntry, ToyModel
 
 
 @dataclass
 class Axis:
     label: str
-    values: Tensor
+    values: Sequence
 
-    def __init__(self, label: str, values: Tensor | Sequence[float | int]):
+    def __init__(self, label: str, values: Iterable):
         self.label = label
+        # Convert to list if not already indexable (handles Enums, generators, etc.)
+        if not isinstance(values, Sequence):
+            values = list(values)
         # Convert to tensor and ensure float dtype for meshgrid compatibility
-        if not isinstance(values, Tensor):
-            self.values = torch.as_tensor(values, dtype=torch.float32)
-        elif values.dtype not in (torch.float32, torch.float64):
-            self.values = values.to(dtype=torch.float32)
-        else:
-            self.values = values
+        # [2026-03-25 | OliverSieweke] TODO: work on this, not sure we want to convert to tensor at this point....
+        # if not isinstance(values, Tensor):
+        #     self.values = torch.as_tensor(values, dtype=torch.float32)
+        # elif values.dtype not in (torch.float32, torch.float64):
+        #     self.values = values.to(dtype=torch.float32)
+        # else:
+        #     self.values = values
+        self.values = values
 
 
 class TrainingAxis(Axis):
@@ -827,7 +833,7 @@ class ModelGrid:
 
     def train_saes(
         self,
-        saes: dict[str, TrainingSAE],
+        saes: list[SAEEntry] | Callable[[ToyModel], list[SAEEntry]],
         training_samples: int = 10_000_000,
         batch_size: int = 1024,
         lr: float = 0.0003,
@@ -838,11 +844,13 @@ class ModelGrid:
         autocast_sae: bool = False,
         autocast_data: bool = False,
         verbose: bool = False,
+        n_loss_snapshots: int | None = None,
     ) -> None:
         """Train SAE(s) on each ToyModel in the grid.
 
         Args:
-            saes: Dict mapping labels to SAEs.
+            saes: A list of :class:`SAEEntry` instances, or a callable that
+                takes a :class:`ToyModel` and returns such a list.
             training_samples: Number of training samples (sae_lens param, default: 10M).
             batch_size: Training batch size (sae_lens param, default: 1024).
             lr: Learning rate (sae_lens param, default: 0.0003).
@@ -853,28 +861,29 @@ class ModelGrid:
             autocast_sae: Use autocast for SAE (sae_lens param, default: False).
             autocast_data: Use autocast for data (sae_lens param, default: False).
             verbose: Whether to show progress bars. Defaults to False.
+            n_loss_snapshots: If set, record the overall loss at this many
+                evenly-spaced snapshots and store in each SAERecord.losses. None
+                (default) disables loss tracking.
         """
         flattened_models: NDArray[np.object_] = self.models.ravel()
 
         for model in tqdm(
-            flattened_models, desc="Models", unit="model", disable=not verbose
+            flattened_models, desc="Training SAEs", unit="model", disable=not verbose
         ):
-            with (
-                suppress_tqdm()
-            ):  # SAE Lens tqdm gets very verbose when training on a grid
-                model.train_saes(
-                    saes=deepcopy(saes),
-                    training_samples=training_samples,
-                    batch_size=batch_size,
-                    lr=lr,
-                    lr_warm_up_steps=lr_warm_up_steps,
-                    lr_decay_steps=lr_decay_steps,
-                    n_snapshots=n_snapshots,
-                    snapshot_fn=snapshot_fn,
-                    autocast_sae=autocast_sae,
-                    autocast_data=autocast_data,
-                    verbose=verbose,
-                )
+            model.train_saes(
+                saes=deepcopy(saes),
+                training_samples=training_samples,
+                batch_size=batch_size,
+                lr=lr,
+                lr_warm_up_steps=lr_warm_up_steps,
+                lr_decay_steps=lr_decay_steps,
+                n_snapshots=n_snapshots,
+                snapshot_fn=snapshot_fn,
+                autocast_sae=autocast_sae,
+                autocast_data=autocast_data,
+                verbose=verbose,
+                n_loss_snapshots=n_loss_snapshots,
+            )
 
     def evaluate_saes(
         self,
@@ -895,6 +904,106 @@ class ModelGrid:
         flattened_models: NDArray[np.object_] = self.models.ravel()
 
         for model in tqdm(
-            flattened_models, desc="Models", unit="model", disable=not verbose
+            flattened_models, desc="Evaluating SAEs", unit="model", disable=not verbose
         ):
             model.evaluate_saes(labels=labels, num_samples=num_samples, verbose=verbose)
+
+    def sae_results_to_dataframe(self):
+        """Convert SAE evaluation results to a pandas DataFrame.
+
+        Returns a DataFrame with a ``(distribution, sae)`` MultiIndex on the rows
+        and one column per metric. Only includes SAEs that have been evaluated
+        (results is not None).
+
+        Returns:
+            A DataFrame with ``(distribution, sae)`` row MultiIndex and metric names
+            as columns. Metrics are derived dynamically from the result objects, with
+            nested fields (e.g. ``classification``) flattened into the top level.
+
+        Example::
+
+            grid.evaluate_saes()
+            df = grid.sae_results_to_dataframe()
+            df.loc["SPARSE_UNIFORM"]  # all SAEs, all metrics
+            df.loc["SPARSE_UNIFORM"].xs("Standard", level="sae")  # one SAE, all metrics
+            df.loc["SPARSE_UNIFORM"].xs(
+                ["Standard", "Matryoshka"], level="sae"
+            )  # two SAEs, all metrics
+            df[["f1_score", "mcc"]]  # filter metrics
+        """
+        axis_labels = [axis.label for axis in self.axes]
+
+        rows: list[dict[str, Any]] = []
+        for idx in np.ndindex(*self.shape):
+            # [2026-04-02 | OliverSieweke] TODO: this feels like something that should be utility on model grid
+            model: ToyModel = self.models[idx]
+            axis_values = {}
+            for i, axis in enumerate(self.axes):
+                value = axis.values[idx[i]]
+                axis_values[axis.label] = (
+                    value.name
+                    if hasattr(value, "name") and isinstance(value.name, str)
+                    else str(value)
+                )
+
+            for sae_label, sae_record in model.saes.items():
+                if sae_record.results is None:
+                    continue
+                metrics = asdict(sae_record.results)
+                # Flatten any nested dataclass fields (e.g. classification)
+                for key, value in list(metrics.items()):
+                    if isinstance(value, dict):
+                        metrics.update(metrics.pop(key))
+                row = {**axis_values, "sae": sae_label, **metrics}
+                if sae_record.sae_type is not None:
+                    row["sae_type"] = sae_record.sae_type
+                if sae_record.params:
+                    for param_key, param_value in sae_record.params.items():
+                        row[param_key] = param_value
+                rows.append(row)
+
+        if not rows:
+            return pd.DataFrame(
+                index=pd.MultiIndex.from_tuples([], names=axis_labels + ["sae"])
+            )
+
+        tidy = pd.DataFrame(rows)
+        # [2026-04-02 | OliverSieweke] TODO: based on benchmark axis here - don't assume it's the first.
+        non_benchmark_axes = [label for label in axis_labels if label != axis_labels[0]]
+        tidy = tidy.set_index(
+            axis_labels[:1] + ["sae"] + non_benchmark_axes
+        ).sort_index()
+        tidy.columns.name = "metric"
+        return tidy
+
+    def save(self, path: str | Path) -> None:
+        """Save grid to disk using dill.
+
+        Args:
+            path: File path to save to (will be created/overwritten).
+
+        Example::
+            grid.save("my_grid.pkl")
+
+        Warning:
+            Uses dill/pickle. If you refactor code (rename classes, change imports),
+            old saves may fail to load. Just re-save after refactoring.
+        """
+        with open(path, "wb") as file:
+            dill.dump(self, file)
+
+    @classmethod
+    def load(cls, path: str | Path) -> ModelGrid:
+        """Load a ModelGrid from disk.
+
+        Args:
+            path: File path to load from.
+
+        Returns:
+            A fully reconstructed ModelGrid.
+
+        Example::
+            grid = ModelGrid.load("my_grid.pkl")
+        """
+        with open(path, "rb") as file:
+            return dill.load(file)

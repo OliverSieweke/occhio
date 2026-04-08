@@ -5,6 +5,7 @@ import functools
 import json
 import math
 from abc import ABC, abstractmethod
+from enum import Enum
 from math import sqrt
 from pathlib import Path
 from typing import Callable, Literal
@@ -1067,3 +1068,20 @@ class SynthAE(AutoEncoderBase):
 
     def decode(self, z: Tensor) -> Tensor:
         return torch.relu(z @ self.W + self.b)
+
+
+class AutoencoderType(Enum):
+    """Enum for autoencoder types to enable picklable grid parameterization."""
+
+    TiedLinear = TiedLinear.__name__
+    TiedLinearRelu = TiedLinearRelu.__name__
+    MLPEncoder = MLPEncoder.__name__
+    TiedMLPEncoder = TiedMLPEncoder.__name__
+    ComputeAutoEncoder = ComputeAutoEncoder.__name__
+    AttnLinearAE = AttnLinearAE.__name__
+    AttnAttnAE = AttnAttnAE.__name__
+    LinearAttnAE = LinearAttnAE.__name__
+    SynthAE = SynthAE.__name__
+
+    def __str__(self) -> str:
+        return self.name

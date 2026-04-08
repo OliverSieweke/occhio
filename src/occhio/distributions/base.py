@@ -65,6 +65,14 @@ class Distribution(ABC):
     def sample(self, batch_size: int) -> Tensor:
         """Returns (batch_size, n_features)"""
 
+    def clear_buffer(self) -> None:
+        """Release any device-side sample buffer held by this distribution.
+
+        No-op by default; subclasses with GPU buffers (e.g.
+        :class:`HuggingFaceDistribution`) override this to free the memory.
+        Call after training is done to reclaim GPU memory before the next run.
+        """
+
     @property
     def _defines_generators(self) -> bool:
         return self.generator is not None

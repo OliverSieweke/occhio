@@ -3,8 +3,8 @@
 Re-exports autoencoder conveniences for users.
 """
 
-from .autoencoder import AutoEncoderBase
+from .autoencoder import AutoEncoderBase, AutoencoderType
 from .model_grid import ModelGrid
-from .toy_model import ToyModel
+from .toy_model import SAEEntry, ToyModel
 
-__all__ = ["AutoEncoderBase", "ToyModel", "ModelGrid", "TiedLinear"]
+__all__ = ["AutoEncoderBase", "AutoencoderType", "SAEEntry", "ToyModel", "ModelGrid"]
