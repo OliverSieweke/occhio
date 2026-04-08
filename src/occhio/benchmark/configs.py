@@ -47,13 +47,58 @@ width_configs = {
     "4-level": [81, 162, 324, 648],
 }
 
-matryoshka_targeted: BenchmarkSAEsInput = [
+standard_total = [
+    SAEEntry(
+        sae=StandardTrainingSAE(
+            StandardTrainingSAEConfig(d_in=100, d_sae=648, l1_coefficient=l1)
+        ),
+        type="Standard",
+        params={
+            "l1_coefficient": l1,
+        },
+    )
+    for l1 in [
+        0.1,
+        0.15,
+        0.2,
+        0.25,
+        0.3,
+        0.35,
+        0.4,
+        0.45,
+        0.5,
+        0.55,
+        0.6,
+        0.65,
+        0.7,
+        0.8,
+        0.9,
+        1.0,
+    ]
+]
+
+
+batchtopk_total: BenchmarkSAEsInput = [
+    SAEEntry(
+        sae=BatchTopKTrainingSAE(
+            BatchTopKTrainingSAEConfig(d_in=100, d_sae=648, k=k, decoder_init_norm=1)
+        ),
+        type="BatchTopK",
+        params={
+            "k": k,
+        },
+    )
+    for k in [1, 2, 3, 4, 5, 6, 7]
+]
+
+matryoshka_total: BenchmarkSAEsInput = [
     SAEEntry(
         sae=MatryoshkaBatchTopKTrainingSAE(
             MatryoshkaBatchTopKTrainingSAEConfig(
                 d_in=100,
                 d_sae=648,
                 matryoshka_widths=widths,
+                use_matryoshka_aux_loss=True,
                 k=k,
             )
         ),
@@ -66,7 +111,23 @@ matryoshka_targeted: BenchmarkSAEsInput = [
     for k, (widths_name, widths) in product(k_values, width_configs.items())
 ]
 
+matching_pursuit_total = [
+    SAEEntry(
+        sae=MatchingPursuitTrainingSAE(
+            MatchingPursuitTrainingSAEConfig(
+                d_in=100, d_sae=648, max_iterations=max_iterations
+            )
+        ),
+        type="MatchingPursuit",
+        params={
+            "max_iterations": max_iterations,
+        },
+    )
+    for max_iterations in [1, 2, 3, 4, 5, 6]
+]
 
+
+# --------------------------------------------------------------------------------------
 def default_benchmark_saes() -> BenchmarkSAEsInput:
     return {
         BenchmarkDistributionName.CORRELATED_PAIRS: [

@@ -100,7 +100,11 @@ class HuggingFaceDistribution(Distribution):
         self.repo_type = repo_type
         self.data_key = data_key
         self.revision = resolved_revision
-        if buffer_size is None and self.device is not None and self.device.type != "cpu":
+        if (
+            buffer_size is None
+            and self.device is not None
+            and self.device.type != "cpu"
+        ):
             target_bytes = 1 * 1024**3  # 1 GB
             bytes_per_sample = self.n_features * samples.element_size()
             buffer_size = target_bytes // bytes_per_sample
