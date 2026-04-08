@@ -23,6 +23,11 @@ class SparseUniform(Distribution):
         super().__init__(n_features, **kwargs)
         self.p_active = self._broadcast(p_active)
 
+    @property
+    def expected_l0(self) -> float:
+        """Expected L0 norm (number of active features) per sample."""
+        return float(self.p_active.sum())
+
     def sample(self, batch_size: int) -> Tensor:
         mask = self._rand(batch_size, self.n_features) < self.p_active
         values = self._rand(batch_size, self.n_features)
