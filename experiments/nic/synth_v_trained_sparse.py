@@ -1358,3 +1358,222 @@ style_fig(fig)
 fig.show()
 
 # %%
+# =============================================================================
+# EXPORT: Static geometric properties figure (no slider) — vector-ready
+# =============================================================================
+# Delete everything below this line when done exporting.
+
+import os
+
+_export_props = ["fn", "ti", "bias", "mpr", "fd"]
+_export_titles = [
+    "Feature Norms",
+    "Total Interference",
+    "Learned Bias",
+    "Mean Partner Rank",
+    "Feature Dimensionalities",
+]
+_n_export = len(_export_props)
+_x = np.arange(N_FEATURES)
+
+# Use the FINAL epoch snapshot for each animated series
+_final_trained = {p: geom_arrays[p][:, -1] for p in _export_props}
+_final_ablation = {p: geom_arrays_scalar_bias[p][:, -1] for p in _export_props}
+_final_constructed = {p: constructed_props[p] for p in _export_props}
+
+# Variable-bandwidth Gaussian smooth (same as make_epoch_slider)
+_n_pts = len(_x)
+_xs_sm = np.arange(_n_pts, dtype=float)
+_sigmas_sm = 1.0 + (_n_pts / 4) * (_xs_sm / _n_pts)
+_diffs_sm = _xs_sm[:, None] - _xs_sm[None, :]
+_W_sm = np.exp(-0.5 * (_diffs_sm / _sigmas_sm[:, None]) ** 2)
+_W_sm /= _W_sm.sum(axis=1, keepdims=True)
+
+
+def _sm(y):
+    return _W_sm @ np.asarray(y)
+
+
+_ms = 3
+_opacity = 0.7
+_curve_opacity = 0.388
+
+_series = [
+    ("Trained AE", _final_trained),
+    ("Trained AE w/ Scalar Bias", _final_ablation),
+    ("Constructed AE", _final_constructed),
+]
+
+_sb_props = ["fn", "ti", "bias", "mpr"]
+_sb_titles = [
+    "Feature Norms",
+    "Total Interference",
+    "Learned Bias",
+    "Mean Partner Rank",
+]
+_n_sb = len(_sb_props)
+
+fig_export = make_subplots(rows=1, cols=_n_sb, subplot_titles=_sb_titles)
+
+for i, prop in enumerate(_sb_props):
+    for j, (name, data) in enumerate(_series):
+        color = MODEL_COLORS[name]
+        fig_export.add_trace(
+            go.Scatter(
+                x=_x,
+                y=data[prop],
+                name=name,
+                legendgroup=name,
+                mode="markers",
+                marker=dict(size=_ms, opacity=_opacity, color=color),
+                showlegend=(i == 0),
+            ),
+            row=1,
+            col=i + 1,
+        )
+        fig_export.add_trace(
+            go.Scatter(
+                x=_x,
+                y=_sm(data[prop]),
+                legendgroup=name,
+                mode="lines",
+                line=dict(width=2, color=color),
+                opacity=_curve_opacity,
+                showlegend=False,
+            ),
+            row=1,
+            col=i + 1,
+        )
+
+# Subplot titles
+for ann in fig_export.layout.annotations:
+    ann.font = dict(size=22)
+
+# Axes: no per-subplot xlabel
+for i in range(_n_sb):
+    fig_export.update_xaxes(title_text=None, row=1, col=i + 1)
+
+# Shared x-axis label
+fig_export.add_annotation(
+    text="Feature Rank",
+    xref="paper",
+    yref="paper",
+    x=0.5,
+    y=-0.23,
+    showarrow=False,
+    font=dict(size=22),
+)
+
+fig_export.update_layout(
+    height=470,
+    width=max(600, 350 * _n_sb),
+    margin=dict(b=100),
+    showlegend=True,
+)
+
+fig_export.update_yaxes(range=[215, 450], row=1, col=4)  # Mean Partner Rank
+
+style_fig(fig_export)
+fig_export.show()
+
+# %%
+# --- Save as vector (PDF + SVG) ---
+_fig_dir = os.path.join(os.path.dirname(__file__), "figures")
+os.makedirs(_fig_dir, exist_ok=True)
+
+fig_export.write_image(os.path.join(_fig_dir, "geom_scalar_bias.pdf"), engine="kaleido")
+fig_export.write_image(os.path.join(_fig_dir, "geom_scalar_bias.svg"), engine="kaleido")
+print(f"Saved to {_fig_dir}/geom_scalar_bias.{{pdf,svg}}")
+
+# %%
+# =============================================================================
+# EXPORT: Unit Norms ablation — same layout as scalar bias export
+# =============================================================================
+
+_final_unit_norm = {p: geom_arrays_unit_norm[p][:, -1] for p in _export_props}
+
+_series_un = [
+    ("Trained AE", _final_trained),
+    ("Trained AE w/ Unit Norms", _final_unit_norm),
+    ("Constructed AE", _final_constructed),
+]
+
+fig_export_un = make_subplots(rows=1, cols=_n_export, subplot_titles=_export_titles)
+
+for i, prop in enumerate(_export_props):
+    for j, (name, data) in enumerate(_series_un):
+        color = MODEL_COLORS[name]
+        fig_export_un.add_trace(
+            go.Scatter(
+                x=_x,
+                y=data[prop],
+                name=name,
+                legendgroup=name,
+                mode="markers",
+                marker=dict(size=_ms, opacity=_opacity, color=color),
+                showlegend=(i == 0),
+            ),
+            row=1,
+            col=i + 1,
+        )
+        fig_export_un.add_trace(
+            go.Scatter(
+                x=_x,
+                y=_sm(data[prop]),
+                legendgroup=name,
+                mode="lines",
+                line=dict(width=2, color=color),
+                opacity=_curve_opacity,
+                showlegend=False,
+            ),
+            row=1,
+            col=i + 1,
+        )
+
+for ann in fig_export_un.layout.annotations:
+    ann.font = dict(size=22)
+for i in range(_n_export):
+    fig_export_un.update_xaxes(title_text=None, row=1, col=i + 1)
+fig_export_un.add_annotation(
+    text="Feature Rank",
+    xref="paper",
+    yref="paper",
+    x=0.5,
+    y=-0.23,
+    showarrow=False,
+    font=dict(size=22),
+)
+fig_export_un.update_layout(
+    height=470,
+    width=max(600, 350 * _n_export),
+    margin=dict(b=100),
+    showlegend=True,
+    legend=dict(
+        x=0.89,
+        y=0.8,
+        xanchor="left",
+        yanchor="top",
+        bgcolor="rgba(255,255,255,0.85)",
+        bordercolor="#D1D5DB",
+        borderwidth=1,
+        itemsizing="constant",
+        font=dict(size=7),
+    ),
+)
+fig_export_un.update_yaxes(range=[220, 450], row=1, col=4)
+fig_export_un.update_yaxes(range=[0.1, 0.52], row=1, col=5)
+
+style_fig(fig_export_un)
+fig_export_un.show()
+
+# %%
+# --- Save unit norms as vector ---
+fig_export_un.write_image(
+    os.path.join(_fig_dir, "geom_unit_norms.pdf"), engine="kaleido"
+)
+fig_export_un.write_image(
+    os.path.join(_fig_dir, "geom_unit_norms.svg"), engine="kaleido"
+)
+print(f"Saved to {_fig_dir}/geom_unit_norms.{{pdf,svg}}")
+
+# %%
