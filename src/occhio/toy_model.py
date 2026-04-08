@@ -12,7 +12,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from safetensors.torch import load_file
-from sae_lens import TrainingSAE
+from sae_lens import SAE, TrainingSAE
 from sae_lens.synthetic import (
     SyntheticDataEvalResult,
     eval_sae_on_synthetic_data,
@@ -80,6 +80,7 @@ class SAERecord:
     """Holds an SAE and its evaluation results."""
 
     sae: TrainingSAE
+    inference_sae: SAE | None = None
     sae_type: str | None = None
     params: dict[str, Any] | None = None
     results: SyntheticDataEvalResult | None = None
@@ -459,6 +460,40 @@ class ToyModel:
                 )
                 self.distribution.clear_buffer()
 
+    def convert_saes_to_inference(
+        self,
+        labels: list[str] | None = None,
+    ) -> None:
+        """Convert stored training SAEs to inference SAEs.
+
+        Populates the ``inference_sae`` field on each :class:`SAERecord`.
+        Already-converted records are skipped.
+
+        Args:
+            labels: List of SAE labels to convert. Defaults to all stored SAEs.
+        """
+        if labels is None:
+            labels = list(self.saes.keys())
+
+        unmatched_labels = [label for label in labels if label not in self.saes]
+        if unmatched_labels:
+            raise ValueError(
+                f"The following SAE labels do not exist: {', '.join(unmatched_labels)}. "
+                f"Available labels: {', '.join(self.saes.keys())}"
+            )
+
+        for label in labels:
+            sae_record = self.saes[label]
+            if sae_record.inference_sae is not None:
+                continue
+            state_dict = sae_record.sae.state_dict()
+            sae_record.sae.process_state_dict_for_saving_inference(state_dict)
+            cfg_dict = sae_record.sae.cfg.get_inference_sae_cfg_dict()
+            cfg_dict["device"] = str(self.device)
+            inference_sae = SAE.from_dict(cfg_dict)
+            inference_sae.load_state_dict(state_dict)
+            sae_record.inference_sae = inference_sae
+
     def evaluate_saes(
         self,
         labels: list[str] | None = None,
@@ -485,6 +520,8 @@ class ToyModel:
                 f"Available labels: {', '.join(self.saes.keys())}"
             )
 
+        self.convert_saes_to_inference(labels)
+
         results = {}
         with tqdm(
             labels, desc="SAEs", unit="SAE", leave=False, disable=not verbose
@@ -497,10 +534,10 @@ class ToyModel:
                         f"SAE '{label}' was already evaluated. Re-evaluating and overwriting previous results.",
                         stacklevel=2,
                     )
-                sae_record.sae.to(self.device)
+                sae_record.inference_sae.to(self.device)
 
                 sae_record.results = eval_sae_on_synthetic_data(
-                    sae=sae_record.sae,
+                    sae=sae_record.inference_sae,
                     feature_dict=FeatureDictionaryWrapper(self.ae),
                     activations_generator=ActivationGeneratorWrapper(self.distribution),
                     num_samples=num_samples,
