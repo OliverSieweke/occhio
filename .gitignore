@@ -15,4 +15,5 @@ docs/_build
 docs/_autosummary
 .ipynb_checkpoints/
 experiments/laws/law1/figures/
+experiments/benchmark/sweep-analysis/data/
 
