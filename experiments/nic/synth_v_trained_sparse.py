@@ -102,66 +102,91 @@ def make_epoch_slider(
         pad = (hi - lo) * 0.05
         y_ranges[prop] = [lo - pad, hi + pad]
 
-    _ms = 4  # 3.25 * 0.85 — 15% smaller radius
-    # Initial traces: Trained AE (animated) + extra animated + Constructed AE (static)
-    for i, prop in enumerate(props):
+    _ms = 3
+    _opacity = 0.7
+
+    # Variable-bandwidth Gaussian: exact at rank 0, very smooth at high ranks
+    _n_pts = len(x)
+    _xs = np.arange(_n_pts, dtype=float)
+    _sigmas = 1.0 + (_n_pts / 4) * (_xs / _n_pts)  # 1 → n/4
+    _diffs = _xs[:, None] - _xs[None, :]  # (n, n)
+    _W = np.exp(-0.5 * (_diffs / _sigmas[:, None]) ** 2)
+    _W /= _W.sum(axis=1, keepdims=True)
+
+    def _smooth(y):
+        return _W @ np.asarray(y)
+
+    def _add_dots_and_curve(y, name, color, col, show_legend):
+        """Add a scatter + faint trend curve for one series in one subplot."""
         fig.add_trace(
             go.Scatter(
                 x=x,
-                y=epoch_arrays[prop][:, 0],
-                name="Trained AE",
-                legendgroup="Trained AE",
+                y=y,
+                name=name,
+                legendgroup=name,
                 mode="markers",
-                marker=dict(size=_ms, opacity=1.0, color=MODEL_COLORS["Trained AE"]),
-                showlegend=(i == 0),
+                marker=dict(size=_ms, opacity=_opacity, color=color),
+                showlegend=show_legend,
             ),
             row=1,
-            col=i + 1,
+            col=col,
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=x,
+                y=_smooth(y),
+                legendgroup=name,
+                mode="lines",
+                line=dict(width=2, color=color),
+                opacity=0.388,
+                showlegend=False,
+            ),
+            row=1,
+            col=col,
+        )
+
+    # Initial traces: dots + curves for each series per subplot
+    for i, prop in enumerate(props):
+        _add_dots_and_curve(
+            epoch_arrays[prop][:, 0],
+            "Trained AE",
+            MODEL_COLORS["Trained AE"],
+            i + 1,
+            i == 0,
         )
         for ea_name, ea in extra_animated:
             if prop in ea:
-                fig.add_trace(
-                    go.Scatter(
-                        x=x,
-                        y=ea[prop][:, 0],
-                        name=ea_name,
-                        legendgroup=ea_name,
-                        mode="markers",
-                        marker=dict(size=_ms, opacity=1.0, color=MODEL_COLORS[ea_name]),
-                        showlegend=(i == 0),
-                    ),
-                    row=1,
-                    col=i + 1,
+                _add_dots_and_curve(
+                    ea[prop][:, 0],
+                    ea_name,
+                    MODEL_COLORS[ea_name],
+                    i + 1,
+                    i == 0,
                 )
         if static_arrays and prop in static_arrays:
-            fig.add_trace(
-                go.Scatter(
-                    x=x,
-                    y=static_arrays[prop],
-                    name="Constructed AE",
-                    legendgroup="Constructed AE",
-                    mode="markers",
-                    marker=dict(
-                        size=_ms, opacity=1.0, color=MODEL_COLORS["Constructed AE"]
-                    ),
-                    showlegend=(i == 0),
-                ),
-                row=1,
-                col=i + 1,
+            _add_dots_and_curve(
+                static_arrays[prop],
+                "Constructed AE",
+                MODEL_COLORS["Constructed AE"],
+                i + 1,
+                i == 0,
             )
 
-    # Slider: update all animated + static traces
+    # Slider: update dots + curves for all series
     has_static = static_arrays is not None
     steps = []
     for s in range(len(epochs)):
         y_update = []
         for prop in props:
             y_update.append(epoch_arrays[prop][:, s])
+            y_update.append(_smooth(epoch_arrays[prop][:, s]))
             for _, ea in extra_animated:
                 if prop in ea:
                     y_update.append(ea[prop][:, s])
+                    y_update.append(_smooth(ea[prop][:, s]))
             if has_static and prop in static_arrays:
                 y_update.append(static_arrays[prop])
+                y_update.append(_smooth(static_arrays[prop]))
         steps.append(
             dict(method="update", label=str(epochs[s]), args=[{"y": y_update}])
         )
