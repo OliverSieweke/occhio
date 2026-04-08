@@ -23,7 +23,7 @@ from occhio.toy_model import ToyModel
 MODEL_COLORS = {
     "Trained AE": "#000c7a",
     "Constructed AE": "#fcba03",
-    "Trained AE w/ Scalar Bias": "#297a58",
+    "Trained AE w/ Unit Norms": "#DC2626",
 }
 _THRESH_COLORS = ["#3B82F6", "#F59E0B", "#EF4444"]
 
@@ -335,24 +335,6 @@ per_feature_trained = hook_results_trained[1]
 geometry_trained = hook_results_trained[2]
 print(f"  Final eval loss: {eval_losses_trained[-1]:.6f}")
 
-# # %%
-# # --- Train Trained AE (scalar bias) ---
-# print("Training TiedLinearRelu (scalar bias shared across features)...")
-# gen2 = torch.Generator(DEVICE).manual_seed(SEED)
-# ae_scalar_bias = TiedLinearRelu(N_FEATURES, D_HIDDEN, device=DEVICE, generator=gen2)
-# ae_scalar_bias.b = torch.nn.Parameter(torch.zeros(1, device=DEVICE))
-# tm_scalar_bias = ToyModel(distribution=dist, ae=ae_scalar_bias, device=DEVICE)
-# _, hook_results_scalar_bias = tm_scalar_bias.fit(
-#     30000,
-#     batch_size=BATCH_SIZE,
-#     hooks=[every(EVAL_FREQ, h) for h in [eval_hook, per_feature_hook, geometry_hook]],
-#     verbose=True,
-# )
-# eval_losses_scalar_bias = hook_results_scalar_bias[0]
-# per_feature_scalar_bias = hook_results_scalar_bias[1]
-# geometry_scalar_bias = hook_results_scalar_bias[2]
-# print(f"  Final eval loss: {eval_losses_scalar_bias[-1]:.6f}")
-
 # %%
 # --- Train Trained AE (unit norms) ---
 print("Training Trained AE w/ Unit Norms...")
@@ -613,10 +595,10 @@ for prop in _geom_props:
     arr = np.array([g[prop] for g in geometry_trained]).T  # (N_FEATURES, n_snapshots)
     geom_arrays[prop] = arr[sort_idx]
 
-geom_arrays_scalar_bias = {}
+geom_arrays_unit_norm = {}
 for prop in _geom_props:
-    arr = np.array([g[prop] for g in geometry_scalar_bias]).T
-    geom_arrays_scalar_bias[prop] = arr[sort_idx]
+    arr = np.array([g[prop] for g in geometry_unit_norm]).T
+    geom_arrays_unit_norm[prop] = arr[sort_idx]
 
 n_snapshots = geom_arrays["fd"].shape[1]
 geom_epochs = (np.arange(n_snapshots) * EVAL_FREQ).astype(int)
@@ -629,7 +611,7 @@ make_epoch_slider(
     static_arrays=constructed_props,
     epochs=geom_epochs,
     titles=_geom_titles,
-    extra_animated=[("Trained AE w/ Scalar Bias", geom_arrays_scalar_bias)],
+    extra_animated=[("Trained AE w/ Unit Norms", geom_arrays_unit_norm)],
 ).show()
 
 # %%
