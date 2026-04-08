@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -97,14 +98,20 @@ def evaluate(
         axes=axes,
     )
 
+    training_start = time.monotonic()
+    per_benchmark_durations: dict[str, float] | None = None
+
     if is_per_benchmark_saes(saes):
+        per_benchmark_durations = {}
         for benchmark, benchmark_saes in tqdm(saes.items(), desc="Distribution"):
+            t0 = time.monotonic()
             grid[benchmark_list.index(benchmark)].train_saes(
                 benchmark_saes,
                 training_samples=training_samples,
                 verbose=verbose,
                 n_loss_snapshots=n_loss_snapshots,
             )
+            per_benchmark_durations[benchmark.name] = time.monotonic() - t0
     elif is_shared_saes(saes):
         grid.train_saes(
             saes,
@@ -112,6 +119,8 @@ def evaluate(
             verbose=verbose,
             n_loss_snapshots=n_loss_snapshots,
         )
+
+    training_duration = time.monotonic() - training_start
 
     grid.evaluate_saes(verbose=verbose)
 
@@ -128,6 +137,8 @@ def evaluate(
             device=device,
             per_benchmark=is_per_benchmark_saes(saes),
             losses_df=losses_df,
+            training_duration=training_duration,
+            per_benchmark_durations=per_benchmark_durations,
         )
 
     return EvaluationResult(grid=grid, df=df, losses_df=losses_df)
@@ -166,6 +177,8 @@ def _export_results(
     device: str | None,
     per_benchmark: bool,
     losses_df: pd.DataFrame | None = None,
+    training_duration: float | None = None,
+    per_benchmark_durations: dict[str, float] | None = None,
 ) -> None:
     """Write grid, results, and run info to an export directory."""
     if export_dir.exists() and any(export_dir.iterdir()):
@@ -192,34 +205,58 @@ def _export_results(
     }
     (export_dir / "results.json").write_text(json.dumps(nested, indent=2))
 
-    run_info = _build_run_info(grid, training_samples, device, per_benchmark)
+    run_info = _build_run_info(
+        grid,
+        training_samples,
+        device,
+        per_benchmark,
+        training_duration=training_duration,
+        per_benchmark_durations=per_benchmark_durations,
+    )
     (export_dir / "run_info.json").write_text(
         json.dumps(run_info, indent=2, default=str)
     )
 
 
-# [2026-04-02 | OliverSieweke] TODO: check this
 def _build_run_info(
     grid: ModelGrid,
     training_samples: int,
     device: str | None,
     per_benchmark: bool,
+    training_duration: float | None = None,
+    per_benchmark_durations: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     """Build a human-readable run metadata dict."""
+    # Resolve actual device from trained models
+    first_model: ToyModel = grid.models.ravel()[0]
+    resolved_device = str(first_model.device)
+
+    # Build axes summary
+    axes_info: dict[str, list[str]] = {}
+    for axis in grid.axes:
+        axes_info[axis.label] = [
+            v.name if hasattr(v, "name") and isinstance(v.name, str) else str(v)
+            for v in axis.values
+        ]
+
     run_info: dict[str, Any] = {
         "timestamp": datetime.now(tz=timezone.utc).isoformat(),
         "training_samples": training_samples,
-        "device": device,
-        "distributions": [],
+        "device": resolved_device,
+        "training_duration_s": round(training_duration, 1)
+        if training_duration is not None
+        else None,
+        "axes": axes_info,
         "saes": {},
     }
 
+    if per_benchmark_durations is not None:
+        run_info["training_duration_by_benchmark_s"] = {
+            k: round(v, 1) for k, v in per_benchmark_durations.items()
+        }
+
     benchmark_axis = grid.axes[0]
-    distribution_names = [
-        v.name if hasattr(v, "name") and isinstance(v.name, str) else str(v)
-        for v in benchmark_axis.values
-    ]
-    run_info["distributions"] = distribution_names
+    distribution_names = axes_info[benchmark_axis.label]
 
     if per_benchmark:
         # Different SAEs per distribution — nest configs under distribution name
@@ -227,18 +264,43 @@ def _build_run_info(
         for i, dist_name in enumerate(distribution_names):
             model: ToyModel = grid.models.ravel()[i]
             saes_by_dist[dist_name] = {
-                label: record.sae.cfg.to_dict() for label, record in model.saes.items()
+                label: _sae_entry_info(record) for label, record in model.saes.items()
             }
         run_info["saes"] = saes_by_dist
     else:
-        # Shared SAEs — extract configs from first model
-        first_model: ToyModel = grid.models.ravel()[0]
+        # Shared SAEs — extract from first model, collect param sweeps across all models
         run_info["saes"] = {
-            label: record.sae.cfg.to_dict()
-            for label, record in first_model.saes.items()
+            label: _sae_entry_info(record) for label, record in first_model.saes.items()
         }
+        run_info["sae_param_sweeps"] = _collect_param_sweeps(grid)
 
     return run_info
+
+
+def _sae_entry_info(record: Any) -> dict[str, Any]:
+    """Summarise a single SAE record for run_info."""
+    info: dict[str, Any] = {"cfg": record.sae.cfg.to_dict()}
+    if record.sae_type is not None:
+        info["type"] = record.sae_type
+    if record.params:
+        info["params"] = record.params
+    return info
+
+
+def _collect_param_sweeps(grid: ModelGrid) -> dict[str, dict[str, list[Any]]]:
+    """Aggregate unique param values per SAE label across all models in the grid."""
+    sweeps: dict[str, dict[str, set]] = {}
+    for model in grid.models.ravel():
+        for label, record in model.saes.items():
+            if record.params:
+                if label not in sweeps:
+                    sweeps[label] = {}
+                for k, v in record.params.items():
+                    sweeps.setdefault(label, {}).setdefault(k, set()).add(v)
+    return {
+        label: {k: sorted(vs) for k, vs in params.items()}
+        for label, params in sweeps.items()
+    }
 
 
 def is_per_benchmark_saes(
