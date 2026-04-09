@@ -575,29 +575,185 @@ style_fig(fig)
 fig.show()
 
 # %%
-# --- W^T W comparison ---
-models = [("Trained AE", tm_trained), ("Constructed AE", tm_constructed)]
+# --- W^T W comparison (half-size) ---
+
+models = [
+    ("Trained AE", tm_trained),
+    ("Trained AE w/ Unit Norms", tm_unit_norm),
+    ("Trained AE w/ Scalar Bias", tm_scalar_bias),
+    ("Constructed AE", tm_constructed),
+]
 models_dict = dict(models)
 
-fig = make_subplots(rows=1, cols=2, subplot_titles=["Trained AE", "Constructed AE"])
+_wtw_n = len(models)
+_wtw_zoom = 50
+_wtw_cols_per = 3  # WtW, bias, gap
+_wtw_cols = _wtw_n * _wtw_cols_per - 1
 
-for i, (name, tm) in enumerate(
-    [
-        ("Trained AE", tm_trained),
-        ("Constructed AE", tm_constructed),
-    ]
-):
+# Scale subplot widths down by half
+_wtw_widths = []
+for i in range(_wtw_n):
+    _wtw_widths += [0.11, 0.004]
+    if i < _wtw_n - 1:
+        _wtw_widths.append(0.0125)
+
+_wtw_specs_row = []
+for i in range(_wtw_n):
+    _wtw_specs_row += [{}, {}]
+    if i < _wtw_n - 1:
+        _wtw_specs_row.append(None)
+
+# Row 1: "Model Name<br><br>W^T W" on WtW col, "b" on bias col.  Row 2: empty.
+_wtw_titles_r1 = []
+for name, _ in models:
+    _wtw_titles_r1.append(f"{name}<br><i>W</i><sup> T</sup><i>W</i>")
+    _wtw_titles_r1.append("<i>b</i>")
+_wtw_titles = _wtw_titles_r1 + [""] * len(_wtw_titles_r1)
+
+fig = make_subplots(
+    rows=2,
+    cols=_wtw_cols,
+    subplot_titles=_wtw_titles,
+    column_widths=_wtw_widths,
+    specs=[_wtw_specs_row, _wtw_specs_row],
+    horizontal_spacing=0.004,
+    vertical_spacing=0.12,
+)
+
+for i, (name, tm) in enumerate(models):
     W = tm.W.detach().cpu().numpy()
-    WtW = W.T @ W
+    WtW = (W.T @ W)[np.ix_(sort_idx, sort_idx)]
+    b = tm.ae.b.detach().cpu().numpy()
+    if b.shape[0] == 1:
+        b = np.full(N_FEATURES, b[0])
+    b_sorted = b[sort_idx]
+
+    wtw_col = i * _wtw_cols_per + 1
+    b_col = wtw_col + 1
+
     fig.add_trace(
-        go.Heatmap(z=WtW, colorscale="RdBu_r", zmid=0, showscale=(i == 1)),
+        go.Heatmap(z=WtW, colorscale="RdBu_r", zmid=0, showscale=False),
         row=1,
-        col=i + 1,
+        col=wtw_col,
+    )
+    fig.add_trace(
+        go.Heatmap(
+            z=b_sorted.reshape(-1, 1), colorscale="RdBu_r", zmid=0, showscale=False
+        ),
+        row=1,
+        col=b_col,
+    )
+    fig.add_trace(
+        go.Heatmap(
+            z=WtW[:, :_wtw_zoom],
+            colorscale="RdBu_r",
+            zmid=0,
+            showscale=(i == _wtw_n - 1),
+            colorbar=dict(
+                title=dict(
+                    text="Interference<br><i>W<sub>i</sub></i> · <i>W<sub>j</sub></i>",
+                    font=dict(size=20),
+                    side="top",
+                ),
+                len=0.45,
+                y=0.22,
+                x=1.01,
+                tickfont=dict(size=15),
+            )
+            if (i == _wtw_n - 1)
+            else None,
+        ),
+        row=2,
+        col=wtw_col,
     )
 
-fig.update_layout(title="W^T W Comparison", height=700, width=1400)
+_sq = 500
+fig.update_layout(
+    height=_sq * 2 + 80,
+    width=_sq * _wtw_n + 100,
+    margin=dict(t=100),
+)
+# Subplot title annotations: left-align the W^T W part, keep model names centered
+for ann in fig.layout.annotations:
+    if "<i>b</i>" in (ann.text or ""):
+        ann.font = dict(size=22)
+    elif ann.text:
+        ann.font = dict(size=22)
+
 style_fig(fig)
+
+# Override ticks AFTER style_fig (so nticks doesn't clobber tickmode="array")
+_main_tv = dict(
+    tickmode="array",
+    tickvals=[0, 100, 200, 300, 400, 499],
+    ticktext=["0", "100", "200", "300", "400", "500"],
+    range=[-0.5, 499.5],
+    minor=dict(
+        tickmode="linear", tick0=0, dtick=20, ticks="outside", tickcolor="#9CA3AF"
+    ),
+)
+_zoom_tv_x = dict(
+    tickmode="array",
+    tickvals=[0, 10, 20, 30, 40, 49],
+    ticktext=["0", "10", "20", "30", "40", "50"],
+    range=[-0.5, 49.5],
+    minor=dict(
+        tickmode="linear", tick0=0, dtick=2, ticks="outside", tickcolor="#9CA3AF"
+    ),
+)
+for i in range(_wtw_n):
+    wtw_col = i * _wtw_cols_per + 1
+    b_col = wtw_col + 1
+    fig.update_xaxes(_main_tv, row=1, col=wtw_col)
+    fig.update_yaxes(_main_tv, row=1, col=wtw_col)
+    fig.update_xaxes(_zoom_tv_x, row=2, col=wtw_col)
+    fig.update_yaxes(_main_tv, row=2, col=wtw_col)
+
+# Nuclear bias tick removal: find axes paired with narrow x-domains (bias strips).
+# The row=/col= targeting misfires with None-spec gaps, so we trace through
+# the figure data to find which y-axes share a subplot with a narrow x-axis.
+_kill = dict(
+    showticklabels=False,
+    ticks="",
+    showline=False,
+    showgrid=False,
+    zeroline=False,
+    minor_ticks="",
+)
+_layout_json = fig.layout.to_plotly_json()
+
+# Step 1: find all narrow x-axis keys
+_narrow_xkeys = set()
+for key, val in _layout_json.items():
+    if key.startswith("xaxis") and isinstance(val, dict) and "domain" in val:
+        if val["domain"][1] - val["domain"][0] < 0.02:
+            _narrow_xkeys.add(key)
+
+# Step 2: for each trace, check if its x-axis is narrow → kill its y-axis too
+_bias_ykeys = set()
+for trace in fig.data:
+    xref = trace.xaxis or "x"  # "x", "x2", "x3", ...
+    yref = trace.yaxis or "y"
+    xkey = "xaxis" + xref[1:] if len(xref) > 1 else "xaxis"
+    ykey = "yaxis" + yref[1:] if len(yref) > 1 else "yaxis"
+    if xkey in _narrow_xkeys:
+        _bias_ykeys.add(ykey)
+
+# Step 3: kill ticks on all narrow x-axes AND their paired y-axes
+for key in _narrow_xkeys | _bias_ykeys:
+    fig.layout[key].update(**_kill)
+
 fig.show()
+
+# %%
+# --- Save Gram Matrix as vector ---
+import os
+
+_fig_dir = os.path.join(os.path.dirname(__file__), "figures")
+os.makedirs(_fig_dir, exist_ok=True)
+fig.write_image(os.path.join(_fig_dir, "gram_matrix.pdf"), engine="kaleido")
+fig.write_image(os.path.join(_fig_dir, "gram_matrix.svg"), engine="kaleido")
+print(f"Saved to {_fig_dir}/gram_matrix.{{pdf,svg}}")
 
 # %%
 # --- Plot: Spectrum of W W^T ---
@@ -625,11 +781,11 @@ fig.show()
 
 # %%
 # --- Plot: Geometric properties + bias over training (slider) ---
-_geom_props = ["fn", "ti", "bias", "mpr", "fd"]
+_geom_props = ["bias", "fn", "ti", "mpr", "fd"]
 _geom_titles = [
+    "Learned Bias",
     "Feature Norms",
     "Total Interference",
-    "Learned Bias",
     "Mean Partner Rank",
     "Feature Dimensionalities",
 ]
@@ -686,78 +842,134 @@ make_epoch_slider(
 ).show()
 
 # %%
-# --- Frequency-group interference heatmap (epoch slider) ---
-group_labels = [str(i * _GEOM_GROUP_SIZE) for i in range(_GEOM_N_GROUPS)]
+# --- Feature interference by rank group ---
+_intf_zoom = 10
 
-group_mats_trained = np.array([g["group_mat"] for g in geometry_trained])
-# Constructed AE: W is frozen, so interference is static — use final state
-group_mat_constructed = geometry_constructed[-1]["group_mat"]
+_intf_models = [
+    ("Trained AE", geometry_trained[-1]["group_mat"]),
+    ("Trained AE w/ Unit Norms", geometry_unit_norm[-1]["group_mat"]),
+    ("Trained AE w/ Scalar Bias", geometry_scalar_bias[-1]["group_mat"]),
+    ("Constructed AE", geometry_constructed[-1]["group_mat"]),
+]
+_intf_n = len(_intf_models)
 
-# Stable color range across all snapshots + constructed
-_all_group_vals = np.concatenate(
-    [group_mats_trained.ravel(), group_mat_constructed.ravel()]
-)
-_bz_min, _bz_max = float(_all_group_vals.min()), float(_all_group_vals.max())
+_all_intf_vals = np.concatenate([mat.ravel() for _, mat in _intf_models])
+_iz_min, _iz_max = float(_all_intf_vals.min()), float(_all_intf_vals.max())
+
+_intf_titles = [name for name, _ in _intf_models] + [""] * _intf_n
 
 fig = make_subplots(
-    rows=1, cols=2, subplot_titles=["Trained AE (animated)", "Constructed AE (static)"]
-)
-fig.add_trace(
-    go.Heatmap(
-        z=group_mats_trained[0],
-        x=group_labels,
-        y=group_labels,
-        colorscale="Viridis",
-        zmin=_bz_min,
-        zmax=_bz_max,
-        showscale=False,
-    ),
-    row=1,
-    col=1,
-)
-fig.add_trace(
-    go.Heatmap(
-        z=group_mat_constructed,
-        x=group_labels,
-        y=group_labels,
-        colorscale="Viridis",
-        zmin=_bz_min,
-        zmax=_bz_max,
-        showscale=True,
-    ),
-    row=1,
-    col=2,
+    rows=2,
+    cols=_intf_n,
+    subplot_titles=_intf_titles,
+    horizontal_spacing=0.05,
+    vertical_spacing=0.12,
 )
 
-_group_steps = []
-for s in range(len(group_mats_trained)):
-    _group_steps.append(
-        dict(
-            method="update",
-            label=str(geom_epochs[s]),
-            args=[{"z": [group_mats_trained[s], group_mat_constructed]}],
-        )
+for i, (name, mat) in enumerate(_intf_models):
+    fig.add_trace(
+        go.Heatmap(
+            z=mat, colorscale="Inferno", zmin=_iz_min, zmax=_iz_max, showscale=False
+        ),
+        row=1,
+        col=i + 1,
+    )
+    fig.add_trace(
+        go.Heatmap(
+            z=mat[:, :_intf_zoom],
+            colorscale="Inferno",
+            zmin=_iz_min,
+            zmax=_iz_max,
+            showscale=(i == _intf_n - 1),
+            colorbar=dict(
+                title=dict(
+                    text="Group Mean<br>⟨(<i>Ŵ<sub>i</sub></i> · <i>W<sub>j</sub></i>)²⟩<sub><i>i∈A, j∈B</i></sub>",
+                    font=dict(size=18),
+                    side="top",
+                ),
+                len=0.51,
+                y=0.25,
+                x=1.03,
+                tickfont=dict(size=15),
+            )
+            if (i == _intf_n - 1)
+            else None,
+        ),
+        row=2,
+        col=i + 1,
     )
 
-for col in range(1, 3):
-    fig.update_xaxes(title_text="Feature Rank Group", row=1, col=col)
-    fig.update_yaxes(title_text="Partner Rank Group", row=1, col=col)
-fig.update_layout(
-    title="Mean Squared Interference by Frequency Group (groups of 10)",
-    height=700,
-    width=1400,
-    showlegend=False,
-    sliders=[
-        dict(
-            active=0,
-            currentvalue=dict(prefix="Epoch: "),
-            pad=dict(t=50),
-            steps=_group_steps,
-        )
-    ],
+fig.add_annotation(
+    text="Feature Rank (Grouped)",
+    xref="paper",
+    yref="paper",
+    x=0.5,
+    y=-0.08,
+    showarrow=False,
+    font=dict(size=24),
 )
+fig.add_annotation(
+    text="Feature Rank (Grouped)",
+    xref="paper",
+    yref="paper",
+    x=-0.05,
+    y=0.5,
+    showarrow=False,
+    font=dict(size=24),
+    textangle=-90,
+)
+
+_sq = 500
+fig.update_layout(
+    height=_sq * 2 + 80,
+    width=_sq * _intf_n + 150,
+    margin=dict(b=110, t=80, l=120),
+    showlegend=False,
+)
+for ann in fig.layout.annotations:
+    ann.font = dict(size=24)
+
 style_fig(fig)
+
+# Override ticks AFTER style_fig
+_intf_main_tv = dict(
+    tickmode="array",
+    tickvals=[0, 20, 40, 60, 80, 99],
+    ticktext=["0", "100", "200", "300", "400", "500"],
+    range=[-0.5, 99.5],
+    minor=dict(
+        tickmode="linear", tick0=0, dtick=4, ticks="outside", tickcolor="#9CA3AF"
+    ),
+)
+_intf_zoom_tv_x = dict(
+    tickmode="array",
+    tickvals=[0, 2, 4, 6, 8, 9],
+    ticktext=["0", "10", "20", "30", "40", "50"],
+    range=[-0.5, 9.5],
+)
+_intf_zoom_tv_y = dict(
+    tickmode="array",
+    tickvals=[0, 20, 40, 60, 80, 99],
+    ticktext=["0", "100", "200", "300", "400", "500"],
+    range=[-0.5, 99.5],
+    minor=dict(
+        tickmode="linear", tick0=0, dtick=4, ticks="outside", tickcolor="#9CA3AF"
+    ),
+)
+for i in range(_intf_n):
+    fig.update_xaxes(_intf_main_tv, row=1, col=i + 1)
+    fig.update_yaxes(_intf_main_tv, row=1, col=i + 1)
+    fig.update_xaxes(_intf_zoom_tv_x, row=2, col=i + 1)
+    fig.update_yaxes(_intf_zoom_tv_y, row=2, col=i + 1)
 fig.show()
+
+# %%
+# --- Save interference group plot as vector ---
+_fig_dir = os.path.join(os.path.dirname(__file__), "figures")
+os.makedirs(_fig_dir, exist_ok=True)
+fig.write_image(os.path.join(_fig_dir, "interference_groups.pdf"), engine="kaleido")
+fig.write_image(os.path.join(_fig_dir, "interference_groups.svg"), engine="kaleido")
+print(f"Saved to {_fig_dir}/interference_groups.{{pdf,svg}}")
 
 # %%
 # --- Interference entropy per feature ---
@@ -1365,11 +1577,11 @@ fig.show()
 
 import os
 
-_export_props = ["fn", "ti", "bias", "mpr", "fd"]
+_export_props = ["bias", "fn", "ti", "mpr", "fd"]
 _export_titles = [
+    "Learned Bias",
     "Feature Norms",
     "Total Interference",
-    "Learned Bias",
     "Mean Partner Rank",
     "Feature Dimensionalities",
 ]
@@ -1404,11 +1616,11 @@ _series = [
     ("Constructed AE", _final_constructed),
 ]
 
-_sb_props = ["fn", "ti", "bias", "mpr"]
+_sb_props = ["bias", "fn", "ti", "mpr"]
 _sb_titles = [
+    "Learned Bias",
     "Feature Norms",
     "Total Interference",
-    "Learned Bias",
     "Mean Partner Rank",
 ]
 _n_sb = len(_sb_props)
@@ -1465,8 +1677,8 @@ fig_export.add_annotation(
 )
 
 fig_export.update_layout(
-    height=470,
-    width=max(600, 350 * _n_sb),
+    height=500,
+    width=max(600, 440 * _n_sb),
     margin=dict(b=100),
     showlegend=True,
 )
@@ -1544,7 +1756,7 @@ fig_export_un.add_annotation(
     font=dict(size=22),
 )
 fig_export_un.update_layout(
-    height=470,
+    height=500,
     width=max(600, 350 * _n_export),
     margin=dict(b=100),
     showlegend=True,
