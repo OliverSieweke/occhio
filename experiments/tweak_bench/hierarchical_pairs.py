@@ -181,10 +181,10 @@ from scipy.optimize import linear_sum_assignment
 from occhio.sae.sae import SAESimple
 
 N_DICT = N_FEATURES // 2
-SAE_STEPS = 15_000
+SAE_STEPS = 20_000
 SAE_BATCH = 1024
 SAE_LR = 3e-4
-SAE_L1 = 0.3
+SAE_L1 = 0.4
 
 sae_gen = torch.Generator().manual_seed(4)
 
@@ -307,4 +307,424 @@ print(f"\n=== Fire f{PROBE_F0} + f{PROBE_F1} ===")
 print(f"  SAE latent d{da} (matched f{PROBE_F0}): {z_fab[0, da].item():.4f}")
 print(f"  SAE latent d{db} (matched f{PROBE_F1}): {z_fab[0, db].item():.4f}")
 
+# %%
+# --- Matryoshka SAE Training (via SAELens) ---
+from sae_lens import (
+    MatryoshkaBatchTopKTrainingSAE,
+    MatryoshkaBatchTopKTrainingSAEConfig,
+)
+
+# Nested cumulative widths; final width must equal d_sae.
+MATRYOSHKA_WIDTHS = [N_DICT // 4, N_DICT // 2, N_DICT]
+MATRYOSHKA_K = 3
+MATRYOSHKA_TRAIN_SAMPLES = 3 * SAE_STEPS * SAE_BATCH
+
+print("widths:", MATRYOSHKA_WIDTHS)
+print("k:", MATRYOSHKA_K)
+print("samples", MATRYOSHKA_TRAIN_SAMPLES)
+
+# Build on CPU first: SAELens registers `topk_threshold` as float64, which MPS
+# rejects. We downcast that buffer to float32 before moving to the target device.
+matryoshka_cfg = MatryoshkaBatchTopKTrainingSAEConfig(
+    d_in=D_HIDDEN,
+    d_sae=N_DICT,
+    matryoshka_widths=MATRYOSHKA_WIDTHS,
+    k=MATRYOSHKA_K,
+    device="cpu",
+    use_matryoshka_aux_loss=False,
+)
+matryoshka_sae = MatryoshkaBatchTopKTrainingSAE(matryoshka_cfg)
+matryoshka_sae.topk_threshold = matryoshka_sae.topk_threshold.to(torch.float32)
+matryoshka_sae.to(DEVICE)
+
+# --- Snapshot callback: capture loss + F1 every ~2000 steps ---
+SNAPSHOT_EVERY = 2000
+N_SNAPSHOTS = max(1, SAE_STEPS // SNAPSHOT_EVERY)
+matryoshka_history: list[dict] = []
+
+
+def matryoshka_snapshot(trainer):
+    """Compute recon loss, L0, MCC, F1, R² on a fresh batch at each snapshot."""
+    sae = trainer.sae
+    sae.eval()
+    with torch.no_grad():
+        x_snap = dist.sample(20_000).to(DEVICE)
+        h_snap = tm.ae.encode(x_snap)
+        z_snap = sae.encode(h_snap)
+        recon_snap = sae.decode(z_snap)
+
+        recon_loss = (h_snap - recon_snap).pow(2).sum(dim=-1).mean().item()
+        l0_snap = (z_snap > 0).float().sum(dim=-1).mean().item()
+        # Dead latents: never fired across the snapshot batch
+        dead_snap = int((~(z_snap > 0).any(dim=0)).sum().item())
+        total_var_snap = h_snap.var(dim=0).sum().item()
+        residual_var_snap = (h_snap - recon_snap).var(dim=0).sum().item()
+        r2_snap = 1 - residual_var_snap / total_var_snap
+
+        D_snap = tm.W.detach()
+        W_dec_t_snap = sae.W_dec.detach().T
+        D_norm_snap = D_snap / D_snap.norm(dim=0, keepdim=True).clamp(min=1e-8)
+        W_norm_snap = W_dec_t_snap / W_dec_t_snap.norm(dim=0, keepdim=True).clamp(
+            min=1e-8
+        )
+        cos_sim_snap = (D_norm_snap.T @ W_norm_snap).cpu().numpy()
+        feat_idx_snap, dict_idx_snap = linear_sum_assignment(-cos_sim_snap)
+        mcc_snap = float(cos_sim_snap[feat_idx_snap, dict_idx_snap].mean())
+
+        gt_snap = x_snap[:, feat_idx_snap] > 0
+        pred_snap = z_snap[:, dict_idx_snap] > 0
+        tp_snap = (gt_snap & pred_snap).float().sum(dim=0)
+        fp_snap = (~gt_snap & pred_snap).float().sum(dim=0)
+        fn_snap = (gt_snap & ~pred_snap).float().sum(dim=0)
+        prec_snap = tp_snap / (tp_snap + fp_snap + 1e-8)
+        rec_snap = tp_snap / (tp_snap + fn_snap + 1e-8)
+        f1_snap = (
+            (2 * prec_snap * rec_snap / (prec_snap + rec_snap + 1e-8)).mean().item()
+        )
+
+    matryoshka_history.append(
+        {
+            "step": trainer.n_training_steps,
+            "recon_loss": recon_loss,
+            "l0": l0_snap,
+            "r2": r2_snap,
+            "mcc": mcc_snap,
+            "f1": f1_snap,
+            "dead": dead_snap,
+        }
+    )
+    sae.train()
+    print(
+        f"  [snap step={trainer.n_training_steps}] "
+        f"loss={recon_loss:.4f} L0={l0_snap:.1f} "
+        f"MCC={mcc_snap:.3f} F1={f1_snap:.3f} R²={r2_snap:.3f} "
+        f"DL={dead_snap}"
+    )
+
+
+tm.train_saes(
+    {"matryoshka": matryoshka_sae},
+    training_samples=MATRYOSHKA_TRAIN_SAMPLES,
+    batch_size=SAE_BATCH,
+    lr=SAE_LR,
+    n_snapshots=N_SNAPSHOTS,
+    snapshot_fn=matryoshka_snapshot,
+    verbose=False,
+)
+# %%
+tm.evaluate_saes(["matryoshka"], num_samples=30000, verbose=True)
+
+# --- Plot Matryoshka training curves (recon loss + F1/MCC/R² over time) ---
+hist_steps = [h["step"] for h in matryoshka_history]
+hist_loss = [h["recon_loss"] for h in matryoshka_history]
+hist_f1 = [h["f1"] for h in matryoshka_history]
+hist_mcc = [h["mcc"] for h in matryoshka_history]
+hist_r2 = [h["r2"] for h in matryoshka_history]
+
+fig_mh = make_subplots(specs=[[{"secondary_y": True}]])
+fig_mh.add_trace(
+    go.Scatter(x=hist_steps, y=hist_loss, mode="lines+markers", name="recon loss"),
+    secondary_y=False,
+)
+fig_mh.add_trace(
+    go.Scatter(x=hist_steps, y=hist_f1, mode="lines+markers", name="F1"),
+    secondary_y=True,
+)
+fig_mh.add_trace(
+    go.Scatter(x=hist_steps, y=hist_mcc, mode="lines+markers", name="MCC"),
+    secondary_y=True,
+)
+fig_mh.add_trace(
+    go.Scatter(x=hist_steps, y=hist_r2, mode="lines+markers", name="R²"),
+    secondary_y=True,
+)
+fig_mh.update_xaxes(title_text="training step", **AXIS_STYLE)
+fig_mh.update_yaxes(title_text="recon loss", secondary_y=False, **AXIS_STYLE)
+fig_mh.update_yaxes(title_text="F1 / MCC / R²", secondary_y=True, **AXIS_STYLE)
+fig_mh.update_layout(title="Matryoshka training curves", **LAYOUT_DEFAULTS)
+fig_mh.show()
+
+print(f"Matryoshka widths={MATRYOSHKA_WIDTHS}, k={MATRYOSHKA_K}")
+print(f"F1 = {tm.saes_f1_score['matryoshka']:.4f}")
+print(f"MCC = {tm.saes_mcc['matryoshka']:.4f}")
+print(f"L0 = {tm.saes_l0['matryoshka']:.2f}")
+print(f"R² = {tm.saes_explained_variance['matryoshka']:.4f}")
+
+# %%
+# --- Matryoshka SAE Metrics (via JumpReLU inference conversion) ---
+# SAELens converts BatchTopK / Matryoshka training SAEs into a JumpReLU SAE
+# for inference: the learned `topk_threshold` scalar is broadcast to a
+# per-feature `threshold` buffer, and gating becomes a stateless elementwise
+# JumpReLU. This removes BatchTopK's batch-size dependence entirely, so we
+# can encode arbitrary N_TEST in one shot without any chunking.
+import tempfile  # noqa: E402
+
+
+def to_jumprelu_inference_sae(training_sae, device):
+    """Round-trip a (Matryoshka)BatchTopK training SAE through disk to get
+    its JumpReLU inference form."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        training_sae.save_inference_model(tmpdir)
+        return SAE.load_from_disk(tmpdir, device=device)
+
+
+matryoshka_inf = to_jumprelu_inference_sae(matryoshka_sae, DEVICE)
+print(f"Matryoshka inference SAE arch: {matryoshka_inf.cfg.architecture()}")
+
+N_TEST = 100_000
+
+with torch.no_grad():
+    test_x_m = dist.sample(N_TEST).to(DEVICE)
+    test_hidden_m = tm.ae.encode(test_x_m)
+
+    # Single-shot encode/decode — JumpReLU is stateless w.r.t. batch size.
+    test_z_m = matryoshka_inf.encode(test_hidden_m)
+    test_recon_m = matryoshka_inf.decode(test_z_m)
+
+    # L0
+    l0_m = (test_z_m > 0).float().sum(dim=-1).mean().item()
+    # Dead latents: never fired across the test batch
+    dead_m = int((~(test_z_m > 0).any(dim=0)).sum().item())
+
+    # R² (explained variance)
+    total_var_m = test_hidden_m.var(dim=0).sum().item()
+    residual_var_m = (test_hidden_m - test_recon_m).var(dim=0).sum().item()
+    r2_m = 1 - residual_var_m / total_var_m
+
+    # MCC matching (cosine similarity, NO abs)
+    D_m = tm.W.detach()  # (D_HIDDEN, N_FEATURES)
+    W_dec_t_m = matryoshka_inf.W_dec.detach().T  # (D_HIDDEN, N_DICT)
+    D_norm_m = D_m / D_m.norm(dim=0, keepdim=True).clamp(min=1e-8)
+    W_norm_m = W_dec_t_m / W_dec_t_m.norm(dim=0, keepdim=True).clamp(min=1e-8)
+    cos_sim_m = (D_norm_m.T @ W_norm_m).cpu().numpy()  # (N_FEATURES, N_DICT)
+
+    feat_idx_m, dict_idx_m = linear_sum_assignment(-cos_sim_m)
+    mcc_m = float(cos_sim_m[feat_idx_m, dict_idx_m].mean())
+
+    # F1 (detection) — macro
+    gt_active_m = test_x_m[:, feat_idx_m] > 0
+    pred_active_m = test_z_m[:, dict_idx_m] > 0
+    tp_m = (gt_active_m & pred_active_m).float().sum(dim=0)
+    fp_m = (~gt_active_m & pred_active_m).float().sum(dim=0)
+    fn_m = (gt_active_m & ~pred_active_m).float().sum(dim=0)
+    prec_m = tp_m / (tp_m + fp_m + 1e-8)
+    rec_m = tp_m / (tp_m + fn_m + 1e-8)
+    f1_m = (2 * prec_m * rec_m / (prec_m + rec_m + 1e-8)).mean().item()
+
+    # F1 (detection) — micro (less sensitive to per-feature noise)
+    tp_tot = tp_m.sum()
+    fp_tot = fp_m.sum()
+    fn_tot = fn_m.sum()
+    prec_micro_m = (tp_tot / (tp_tot + fp_tot + 1e-8)).item()
+    rec_micro_m = (tp_tot / (tp_tot + fn_tot + 1e-8)).item()
+    f1_micro_m = 2 * prec_micro_m * rec_micro_m / (prec_micro_m + rec_micro_m + 1e-8)
+
+print(
+    f"[Matryoshka, JumpReLU inference] N_TEST={N_TEST} "
+    f"prec={prec_m.mean():.4f} rec={rec_m.mean():.4f}"
+)
+print(
+    f"L0={l0_m:.1f}  MCC={mcc_m:.4f}  F1(macro)={f1_m:.4f}  "
+    f"F1(micro)={f1_micro_m:.4f}  R²={r2_m:.4f}  DL={dead_m}"
+)
+
+# %%
+# --- BatchTopK SAE Training (via SAELens) ---
+from sae_lens import (
+    BatchTopKTrainingSAE,
+    BatchTopKTrainingSAEConfig,
+)
+
+BATCHTOPK_K = 3
+BATCHTOPK_TRAIN_SAMPLES = 4 * SAE_STEPS * SAE_BATCH
+print("k:", BATCHTOPK_K)
+print("samples", BATCHTOPK_TRAIN_SAMPLES)
+
+# Build on CPU first: SAELens registers `topk_threshold` as float64, which MPS
+# rejects. We downcast that buffer to float32 before moving to the target device.
+batchtopk_cfg = BatchTopKTrainingSAEConfig(
+    d_in=D_HIDDEN,
+    d_sae=N_DICT,
+    k=BATCHTOPK_K,
+    device="cpu",
+)
+batchtopk_sae = BatchTopKTrainingSAE(batchtopk_cfg)
+batchtopk_sae.topk_threshold = batchtopk_sae.topk_threshold.to(torch.float32)
+batchtopk_sae.to(DEVICE)
+
+# --- Snapshot callback: capture loss + F1 every ~SNAPSHOT_EVERY steps ---
+N_SNAPSHOTS_B = max(1, SAE_STEPS // SNAPSHOT_EVERY)
+batchtopk_history: list[dict] = []
+
+
+def batchtopk_snapshot(trainer):
+    """Compute recon loss, L0, MCC, F1, R² on a fresh batch at each snapshot."""
+    sae = trainer.sae
+    sae.eval()
+    with torch.no_grad():
+        x_snap = dist.sample(20_000).to(DEVICE)
+        h_snap = tm.ae.encode(x_snap)
+        z_snap = sae.encode(h_snap)
+        recon_snap = sae.decode(z_snap)
+
+        recon_loss = (h_snap - recon_snap).pow(2).sum(dim=-1).mean().item()
+        l0_snap = (z_snap > 0).float().sum(dim=-1).mean().item()
+        # Dead latents: never fired across the snapshot batch
+        dead_snap = int((~(z_snap > 0).any(dim=0)).sum().item())
+        total_var_snap = h_snap.var(dim=0).sum().item()
+        residual_var_snap = (h_snap - recon_snap).var(dim=0).sum().item()
+        r2_snap = 1 - residual_var_snap / total_var_snap
+
+        D_snap = tm.W.detach()
+        W_dec_t_snap = sae.W_dec.detach().T
+        D_norm_snap = D_snap / D_snap.norm(dim=0, keepdim=True).clamp(min=1e-8)
+        W_norm_snap = W_dec_t_snap / W_dec_t_snap.norm(dim=0, keepdim=True).clamp(
+            min=1e-8
+        )
+        cos_sim_snap = (D_norm_snap.T @ W_norm_snap).cpu().numpy()
+        feat_idx_snap, dict_idx_snap = linear_sum_assignment(-cos_sim_snap)
+        mcc_snap = float(cos_sim_snap[feat_idx_snap, dict_idx_snap].mean())
+
+        gt_snap = x_snap[:, feat_idx_snap] > 0
+        pred_snap = z_snap[:, dict_idx_snap] > 0
+        tp_snap = (gt_snap & pred_snap).float().sum(dim=0)
+        fp_snap = (~gt_snap & pred_snap).float().sum(dim=0)
+        fn_snap = (gt_snap & ~pred_snap).float().sum(dim=0)
+        prec_snap = tp_snap / (tp_snap + fp_snap + 1e-8)
+        rec_snap = tp_snap / (tp_snap + fn_snap + 1e-8)
+        f1_snap = (
+            (2 * prec_snap * rec_snap / (prec_snap + rec_snap + 1e-8)).mean().item()
+        )
+
+    batchtopk_history.append(
+        {
+            "step": trainer.n_training_steps,
+            "recon_loss": recon_loss,
+            "l0": l0_snap,
+            "r2": r2_snap,
+            "mcc": mcc_snap,
+            "f1": f1_snap,
+            "dead": dead_snap,
+        }
+    )
+    sae.train()
+    print(
+        f"  [snap step={trainer.n_training_steps}] "
+        f"loss={recon_loss:.4f} L0={l0_snap:.1f} "
+        f"MCC={mcc_snap:.3f} F1={f1_snap:.3f} R²={r2_snap:.3f} "
+        f"DL={dead_snap}"
+    )
+
+
+tm.train_saes(
+    {"batchtopk": batchtopk_sae},
+    training_samples=BATCHTOPK_TRAIN_SAMPLES,
+    batch_size=SAE_BATCH,
+    lr=SAE_LR,
+    n_snapshots=N_SNAPSHOTS_B,
+    snapshot_fn=batchtopk_snapshot,
+    verbose=False,
+)
+
+# %%
+tm.evaluate_saes(["batchtopk"], num_samples=10_000, verbose=True)
+
+# %%
+# --- Plot BatchTopK training curves ---
+hist_steps_b = [h["step"] for h in batchtopk_history]
+hist_loss_b = [h["recon_loss"] for h in batchtopk_history]
+hist_f1_b = [h["f1"] for h in batchtopk_history]
+hist_mcc_b = [h["mcc"] for h in batchtopk_history]
+hist_r2_b = [h["r2"] for h in batchtopk_history]
+
+fig_bh = make_subplots(specs=[[{"secondary_y": True}]])
+fig_bh.add_trace(
+    go.Scatter(x=hist_steps_b, y=hist_loss_b, mode="lines+markers", name="recon loss"),
+    secondary_y=False,
+)
+fig_bh.add_trace(
+    go.Scatter(x=hist_steps_b, y=hist_f1_b, mode="lines+markers", name="F1"),
+    secondary_y=True,
+)
+fig_bh.add_trace(
+    go.Scatter(x=hist_steps_b, y=hist_mcc_b, mode="lines+markers", name="MCC"),
+    secondary_y=True,
+)
+fig_bh.add_trace(
+    go.Scatter(x=hist_steps_b, y=hist_r2_b, mode="lines+markers", name="R²"),
+    secondary_y=True,
+)
+fig_bh.update_xaxes(title_text="training step", **AXIS_STYLE)
+fig_bh.update_yaxes(title_text="recon loss", secondary_y=False, **AXIS_STYLE)
+fig_bh.update_yaxes(title_text="F1 / MCC / R²", secondary_y=True, **AXIS_STYLE)
+fig_bh.update_layout(title="BatchTopK training curves", **LAYOUT_DEFAULTS)
+fig_bh.show()
+
+print(f"BatchTopK k={BATCHTOPK_K}")
+print(f"F1 = {tm.saes_f1_score['batchtopk']:.4f}")
+print(f"MCC = {tm.saes_mcc['batchtopk']:.4f}")
+print(f"L0 = {tm.saes_l0['batchtopk']:.2f}")
+print(f"R² = {tm.saes_explained_variance['batchtopk']:.4f}")
+
+# %%
+# --- BatchTopK SAE Metrics (via JumpReLU inference conversion) ---
+batchtopk_inf = to_jumprelu_inference_sae(batchtopk_sae, DEVICE)
+print(f"BatchTopK inference SAE arch: {batchtopk_inf.cfg.architecture()}")
+
+N_TEST_B = 100_000
+
+with torch.no_grad():
+    test_x_b = dist.sample(N_TEST_B).to(DEVICE)
+    test_hidden_b = tm.ae.encode(test_x_b)
+
+    # Single-shot encode/decode — JumpReLU is stateless w.r.t. batch size.
+    test_z_b = batchtopk_inf.encode(test_hidden_b)
+    test_recon_b = batchtopk_inf.decode(test_z_b)
+
+    # L0
+    l0_b = (test_z_b > 0).float().sum(dim=-1).mean().item()
+    # Dead latents: never fired across the test batch
+    dead_b = int((~(test_z_b > 0).any(dim=0)).sum().item())
+
+    # R² (explained variance)
+    total_var_b = test_hidden_b.var(dim=0).sum().item()
+    residual_var_b = (test_hidden_b - test_recon_b).var(dim=0).sum().item()
+    r2_b = 1 - residual_var_b / total_var_b
+
+    # MCC matching (cosine similarity, NO abs)
+    D_b = tm.W.detach()  # (D_HIDDEN, N_FEATURES)
+    W_dec_t_b = batchtopk_inf.W_dec.detach().T  # (D_HIDDEN, N_DICT)
+    D_norm_b = D_b / D_b.norm(dim=0, keepdim=True).clamp(min=1e-8)
+    W_norm_b = W_dec_t_b / W_dec_t_b.norm(dim=0, keepdim=True).clamp(min=1e-8)
+    cos_sim_b = (D_norm_b.T @ W_norm_b).cpu().numpy()  # (N_FEATURES, N_DICT)
+
+    feat_idx_b, dict_idx_b = linear_sum_assignment(-cos_sim_b)
+    mcc_b = float(cos_sim_b[feat_idx_b, dict_idx_b].mean())
+
+    # F1 (detection) — macro
+    gt_active_b = test_x_b[:, feat_idx_b] > 0
+    pred_active_b = test_z_b[:, dict_idx_b] > 0
+    tp_b = (gt_active_b & pred_active_b).float().sum(dim=0)
+    fp_b = (~gt_active_b & pred_active_b).float().sum(dim=0)
+    fn_b = (gt_active_b & ~pred_active_b).float().sum(dim=0)
+    prec_b = tp_b / (tp_b + fp_b + 1e-8)
+    rec_b = tp_b / (tp_b + fn_b + 1e-8)
+    f1_b = (2 * prec_b * rec_b / (prec_b + rec_b + 1e-8)).mean().item()
+
+    # F1 (detection) — micro
+    tp_tot_b = tp_b.sum()
+    fp_tot_b = fp_b.sum()
+    fn_tot_b = fn_b.sum()
+    prec_micro_b = (tp_tot_b / (tp_tot_b + fp_tot_b + 1e-8)).item()
+    rec_micro_b = (tp_tot_b / (tp_tot_b + fn_tot_b + 1e-8)).item()
+    f1_micro_b = 2 * prec_micro_b * rec_micro_b / (prec_micro_b + rec_micro_b + 1e-8)
+
+print(
+    f"[BatchTopK, JumpReLU inference] N_TEST={N_TEST_B} "
+    f"prec={prec_b.mean():.4f} rec={rec_b.mean():.4f}"
+)
+print(
+    f"L0={l0_b:.1f}  MCC={mcc_b:.4f}  F1(macro)={f1_b:.4f}  "
+    f"F1(micro)={f1_micro_b:.4f}  R²={r2_b:.4f}  DL={dead_b}"
+)
 # %%
