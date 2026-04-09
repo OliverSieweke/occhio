@@ -173,7 +173,7 @@ N_DICT = N_FEATURES // 2
 SAE_STEPS = 15_000
 SAE_BATCH = 1024
 SAE_LR = 3e-4
-SAE_L1 = 0.3
+SAE_L1 = 0.4
 
 sae_gen = torch.Generator().manual_seed(4)
 
@@ -263,5 +263,84 @@ px.imshow(
     aspect="auto",
     color_continuous_scale="ylgnbu_r",
 ).show()
+
+# %%
+# --- Matryoshka SAE Training (via SAELens) ---
+from sae_lens import (
+    MatryoshkaBatchTopKTrainingSAE,
+    MatryoshkaBatchTopKTrainingSAEConfig,
+)
+
+# Nested cumulative widths; final width must equal d_sae.
+MATRYOSHKA_WIDTHS = [N_DICT // 8, N_DICT // 4, N_DICT // 2, N_DICT]
+MATRYOSHKA_K = max(1, int(round(mean_l0)))
+MATRYOSHKA_TRAIN_SAMPLES = SAE_STEPS * SAE_BATCH
+
+# Build on CPU first: SAELens registers `topk_threshold` as float64, which MPS
+# rejects. We downcast that buffer to float32 before moving to the target device.
+matryoshka_cfg = MatryoshkaBatchTopKTrainingSAEConfig(
+    d_in=D_HIDDEN,
+    d_sae=N_DICT,
+    matryoshka_widths=MATRYOSHKA_WIDTHS,
+    k=MATRYOSHKA_K,
+    device="cpu",
+)
+matryoshka_sae = MatryoshkaBatchTopKTrainingSAE(matryoshka_cfg)
+matryoshka_sae.topk_threshold = matryoshka_sae.topk_threshold.to(torch.float32)
+matryoshka_sae.to(DEVICE)
+
+tm.train_saes(
+    {"matryoshka": matryoshka_sae},
+    training_samples=MATRYOSHKA_TRAIN_SAMPLES,
+    batch_size=SAE_BATCH,
+    lr=SAE_LR,
+    verbose=True,
+)
+tm.evaluate_saes(["matryoshka"], num_samples=50_000, verbose=True)
+
+print(f"Matryoshka widths={MATRYOSHKA_WIDTHS}, k={MATRYOSHKA_K}")
+print(f"F1 = {tm.saes_f1_score['matryoshka']:.4f}")
+print(f"MCC = {tm.saes_mcc['matryoshka']:.4f}")
+print(f"L0 = {tm.saes_l0['matryoshka']:.2f}")
+print(f"R² = {tm.saes_explained_variance['matryoshka']:.4f}")
+
+# %%
+# --- Matryoshka SAE Metrics (computed by hand, no abs in MCC) ---
+with torch.no_grad():
+    test_x_m = dist.sample(50_000).to(DEVICE)
+    test_hidden_m = tm.ae.encode(test_x_m)
+    test_z_m = matryoshka_sae.encode(test_hidden_m)
+    test_recon_m = matryoshka_sae.decode(test_z_m)
+
+    # L0
+    l0_m = (test_z_m > 0).float().sum(dim=-1).mean().item()
+
+    # R² (explained variance)
+    total_var_m = test_hidden_m.var(dim=0).sum().item()
+    residual_var_m = (test_hidden_m - test_recon_m).var(dim=0).sum().item()
+    r2_m = 1 - residual_var_m / total_var_m
+
+    # MCC matching (cosine similarity, NO abs)
+    D_m = tm.W.detach()  # (D_HIDDEN, N_FEATURES)
+    W_dec_t_m = matryoshka_sae.W_dec.detach().T  # (D_HIDDEN, N_DICT)
+    D_norm_m = D_m / D_m.norm(dim=0, keepdim=True).clamp(min=1e-8)
+    W_norm_m = W_dec_t_m / W_dec_t_m.norm(dim=0, keepdim=True).clamp(min=1e-8)
+    cos_sim_m = (D_norm_m.T @ W_norm_m).cpu().numpy()  # (N_FEATURES, N_DICT)
+
+    feat_idx_m, dict_idx_m = linear_sum_assignment(-cos_sim_m)
+    mcc_m = float(cos_sim_m[feat_idx_m, dict_idx_m].mean())
+
+    # F1 (detection)
+    gt_active_m = test_x_m[:, feat_idx_m] > 0
+    pred_active_m = test_z_m[:, dict_idx_m] > 0
+    tp_m = (gt_active_m & pred_active_m).float().sum(dim=0)
+    fp_m = (~gt_active_m & pred_active_m).float().sum(dim=0)
+    fn_m = (gt_active_m & ~pred_active_m).float().sum(dim=0)
+    prec_m = tp_m / (tp_m + fp_m + 1e-8)
+    rec_m = tp_m / (tp_m + fn_m + 1e-8)
+    f1_m = (2 * prec_m * rec_m / (prec_m + rec_m + 1e-8)).mean().item()
+
+print(f"[Matryoshka, by hand] prec={prec_m.mean():.4f}, reca={rec_m.mean():.4f}")
+print(f"L0={l0_m:.1f}  MCC={mcc_m:.4f}  F1={f1_m:.4f}  R²={r2_m:.4f}")
 
 # %%
