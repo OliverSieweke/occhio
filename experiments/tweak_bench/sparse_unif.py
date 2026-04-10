@@ -9,7 +9,7 @@ from plotly.subplots import make_subplots
 
 from occhio.autoencoder import TiedLinearRelu
 from occhio.distributions.sparse import SparseUniform
-from occhio.toy_model import ToyModel
+from occhio.toy_model import SAEEntry, ToyModel
 
 # --- Paper-quality plot defaults ---
 FONT = dict(family="Times New Roman, serif", size=24, color="#333333")
@@ -48,7 +48,7 @@ DEVICE = "mps"
 SEED = 42
 N_FEATURES = 1296
 D_HIDDEN = 100
-N_EPOCHS = 20_000
+N_EPOCHS = 40_000
 BATCH_SIZE = 512
 
 # %%
@@ -70,10 +70,59 @@ print(f"Average L0: {mean_l0:.2f} +/- {std_l0:.2f}")
 # %%
 # --- Train ---
 gen = torch.Generator(DEVICE).manual_seed(SEED)
-ae = TiedLinearRelu(N_FEATURES, D_HIDDEN, device=DEVICE, generator=gen)
+ae = TiedLinearRelu(
+    N_FEATURES,
+    D_HIDDEN,
+    device=DEVICE,
+    generator=gen,
+)
 tm = ToyModel(distribution=dist, ae=ae, device=DEVICE)
 
 losses, _ = tm.fit(N_EPOCHS, batch_size=BATCH_SIZE, verbose=True)
+
+# %%
+# --- Autoencoder F1 (does the AE round-trip preserve feature activity?) ---
+with torch.no_grad():
+    ae_test_x = dist.sample(100_000).to(DEVICE)
+    ae_test_xhat = tm.ae.decode(tm.ae.encode(ae_test_x))
+
+    gt_active_ae = ae_test_x > 0
+    pred_active_ae = ae_test_xhat > 0
+
+    tp_ae = (gt_active_ae & pred_active_ae).float().sum(dim=0)
+    fp_ae = (~gt_active_ae & pred_active_ae).float().sum(dim=0)
+    fn_ae = (gt_active_ae & ~pred_active_ae).float().sum(dim=0)
+
+    prec_ae = tp_ae / (tp_ae + fp_ae + 1e-8)
+    rec_ae = tp_ae / (tp_ae + fn_ae + 1e-8)
+    f1_ae = 2 * prec_ae * rec_ae / (prec_ae + rec_ae + 1e-8)
+
+    tp_tot_ae = tp_ae.sum()
+    fp_tot_ae = fp_ae.sum()
+    fn_tot_ae = fn_ae.sum()
+    prec_micro_ae = (tp_tot_ae / (tp_tot_ae + fp_tot_ae + 1e-8)).item()
+    rec_micro_ae = (tp_tot_ae / (tp_tot_ae + fn_tot_ae + 1e-8)).item()
+    f1_micro_ae = (
+        2 * prec_micro_ae * rec_micro_ae / (prec_micro_ae + rec_micro_ae + 1e-8)
+    )
+
+print(
+    f"[AE round-trip] "
+    f"prec={prec_ae.mean():.4f}  rec={rec_ae.mean():.4f}  "
+    f"F1(macro)={f1_ae.mean().item():.4f}  F1(micro)={f1_micro_ae:.4f}"
+)
+
+# %%
+# --- Plot: Per-feature AE F1 score ---
+f1_ae_np = f1_ae.cpu().numpy()
+fig_ae_f1 = go.Figure()
+fig_ae_f1.add_trace(
+    go.Scatter(x=np.arange(N_FEATURES), y=f1_ae_np, mode="lines", name="F1")
+)
+fig_ae_f1.update_xaxes(title_text="Feature index", **AXIS_STYLE)
+fig_ae_f1.update_yaxes(title_text="F1 score", range=[0, 1.05], **AXIS_STYLE)
+fig_ae_f1.update_layout(title="Per-feature AE round-trip F1", **LAYOUT_DEFAULTS)
+fig_ae_f1.show()
 
 # %%
 # --- Plot: Feature Norms and Feature Dimensionalities ---
@@ -173,13 +222,13 @@ N_DICT = N_FEATURES // 2
 SAE_STEPS = 15_000
 SAE_BATCH = 1024
 SAE_LR = 3e-4
-SAE_L1 = 0.4
+SAE_L1 = 0.3
 
 sae_gen = torch.Generator().manual_seed(4)
 
-sae = SAESimple(n_latent=D_HIDDEN, n_dict=N_DICT, l1_coef=SAE_L1, device=DEVICE).to(
-    DEVICE
-)
+sae = SAESimple(
+    n_latent=D_HIDDEN, n_dict=N_DICT, l1_coef=SAE_L1, aux_k=True, device=DEVICE
+).to(DEVICE)
 
 
 def data_fn(n: int) -> torch.Tensor:
@@ -290,7 +339,7 @@ matryoshka_sae.topk_threshold = matryoshka_sae.topk_threshold.to(torch.float32)
 matryoshka_sae.to(DEVICE)
 
 tm.train_saes(
-    {"matryoshka": matryoshka_sae},
+    [SAEEntry(sae=matryoshka_sae, type="Matryoshka", label="matryoshka")],
     training_samples=MATRYOSHKA_TRAIN_SAMPLES,
     batch_size=SAE_BATCH,
     lr=SAE_LR,

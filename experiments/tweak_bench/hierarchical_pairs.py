@@ -11,7 +11,7 @@ from plotly.subplots import make_subplots
 
 from occhio.autoencoder import TiedLinearRelu
 from occhio.distributions.correlated import HierarchicalPairs
-from occhio.toy_model import ToyModel
+from occhio.toy_model import SAEEntry, ToyModel
 
 # --- Paper-quality plot defaults ---
 FONT = dict(family="Times New Roman, serif", size=24, color="#333333")
@@ -49,8 +49,8 @@ LAYOUT_DEFAULTS = dict(
 DEVICE = "mps"
 SEED = 42
 N_FEATURES = 1296
-D_HIDDEN = 100
-N_EPOCHS = 25_000
+D_HIDDEN = 128
+N_EPOCHS = 50_000
 BATCH_SIZE = 512
 
 # %%
@@ -84,6 +84,51 @@ losses, _ = tm.fit(N_EPOCHS, batch_size=BATCH_SIZE, verbose=True)
 # %%
 # --- Plot losses ---
 px.line(losses)
+
+# %%
+# --- Autoencoder F1 (does the AE round-trip preserve feature activity?) ---
+with torch.no_grad():
+    ae_test_x = dist.sample(100_000).to(DEVICE)
+    ae_test_xhat = tm.ae.decode(tm.ae.encode(ae_test_x))
+
+    gt_active_ae = ae_test_x > 0
+    pred_active_ae = ae_test_xhat > 0
+
+    tp_ae = (gt_active_ae & pred_active_ae).float().sum(dim=0)
+    fp_ae = (~gt_active_ae & pred_active_ae).float().sum(dim=0)
+    fn_ae = (gt_active_ae & ~pred_active_ae).float().sum(dim=0)
+
+    prec_ae = tp_ae / (tp_ae + fp_ae + 1e-8)
+    rec_ae = tp_ae / (tp_ae + fn_ae + 1e-8)
+    f1_ae = 2 * prec_ae * rec_ae / (prec_ae + rec_ae + 1e-8)
+
+    tp_tot_ae = tp_ae.sum()
+    fp_tot_ae = fp_ae.sum()
+    fn_tot_ae = fn_ae.sum()
+    prec_micro_ae = (tp_tot_ae / (tp_tot_ae + fp_tot_ae + 1e-8)).item()
+    rec_micro_ae = (tp_tot_ae / (tp_tot_ae + fn_tot_ae + 1e-8)).item()
+    f1_micro_ae = (
+        2 * prec_micro_ae * rec_micro_ae / (prec_micro_ae + rec_micro_ae + 1e-8)
+    )
+
+print(
+    f"[AE round-trip] "
+    f"prec={prec_ae.mean():.4f}  rec={rec_ae.mean():.4f}  "
+    f"F1(macro)={f1_ae.mean().item():.4f}  F1(micro)={f1_micro_ae:.4f}"
+)
+
+print(f1_ae[: N_FEATURES // 2].mean().item())
+# %%
+# --- Plot: Per-feature AE F1 score ---
+f1_ae_np = f1_ae.cpu().numpy()
+fig_ae_f1 = go.Figure()
+fig_ae_f1.add_trace(
+    go.Scatter(x=np.arange(N_FEATURES), y=f1_ae_np, mode="lines", name="F1")
+)
+fig_ae_f1.update_xaxes(title_text="Feature index", **AXIS_STYLE)
+fig_ae_f1.update_yaxes(title_text="F1 score", range=[0, 1.05], **AXIS_STYLE)
+fig_ae_f1.update_layout(title="Per-feature AE round-trip F1", **LAYOUT_DEFAULTS)
+fig_ae_f1.show()
 
 # %%
 # --- Plot: Feature Norms and Feature Dimensionalities ---
@@ -188,9 +233,9 @@ SAE_L1 = 0.4
 
 sae_gen = torch.Generator().manual_seed(4)
 
-sae = SAESimple(n_latent=D_HIDDEN, n_dict=N_DICT, l1_coef=SAE_L1, device=DEVICE).to(
-    DEVICE
-)
+sae = SAESimple(
+    n_latent=D_HIDDEN, n_dict=N_DICT, l1_coef=SAE_L1, ortho_coef=0.1, device=DEVICE
+).to(DEVICE)
 
 
 def data_fn(n: int) -> torch.Tensor:
@@ -317,7 +362,7 @@ from sae_lens import (
 # Nested cumulative widths; final width must equal d_sae.
 MATRYOSHKA_WIDTHS = [N_DICT // 4, N_DICT // 2, N_DICT]
 MATRYOSHKA_K = 3
-MATRYOSHKA_TRAIN_SAMPLES = 3 * SAE_STEPS * SAE_BATCH
+MATRYOSHKA_TRAIN_SAMPLES = 4 * SAE_STEPS * SAE_BATCH
 
 print("widths:", MATRYOSHKA_WIDTHS)
 print("k:", MATRYOSHKA_K)
@@ -403,7 +448,7 @@ def matryoshka_snapshot(trainer):
 
 
 tm.train_saes(
-    {"matryoshka": matryoshka_sae},
+    [SAEEntry(sae=matryoshka_sae, type="Matryoshka", label="matryoshka")],
     training_samples=MATRYOSHKA_TRAIN_SAMPLES,
     batch_size=SAE_BATCH,
     lr=SAE_LR,
@@ -529,6 +574,41 @@ print(
 )
 
 # %%
+# --- Matryoshka Absorption Test ---
+fa_match_pos_m = int((feat_idx_m == PROBE_F0).nonzero()[0][0])
+fb_match_pos_m = int((feat_idx_m == PROBE_F1).nonzero()[0][0])
+da_m = dict_idx_m[fa_match_pos_m]
+db_m = dict_idx_m[fb_match_pos_m]
+
+print(f"[Matryoshka] f{PROBE_F0} → latent d{da_m}   |   f{PROBE_F1} → latent d{db_m}")
+
+with torch.no_grad():
+    x_fa_m = torch.zeros(1, N_FEATURES, device=DEVICE)
+    x_fa_m[0, PROBE_F0] = 1.0
+    z_fa_m = matryoshka_inf.encode(tm.ae.encode(x_fa_m))
+
+    x_fab_m = torch.zeros(1, N_FEATURES, device=DEVICE)
+    x_fab_m[0, PROBE_F0] = 1.0
+    x_fab_m[0, PROBE_F1] = 1.0
+    z_fab_m = matryoshka_inf.encode(tm.ae.encode(x_fab_m))
+
+print(f"\n=== Fire f{PROBE_F0} only ===")
+print(
+    f"  Matryoshka latent d{da_m} (matched f{PROBE_F0}): {z_fa_m[0, da_m].item():.4f}"
+)
+print(
+    f"  Matryoshka latent d{db_m} (matched f{PROBE_F1}): {z_fa_m[0, db_m].item():.4f}"
+)
+
+print(f"\n=== Fire f{PROBE_F0} + f{PROBE_F1} ===")
+print(
+    f"  Matryoshka latent d{da_m} (matched f{PROBE_F0}): {z_fab_m[0, da_m].item():.4f}"
+)
+print(
+    f"  Matryoshka latent d{db_m} (matched f{PROBE_F1}): {z_fab_m[0, db_m].item():.4f}"
+)
+
+# %%
 # --- BatchTopK SAE Training (via SAELens) ---
 from sae_lens import (
     BatchTopKTrainingSAE,
@@ -617,7 +697,7 @@ def batchtopk_snapshot(trainer):
 
 
 tm.train_saes(
-    {"batchtopk": batchtopk_sae},
+    [SAEEntry(sae=batchtopk_sae, type="BatchTopK", label="batchtopk")],
     training_samples=BATCHTOPK_TRAIN_SAMPLES,
     batch_size=SAE_BATCH,
     lr=SAE_LR,
