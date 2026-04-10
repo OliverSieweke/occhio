@@ -88,7 +88,7 @@ ae = TiedLinearRelu(n_features, n_hidden, generator=gen, device=DEVICE)
 tm = ToyModel(distribution=dist, ae=ae, device=DEVICE)
 
 # %%
-losses, _ = tm.fit(30_000, 256, verbose=True)
+losses, _ = tm.fit(40_000, 256, verbose=True)
 
 # %%
 fig_loss = px.line(y=losses, labels={"x": "Epoch", "y": "Loss"}, title="Training loss")
@@ -299,7 +299,7 @@ SAE_LR = 3e-4
 SAE_L1 = 0.15
 
 gen_sae = torch.Generator()
-gen_sae.manual_seed(9)
+gen_sae.manual_seed(3)
 
 sae = SAESimple(
     n_latent=n_hidden,
@@ -413,9 +413,19 @@ fig_acts
 # %%
 # --- Dual: one-hot SAE latents → decoded feature activations (unmatched) ---
 with torch.no_grad():
-    eye_dict = torch.eye(N_DICT, device=DEVICE) * 0.5
+    # Compute mean non-zero activation per SAE latent
+    avg_x = dist.sample(50_000).to(DEVICE)
+    avg_z = sae.encode(tm.ae.encode(avg_x))
+    # Median non-zero activation per SAE latent
+    median_act_per_latent = torch.zeros(avg_z.shape[1], device=DEVICE)
+    for j in range(avg_z.shape[1]):
+        nonzero_vals = avg_z[:, j][avg_z[:, j] > 0]
+        if len(nonzero_vals) > 0:
+            median_act_per_latent[j] = nonzero_vals.quantile(0.6)
+    avg_act_per_latent = median_act_per_latent
+    print(avg_act_per_latent)
+    eye_dict = torch.diag(avg_act_per_latent)
 
-    # * torch.tensor( [0.8, 0.7, 0.7, 0.7, 0.8], device="mps")
     decoded_acts = (
         tm.ae.decode(sae.decode(eye_dict)).cpu().numpy()
     )  # (N_DICT, n_features)

@@ -87,6 +87,38 @@ losses, _ = tm.fit(N_EPOCHS, batch_size=BATCH_SIZE, verbose=True)
 px.line(losses)
 
 # %%
+# --- Autoencoder F1 (does the AE round-trip preserve feature activity?) ---
+with torch.no_grad():
+    ae_test_x = dist.sample(100_000).to(DEVICE)
+    ae_test_xhat = tm.ae.decode(tm.ae.encode(ae_test_x))
+
+    gt_active_ae = ae_test_x > 0
+    pred_active_ae = ae_test_xhat > 0
+
+    tp_ae = (gt_active_ae & pred_active_ae).float().sum(dim=0)
+    fp_ae = (~gt_active_ae & pred_active_ae).float().sum(dim=0)
+    fn_ae = (gt_active_ae & ~pred_active_ae).float().sum(dim=0)
+
+    prec_ae = tp_ae / (tp_ae + fp_ae + 1e-8)
+    rec_ae = tp_ae / (tp_ae + fn_ae + 1e-8)
+    f1_ae = 2 * prec_ae * rec_ae / (prec_ae + rec_ae + 1e-8)
+
+    tp_tot_ae = tp_ae.sum()
+    fp_tot_ae = fp_ae.sum()
+    fn_tot_ae = fn_ae.sum()
+    prec_micro_ae = (tp_tot_ae / (tp_tot_ae + fp_tot_ae + 1e-8)).item()
+    rec_micro_ae = (tp_tot_ae / (tp_tot_ae + fn_tot_ae + 1e-8)).item()
+    f1_micro_ae = (
+        2 * prec_micro_ae * rec_micro_ae / (prec_micro_ae + rec_micro_ae + 1e-8)
+    )
+
+print(
+    f"[AE round-trip] "
+    f"prec={prec_ae.mean():.4f}  rec={rec_ae.mean():.4f}  "
+    f"F1(macro)={f1_ae.mean().item():.4f}  F1(micro)={f1_micro_ae:.4f}"
+)
+
+# %%
 # --- Plot: Feature Norms and Feature Dimensionalities ---
 fn = tm.feature_norms.detach().cpu().numpy()
 fd = tm.feature_dimensionalities.detach().cpu().numpy()
