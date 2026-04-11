@@ -49,7 +49,7 @@ LAYOUT_DEFAULTS = dict(
 DEVICE = "mps"
 SEED = 42
 N_FEATURES = 1296
-D_HIDDEN = 128
+D_HIDDEN = 100
 N_EPOCHS = 50_000
 BATCH_SIZE = 512
 
@@ -92,27 +92,50 @@ with torch.no_grad():
     ae_test_xhat = tm.ae.decode(tm.ae.encode(ae_test_x))
 
     gt_active_ae = ae_test_x > 0
-    pred_active_ae = ae_test_xhat > 0
+    thresholds = torch.linspace(0, 1, 101, device=DEVICE)
 
-    tp_ae = (gt_active_ae & pred_active_ae).float().sum(dim=0)
-    fp_ae = (~gt_active_ae & pred_active_ae).float().sum(dim=0)
-    fn_ae = (gt_active_ae & ~pred_active_ae).float().sum(dim=0)
+    best_f1_micro_ae = -1.0
+    best_threshold = 0.0
+    n_feats = ae_test_x.shape[1]
+    best_prec_ae = torch.zeros(n_feats, device=DEVICE)
+    best_rec_ae = torch.zeros(n_feats, device=DEVICE)
+    best_f1_ae = torch.zeros(n_feats, device=DEVICE)
+    best_prec_micro_ae = best_rec_micro_ae = 0.0
 
-    prec_ae = tp_ae / (tp_ae + fp_ae + 1e-8)
-    rec_ae = tp_ae / (tp_ae + fn_ae + 1e-8)
-    f1_ae = 2 * prec_ae * rec_ae / (prec_ae + rec_ae + 1e-8)
+    for t in thresholds:
+        pred_active = ae_test_xhat > t
 
-    tp_tot_ae = tp_ae.sum()
-    fp_tot_ae = fp_ae.sum()
-    fn_tot_ae = fn_ae.sum()
-    prec_micro_ae = (tp_tot_ae / (tp_tot_ae + fp_tot_ae + 1e-8)).item()
-    rec_micro_ae = (tp_tot_ae / (tp_tot_ae + fn_tot_ae + 1e-8)).item()
-    f1_micro_ae = (
-        2 * prec_micro_ae * rec_micro_ae / (prec_micro_ae + rec_micro_ae + 1e-8)
-    )
+        tp = (gt_active_ae & pred_active).float().sum(dim=0)
+        fp = (~gt_active_ae & pred_active).float().sum(dim=0)
+        fn = (gt_active_ae & ~pred_active).float().sum(dim=0)
+
+        prec = tp / (tp + fp + 1e-8)
+        rec = tp / (tp + fn + 1e-8)
+        f1 = 2 * prec * rec / (prec + rec + 1e-8)
+
+        tp_tot = tp.sum()
+        fp_tot = fp.sum()
+        fn_tot = fn.sum()
+        prec_micro = (tp_tot / (tp_tot + fp_tot + 1e-8)).item()
+        rec_micro = (tp_tot / (tp_tot + fn_tot + 1e-8)).item()
+        f1_micro = 2 * prec_micro * rec_micro / (prec_micro + rec_micro + 1e-8)
+
+        if f1_micro > best_f1_micro_ae:
+            best_f1_micro_ae = f1_micro
+            best_threshold = t.item()
+            best_prec_ae = prec
+            best_rec_ae = rec
+            best_f1_ae = f1
+            best_prec_micro_ae = prec_micro
+            best_rec_micro_ae = rec_micro
+
+    prec_ae = best_prec_ae
+    rec_ae = best_rec_ae
+    f1_ae = best_f1_ae
+    f1_micro_ae = best_f1_micro_ae
 
 print(
-    f"[AE round-trip] "
+    f"[AE round-trip] threshold={best_threshold:.2f}  "
     f"prec={prec_ae.mean():.4f}  rec={rec_ae.mean():.4f}  "
     f"F1(macro)={f1_ae.mean().item():.4f}  F1(micro)={f1_micro_ae:.4f}"
 )

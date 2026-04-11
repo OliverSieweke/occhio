@@ -108,7 +108,7 @@ class SphericalDistribution(Distribution):
         # Cosine bump with length-scale
         scaled = alpha / self.length_scale
         activation = torch.cos(scaled)
-        activation[scaled > math.pi / 2] = 0.0
+        activation = torch.where(scaled <= math.pi / 2, activation, 0.0)
 
         # Random magnitude: (batch, 1)
         lo, hi = self.magnitude_range
@@ -210,7 +210,7 @@ class TorusDistribution(Distribution):
         # Cosine bump with length-scale
         scaled = dist / self.length_scale
         activation = torch.cos(scaled)
-        activation[scaled > math.pi / 2] = 0.0
+        activation = torch.where(scaled <= math.pi / 2, activation, 0.0)
 
         # Random magnitude: (batch, 1)
         lo, hi = self.magnitude_range
