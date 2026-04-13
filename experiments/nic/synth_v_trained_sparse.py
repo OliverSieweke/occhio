@@ -38,8 +38,8 @@ _AXIS = dict(
     tickcolor="#374151",
     minor=dict(ticks="outside", tickcolor="#9CA3AF"),
     zeroline=False,
-    tickfont=dict(size=15),
-    title_font=dict(size=15),
+    tickfont=dict(size=20),
+    title_font=dict(size=20),
 )
 
 
@@ -48,14 +48,14 @@ def style_fig(fig, nticksx=10, nticksy=8):
     fig.update_layout(
         plot_bgcolor="white",
         paper_bgcolor="white",
-        font=dict(family="Times New Roman, Times, serif", size=13, color="#1F2937"),
-        title_font=dict(size=15),
+        font=dict(family="Times New Roman, Times, serif", size=17, color="#1F2937"),
+        title_font=dict(size=20),
         legend=dict(
             bgcolor="rgba(255,255,255,0.95)",
             bordercolor="#D1D5DB",
             borderwidth=1,
             itemsizing="constant",
-            font=dict(size=16),
+            font=dict(size=21),
         ),
     )
     fig.update_xaxes(**_AXIS, nticks=nticksx)
@@ -206,7 +206,7 @@ def make_epoch_slider(
     )
     # Subplot titles 40% larger than base
     for ann in fig.layout.annotations:
-        ann.font = dict(size=22)
+        ann.font = dict(size=29)
     for i, prop in enumerate(props):
         fig.update_yaxes(range=y_ranges[prop], row=1, col=i + 1)
         fig.update_xaxes(title_text=None, row=1, col=i + 1)
@@ -218,7 +218,7 @@ def make_epoch_slider(
         x=0.5,
         y=-0.23,
         showarrow=False,
-        font=dict(size=22),
+        font=dict(size=29),
     )
     fig.update_layout(margin=dict(b=100))
     return style_fig(fig)
@@ -652,13 +652,13 @@ for i, (name, tm) in enumerate(models):
             colorbar=dict(
                 title=dict(
                     text="Interference<br><i>W<sub>i</sub></i> · <i>W<sub>j</sub></i>",
-                    font=dict(size=20),
+                    font=dict(size=26),
                     side="top",
                 ),
                 len=0.45,
                 y=0.22,
                 x=1.01,
-                tickfont=dict(size=15),
+                tickfont=dict(size=20),
             )
             if (i == _wtw_n - 1)
             else None,
@@ -676,9 +676,9 @@ fig.update_layout(
 # Subplot title annotations: left-align the W^T W part, keep model names centered
 for ann in fig.layout.annotations:
     if "<i>b</i>" in (ann.text or ""):
-        ann.font = dict(size=22)
+        ann.font = dict(size=29)
     elif ann.text:
-        ann.font = dict(size=22)
+        ann.font = dict(size=29)
 
 style_fig(fig)
 
@@ -884,13 +884,13 @@ for i, (name, mat) in enumerate(_intf_models):
             colorbar=dict(
                 title=dict(
                     text="Group Mean Interference<br>⟨(<i>Ŵ<sub>i</sub></i> · <i>W<sub>j</sub></i>)²⟩<sub><i>i∈A, j∈B</i></sub>",
-                    font=dict(size=18),
+                    font=dict(size=23),
                     side="top",
                 ),
                 len=0.51,
                 y=0.25,
                 x=1.03,
-                tickfont=dict(size=15),
+                tickfont=dict(size=20),
             )
             if (i == _intf_n - 1)
             else None,
@@ -906,7 +906,7 @@ fig.add_annotation(
     x=0.5,
     y=-0.08,
     showarrow=False,
-    font=dict(size=24),
+    font=dict(size=31),
 )
 fig.add_annotation(
     text="Feature Rank (Grouped)",
@@ -915,7 +915,7 @@ fig.add_annotation(
     x=-0.05,
     y=0.5,
     showarrow=False,
-    font=dict(size=24),
+    font=dict(size=31),
     textangle=-90,
 )
 
@@ -1616,14 +1616,18 @@ _series = [
     ("Constructed AE", _final_constructed),
 ]
 
-_sb_props = ["bias", "fn", "ti", "mpr"]
+_sb_props = ["fn", "bias", "ti", "fn2b"]
 _sb_titles = [
-    "Learned Bias",
     "Feature Norms",
+    "Learned Bias",
     "Total Interference",
-    "Mean Partner Rank",
+    "‖<i>W<sub>i</sub></i>‖² + <i>b<sub>i</sub></i>",
 ]
 _n_sb = len(_sb_props)
+
+# Add ||W_i||^2 + b_i to each series
+for _, _data in _series:
+    _data["fn2b"] = _data["fn"] ** 2 + _data["bias"]
 
 fig_export = make_subplots(rows=1, cols=_n_sb, subplot_titles=_sb_titles)
 
@@ -1636,8 +1640,8 @@ for i, prop in enumerate(_sb_props):
                 y=data[prop],
                 name=name,
                 legendgroup=name,
-                mode="markers",
                 marker=dict(size=_ms, opacity=_opacity, color=color),
+                mode="markers",
                 showlegend=(i == 0),
             ),
             row=1,
@@ -1659,7 +1663,7 @@ for i, prop in enumerate(_sb_props):
 
 # Subplot titles
 for ann in fig_export.layout.annotations:
-    ann.font = dict(size=22)
+    ann.font = dict(size=29)
 
 # Axes: no per-subplot xlabel
 for i in range(_n_sb):
@@ -1673,7 +1677,7 @@ fig_export.add_annotation(
     x=0.5,
     y=-0.23,
     showarrow=False,
-    font=dict(size=22),
+    font=dict(size=29),
 )
 
 fig_export.update_layout(
@@ -1682,8 +1686,6 @@ fig_export.update_layout(
     margin=dict(b=100),
     showlegend=True,
 )
-
-fig_export.update_yaxes(range=[215, 450], row=1, col=4)  # Mean Partner Rank
 
 style_fig(fig_export)
 fig_export.show()
@@ -1710,9 +1712,22 @@ _series_un = [
     ("Constructed AE", _final_constructed),
 ]
 
-fig_export_un = make_subplots(rows=1, cols=_n_export, subplot_titles=_export_titles)
+# Add ||W_i||^2 + b_i to each series
+for _, _data in _series_un:
+    _data["fn2b"] = _data["fn"] ** 2 + _data["bias"]
 
-for i, prop in enumerate(_export_props):
+_un_props = ["fn", "bias", "ti", "fn2b"]
+_un_titles = [
+    "Feature Norms",
+    "Learned Bias",
+    "Total Interference",
+    "‖<i>W<sub>i</sub></i>‖² + <i>b<sub>i</sub></i>",
+]
+_n_un = len(_un_props)
+
+fig_export_un = make_subplots(rows=1, cols=_n_un, subplot_titles=_un_titles)
+
+for i, prop in enumerate(_un_props):
     for j, (name, data) in enumerate(_series_un):
         color = MODEL_COLORS[name]
         fig_export_un.add_trace(
@@ -1743,8 +1758,8 @@ for i, prop in enumerate(_export_props):
         )
 
 for ann in fig_export_un.layout.annotations:
-    ann.font = dict(size=22)
-for i in range(_n_export):
+    ann.font = dict(size=29)
+for i in range(_n_un):
     fig_export_un.update_xaxes(title_text=None, row=1, col=i + 1)
 fig_export_un.add_annotation(
     text="Feature Rank",
@@ -1753,27 +1768,14 @@ fig_export_un.add_annotation(
     x=0.5,
     y=-0.23,
     showarrow=False,
-    font=dict(size=22),
+    font=dict(size=29),
 )
 fig_export_un.update_layout(
     height=500,
-    width=max(600, 350 * _n_export),
+    width=max(600, 440 * _n_un),
     margin=dict(b=100),
     showlegend=True,
-    legend=dict(
-        x=0.89,
-        y=0.8,
-        xanchor="left",
-        yanchor="top",
-        bgcolor="rgba(255,255,255,0.85)",
-        bordercolor="#D1D5DB",
-        borderwidth=1,
-        itemsizing="constant",
-        font=dict(size=7),
-    ),
 )
-fig_export_un.update_yaxes(range=[220, 450], row=1, col=4)
-fig_export_un.update_yaxes(range=[0.1, 0.52], row=1, col=5)
 
 style_fig(fig_export_un)
 fig_export_un.show()
