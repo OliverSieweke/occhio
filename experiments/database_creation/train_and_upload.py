@@ -26,7 +26,7 @@ from occhio.autoencoder import TiedLinearRelu
 from occhio.toy_model import ToyModel
 
 # --- Constants ---
-N_HIDDEN = 100
+N_HIDDEN = 200
 N_EPOCHS = 30_000
 BATCH_SIZE = 1024
 LEARNING_RATE = 3e-4
@@ -56,6 +56,7 @@ DISTRIBUTIONS = [
 # --- Auth ---
 HF_TOKEN = input("HuggingFace token: ")
 api = HfApi(token=HF_TOKEN)
+api.create_repo(MODEL_REPO, exist_ok=True)
 
 
 def train_and_upload(name: str) -> None:
@@ -68,10 +69,12 @@ def train_and_upload(name: str) -> None:
     samples_path = hf_hub_download(
         DATASET_REPO,
         f"{name}/samples/samples.safetensors",
+        repo_type="dataset",
     )
     samples_json_path = hf_hub_download(
         DATASET_REPO,
         f"{name}/samples/samples.json",
+        repo_type="dataset",
     )
 
     # Sanity check
@@ -150,6 +153,7 @@ def train_and_upload(name: str) -> None:
                 path_or_fileobj=str(local),
                 path_in_repo=remote,
                 repo_id=MODEL_REPO,
+                repo_type="model",
             )
             print(f"  uploaded {remote}")
     finally:

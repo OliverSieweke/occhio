@@ -19,7 +19,7 @@ from occhio.autoencoder import TiedLinearRelu
 
 DATASET_REPO = "kaushikreddyxyz/occhio-distributions"
 MODEL_REPO = "kaushikreddyxyz/occhio-models"
-N_HIDDEN = 100
+N_HIDDEN = 200
 DEVICE = "mps"
 
 DISTRIBUTIONS = [
@@ -36,10 +36,13 @@ DISTRIBUTIONS = [
 
 def validate(name: str) -> None:
     # --- Download ---
-    weights_path = hf_hub_download(MODEL_REPO, f"{name}/weights/weights.safetensors")
+    weights_path = hf_hub_download(
+        MODEL_REPO, f"{name}/weights/weights.safetensors", repo_type="model"
+    )
     samples_path = hf_hub_download(
         DATASET_REPO,
         f"{name}/samples/samples.safetensors",
+        repo_type="dataset",
     )
 
     # --- Load samples (first 10K on CPU for stats) ---

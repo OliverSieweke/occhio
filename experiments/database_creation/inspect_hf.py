@@ -28,6 +28,7 @@ def inspect(name: str) -> None:
     path = hf_hub_download(
         REPO_ID,
         f"{name}/samples/samples.safetensors",
+        repo_type="dataset",
     )
     data = load_file(path)
     samples = data["samples"]

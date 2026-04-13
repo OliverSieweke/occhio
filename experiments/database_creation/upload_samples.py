@@ -36,8 +36,8 @@ from occhio.distributions import (
 )
 
 # --- Constants ---
-N_FEAT = 6**4  # 1296 — perfect 4th power for TorusDistribution(torus_dim=4)
-N_SAMPLES = 1_000_000
+N_FEAT = 6**4  # 1296 — 4th power for TorusDistribution(torus_dim=4)
+N_SAMPLES = 200_000
 DEVICE = "mps"
 SAMPLE_CHUNK = 50_000
 
@@ -53,7 +53,7 @@ BRANDING = (
 # --- Auth ---
 HF_TOKEN = input("HuggingFace token: ")
 api = HfApi(token=HF_TOKEN)
-api.create_repo(REPO_ID, exist_ok=True)
+api.create_repo(REPO_ID, repo_type="dataset", exist_ok=True)
 
 
 def zipfian_p_active(
@@ -144,6 +144,7 @@ def upload_samples(
                 path_or_fileobj=str(local),
                 path_in_repo=remote,
                 repo_id=REPO_ID,
+                repo_type="dataset",
             )
             print(f"  uploaded {remote}")
     finally:
@@ -183,8 +184,8 @@ random.seed(RANDOM_SEED)
 
 dist = CorrelatedPairs(
     n_features=N_FEAT,
-    density=zipfian_p_active(N_FEAT, high=0.5, low=1.22 / N_FEAT),
-    correlation=[0.5 + 0.5 * random.random() for _ in range(N_FEAT)],
+    p_active=zipfian_p_active(N_FEAT, high=0.58, low=1.22 / N_FEAT),
+    p_individual=[0.5 + 0.5 * random.random() for _ in range(N_FEAT)],
     device=DEVICE,
     generator=dist_gen,
 )
@@ -195,12 +196,13 @@ upload_samples(
         "Correlated pair distribution with zipfian density. "
         "Features are grouped into pairs (2i, 2i+1). Each pair activates jointly "
         "with some probability, then each feature within an active pair fires "
-        "independently. The density follows a zipfian power-law with "
-        "high=0.5, low=1.22/N. Per-pair correlation is drawn from "
+        "independently with p_individual. The density follows a zipfian power-law "
+        "with high=0.5, low=1.22/N. Per-feature p_individual is drawn from "
         "[0.5, 1.0] (stdlib random seed=42). "
         "Models co-occurring features like 'peanut butter and jam'."
     ),
 )
+
 
 # %%
 # --- HierarchicalPairs (zipfian) ---
@@ -310,7 +312,7 @@ faces = list(covering_faces)[:N_FACES]
 dist = SimplicialComplexDistribution(
     n_vertices=N_FEAT,
     faces=faces,
-    sampling_mode="sparse",
+    sampling_mode="single",
     p_active=1 / N_FACES,
     device=DEVICE,
     generator=dist_gen,
