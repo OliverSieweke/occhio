@@ -55,7 +55,7 @@ def style_fig(fig, nticksx=10, nticksy=8):
             bordercolor="#D1D5DB",
             borderwidth=1,
             itemsizing="constant",
-            font=dict(size=21),
+            font=dict(size=29),
         ),
     )
     fig.update_xaxes(**_AXIS, nticks=nticksx)
