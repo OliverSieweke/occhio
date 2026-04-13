@@ -1,60 +1,21 @@
 # %%
-"""SAE L1 sweep on TiedLinearRelu vs SynthAE.
+"""SAE L1 sweep: Trained AE vs Trained AE (unit norm) vs Constructed AE.
 
-Trains both base models (TiedLinearRelu, SynthAE), then sweeps SAE L1
-coefficients [0.1, 0.2, 0.5, 1.0, 1.5] on each. Plots F1 score vs
-mean L0 sparsity for all runs.
+Trains three base models, then sweeps SAE L1 coefficients on each.
+Plots F1 score vs mean L0 sparsity for all runs.
 """
 
+import os
 import torch
 import numpy as np
-import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from scipy.optimize import linear_sum_assignment
 
 from occhio.autoencoder import TiedLinearRelu, SynthAE
 from occhio.sae.sae import SAESimple
 from occhio.distributions import SparseUniform
 from occhio.toy_model import ToyModel
-
-# --- Paper-quality plot defaults ---
-PALETTE = {"Trained": "#2166ac", "Constructed": "#4daf4a"}
-FONT = dict(family="Times New Roman, serif", size=24, color="#333333")
-AXIS_STYLE = dict(
-    showgrid=True,
-    gridcolor="rgba(0,0,0,0.02)",
-    gridwidth=1,
-    zeroline=False,
-    linecolor="#666666",
-    linewidth=1,
-    ticks="outside",
-    ticklen=4,
-    tickwidth=1,
-    tickcolor="#666666",
-    minor=dict(ticks="outside", ticklen=2),
-    tickfont_size=18,
-    # title_font_size=18,
-)
-LAYOUT_DEFAULTS = dict(
-    template="plotly_white",
-    font=FONT,
-    title_font_size=18,
-    legend=dict(
-        x=0.95,
-        y=0.95,
-        xanchor="right",
-        yanchor="top",
-        bgcolor="rgba(255,255,255,0.9)",
-        bordercolor="#cccccc",
-        borderwidth=1,
-        font_size=24,
-        itemsizing="constant",
-    ),
-    margin=dict(l=60, r=20, t=50, b=50),
-    plot_bgcolor="white",
-    paper_bgcolor="white",
-)
-LINE_WIDTH = 2
 
 # %%
 # --- Configuration ---
@@ -71,12 +32,13 @@ EVAL_SAMPLES = 2**14
 L1_VALUES = [0.15, 0.2, 0.3, 0.4, 0.5, 0.7, 0.9]
 N_DICT = N_FEATURES // 2
 SAE_STEPS = 25_000
+N_SEEDS = 5
 SAE_BATCH = 1024
 SAE_LR = 3e-4
 DET_SAMPLES = 50_000
 
-high = 0.46
-low = 1.0 / N_FEATURES
+high = 0.3
+low = 1.28 / N_FEATURES
 alpha = np.log(high / low) / np.log(N_FEATURES)
 print(f"{alpha=}")
 firing_probs = [high / (i + 1) ** alpha for i in range(N_FEATURES)]
@@ -88,20 +50,39 @@ dist = SparseUniform(
     device=DEVICE,
 )
 
+
 # %%
-# --- Train TiedLinearRelu ---
-print("Training TiedLinearRelu...")
+# --- Unit-norm init hook ---
+def normalize_W(tm):
+    with torch.no_grad():
+        tm.ae.W.data /= tm.ae.W.data.norm(dim=0, keepdim=True).clamp(min=1e-8)
+
+
+# %%
+# --- Train Trained AE ---
+print("Training Trained AE...")
 gen1 = torch.Generator(DEVICE).manual_seed(SEED)
-ae_tied = TiedLinearRelu(N_FEATURES, D_HIDDEN, device=DEVICE, generator=gen1)
-tm_tied = ToyModel(distribution=dist, ae=ae_tied, device=DEVICE)
-tm_tied.fit(N_EPOCHS, batch_size=BATCH_SIZE, verbose=True)
+ae_trained = TiedLinearRelu(N_FEATURES, D_HIDDEN, device=DEVICE, generator=gen1)
+tm_trained = ToyModel(distribution=dist, ae=ae_trained, device=DEVICE)
+tm_trained.fit(N_EPOCHS, batch_size=BATCH_SIZE, verbose=True)
 print("  Done.")
 
 # %%
-# --- Train SynthAE ---
-print("Training SynthAE (orthogonalized, bias only)...")
+# --- Train Trained AE (unit norm) ---
+print("Training Trained AE (unit norm)...")
+gen2 = torch.Generator(DEVICE).manual_seed(SEED)
+ae_trained_normed = TiedLinearRelu(N_FEATURES, D_HIDDEN, device=DEVICE, generator=gen2)
+tm_trained_normed = ToyModel(
+    distribution=dist, ae=ae_trained_normed, device=DEVICE, hooks=[normalize_W]
+)
+tm_trained_normed.fit(N_EPOCHS, batch_size=BATCH_SIZE, verbose=True)
+print("  Done.")
+
+# %%
+# --- Train Constructed AE ---
+print("Training Constructed AE (orthogonalized, bias only)...")
 gen3 = torch.Generator(DEVICE).manual_seed(SEED)
-ae_synth = SynthAE(
+ae_constructed = SynthAE(
     N_FEATURES,
     D_HIDDEN,
     orthogonalize=True,
@@ -110,8 +91,8 @@ ae_synth = SynthAE(
     device=DEVICE,
     generator=gen3,
 )
-tm_synth = ToyModel(distribution=dist, ae=ae_synth, device=DEVICE)
-tm_synth.fit(N_EPOCHS_SYNTH, batch_size=BATCH_SIZE, verbose=True)
+tm_constructed = ToyModel(distribution=dist, ae=ae_constructed, device=DEVICE)
+tm_constructed.fit(N_EPOCHS_SYNTH, batch_size=BATCH_SIZE, verbose=True)
 print("  Done.")
 
 
@@ -126,254 +107,426 @@ def make_data_fn(tm_ref, device):
 
 
 # %%
-# --- L1 sweep (training only) ---
-base_models = [("Trained", tm_tied), ("Constructed", tm_synth)]
-sweep_results = {name: {"l1": [], "sae": []} for name, _ in base_models}
+# --- L1 sweep with multi-seed averaging ---
+METRIC_KEYS = [
+    "f1",
+    "precision",
+    "recall",
+    "l0",
+    "r2",
+    "mcc",
+    "purity",
+    "enc_precision",
+    "enc_recall",
+    "enc_f1",
+    "enc_mcc",
+]
 
-for l1_coef in L1_VALUES:
+base_models = [
+    ("Trained AE", tm_trained),
+    ("Trained AE w/ Unit Norms", tm_trained_normed),
+    ("Constructed AE", tm_constructed),
+]
+
+
+def eval_sae(sae, tm):
+    """Compute all metrics for a trained SAE against a base ToyModel."""
+    with torch.no_grad():
+        eye = torch.eye(tm.ae.n_features, device=DEVICE)
+        D_enc = tm.ae.encode(eye)
+        D_enc_normed = D_enc / D_enc.norm(dim=1, keepdim=True)
+
+        W_dec = sae.W_dec.data
+        W_dec_normed = W_dec / W_dec.norm(dim=1, keepdim=True)
+
+        cos_sim = (D_enc_normed @ W_dec_normed.T).abs().cpu().numpy()
+        feat_idx, dict_idx = linear_sum_assignment(-cos_sim)
+
+        det_x = dist.sample(DET_SAMPLES).to(DEVICE)
+        det_hidden = tm.ae.encode(det_x)
+        det_z = sae.encode(det_hidden)
+        det_recon = sae.decode(det_z)
+
+        l0 = (det_z > 0).float().sum(dim=-1).mean().item()
+
+        gt_active = det_x[:, feat_idx] > 0
+        pred_active = det_z[:, dict_idx] > 0
+        tp = (gt_active & pred_active).float().sum(dim=0)
+        fp = (~gt_active & pred_active).float().sum(dim=0)
+        fn = (gt_active & ~pred_active).float().sum(dim=0)
+        prec = tp / (tp + fp + 1e-8)
+        rec = tp / (tp + fn + 1e-8)
+        f1_per = 2 * prec * rec / (prec + rec + 1e-8)
+
+        ss_res = ((det_hidden - det_recon) ** 2).sum().item()
+        ss_tot = ((det_hidden - det_hidden.mean(dim=0)) ** 2).sum().item()
+        r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
+
+        W_ae = tm.W.detach()
+        W_dec_t = sae.W_dec.detach().T
+        W_norm = W_ae / W_ae.norm(dim=0, keepdim=True).clamp(min=1e-8)
+        Wd_norm = W_dec_t / W_dec_t.norm(dim=0, keepdim=True).clamp(min=1e-8)
+        cos_mcc = (W_norm.T @ Wd_norm).cpu().numpy()
+        cos_mcc_abs = np.abs(cos_mcc)
+        mcc_fi, mcc_di = linear_sum_assignment(-cos_mcc_abs)
+        mcc = float(cos_mcc_abs[mcc_fi, mcc_di].mean())
+
+        sae_acts = sae.encode(D_enc).cpu().numpy()
+        cos_purity = (D_enc_normed @ W_dec_normed.T).cpu().numpy()
+        pf_idx, pd_idx = linear_sum_assignment(-cos_purity)
+        matched_feats = set(pf_idx)
+        matched_dicts = set(pd_idx)
+        row_order = list(pf_idx) + [
+            f for f in range(N_FEATURES) if f not in matched_feats
+        ]
+        col_order = list(pd_idx) + [d for d in range(N_DICT) if d not in matched_dicts]
+        sae_acts_matched = sae_acts[np.ix_(row_order, col_order)]
+        n_matched = len(pf_idx)
+        diag_sum = sum(sae_acts_matched[i, i] for i in range(n_matched))
+        total_sum = sae_acts_matched.sum()
+        purity = diag_sum / total_sum if total_sum > 0 else 0.0
+
+        # --- Encoder-based matching: match by maximizing SAE activations on one-hots ---
+        sae_acts_raw = sae.encode(D_enc).cpu().numpy()  # (N_FEATURES, N_DICT)
+        enc_feat_idx, enc_dict_idx = linear_sum_assignment(-sae_acts_raw)
+
+        # Encoder MCC: cosine similarity of encoder-matched pairs
+        enc_mcc = float(cos_mcc_abs[enc_feat_idx, enc_dict_idx].mean())
+
+        # Encoder detection metrics
+        enc_gt_active = det_x[:, enc_feat_idx] > 0
+        enc_pred_active = det_z[:, enc_dict_idx] > 0
+        enc_tp = (enc_gt_active & enc_pred_active).float().sum(dim=0)
+        enc_fp = (~enc_gt_active & enc_pred_active).float().sum(dim=0)
+        enc_fn = (enc_gt_active & ~enc_pred_active).float().sum(dim=0)
+        enc_prec = enc_tp / (enc_tp + enc_fp + 1e-8)
+        enc_rec = enc_tp / (enc_tp + enc_fn + 1e-8)
+        enc_f1 = 2 * enc_prec * enc_rec / (enc_prec + enc_rec + 1e-8)
+
+    return {
+        "f1": f1_per.mean().item(),
+        "precision": prec.mean().item(),
+        "recall": rec.mean().item(),
+        "l0": l0,
+        "r2": r2,
+        "mcc": mcc,
+        "purity": purity,
+        "enc_precision": enc_prec.mean().item(),
+        "enc_recall": enc_rec.mean().item(),
+        "enc_f1": enc_f1.mean().item(),
+        "enc_mcc": enc_mcc,
+    }
+
+
+# Collect per-seed metrics: sweep_raw[name][l1_idx][seed] = {metric: value}
+sweep_raw: dict[str, list[list[dict]]] = {name: [] for name, _ in base_models}
+
+for li, l1_coef in enumerate(L1_VALUES):
     for name, tm in base_models:
-        print(f"  Training SAE on {name} with L1={l1_coef}...")
+        if li == 0:
+            sweep_raw[name] = []
+        sweep_raw[name].append([])
 
-        sae = SAESimple(
-            n_latent=D_HIDDEN,
-            n_dict=N_DICT,
-            l1_coef=l1_coef,
-            device=DEVICE,
-        ).to(DEVICE)
-
-        sae.train_sae(
-            data_fn=make_data_fn(tm, DEVICE),
-            n_steps=SAE_STEPS,
-            batch_size=SAE_BATCH,
-            lr=SAE_LR,
-        )
-
-        sweep_results[name]["l1"].append(l1_coef)
-        sweep_results[name]["sae"].append(sae)
-        print(f"    L1={l1_coef} done.")
+        for seed_i in range(N_SEEDS):
+            print(f"  {name} L1={l1_coef} seed={seed_i}...", end=" ", flush=True)
+            sae = SAESimple(
+                n_latent=D_HIDDEN,
+                n_dict=N_DICT,
+                l1_coef=l1_coef,
+                device=DEVICE,
+            ).to(DEVICE)
+            sae.train_sae(
+                data_fn=make_data_fn(tm, DEVICE),
+                n_steps=SAE_STEPS,
+                batch_size=SAE_BATCH,
+                lr=SAE_LR,
+            )
+            metrics = eval_sae(sae, tm)
+            sweep_raw[name][li].append(metrics)
+            print(f"F1={metrics['f1']:.4f}  L0={metrics['l0']:.1f}")
 
 # %%
-# --- Compute metrics for all SAEs ---
-for name, tm in base_models:
+# --- Aggregate across seeds (mean ± std) ---
+sweep_results: dict[str, dict] = {}
+for name, _ in base_models:
+    res = {"l1": list(L1_VALUES)}
+    for key in METRIC_KEYS:
+        vals = np.array([[m[key] for m in seeds] for seeds in sweep_raw[name]])
+        res[key] = vals.mean(axis=1).tolist()
+        res[f"{key}_std"] = vals.std(axis=1).tolist()
+    sweep_results[name] = res
+
+for name in sweep_results:
     res = sweep_results[name]
-    res["f1"] = []
-    res["precision"] = []
-    res["recall"] = []
-    res["l0"] = []
-    res["r2"] = []
-    res["mcc"] = []
-    res["purity"] = []
-
-    for i, sae in enumerate(res["sae"]):
-        l1_coef = res["l1"][i]
-        with torch.no_grad():
-            # --- Feature matching via cosine similarity ---
-            eye = torch.eye(tm.ae.n_features, device=DEVICE)
-            D_enc = tm.ae.encode(eye)  # (N_FEATURES, D_HIDDEN)
-            D_enc_normed = D_enc / D_enc.norm(dim=1, keepdim=True)
-
-            W_dec = sae.W_dec.data  # (N_DICT, D_HIDDEN)
-            W_dec_normed = W_dec / W_dec.norm(dim=1, keepdim=True)
-
-            cos_sim = (D_enc_normed @ W_dec_normed.T).abs().cpu().numpy()
-            feat_idx, dict_idx = linear_sum_assignment(-cos_sim)
-
-            # --- Sample data for detection and reconstruction metrics ---
-            det_x = dist.sample(DET_SAMPLES).to(DEVICE)
-            det_hidden = tm.ae.encode(det_x)
-            det_z = sae.encode(det_hidden)
-            det_recon = sae.decode(det_z)
-
-            # --- L0 ---
-            l0 = (det_z > 0).float().sum(dim=-1).mean().item()
-
-            # --- F1 ---
-            gt_active = det_x[:, feat_idx] > 0
-            pred_active = det_z[:, dict_idx] > 0
-
-            tp = (gt_active & pred_active).float().sum(dim=0)
-            fp = (~gt_active & pred_active).float().sum(dim=0)
-            fn = (gt_active & ~pred_active).float().sum(dim=0)
-
-            precision = tp / (tp + fp + 1e-8)
-            recall = tp / (tp + fn + 1e-8)
-            f1_per = 2 * precision * recall / (precision + recall + 1e-8)
-            mean_f1 = f1_per.mean().item()
-
-            # --- R² (reconstruction quality in hidden space) ---
-            ss_res = ((det_hidden - det_recon) ** 2).sum().item()
-            ss_tot = ((det_hidden - det_hidden.mean(dim=0)) ** 2).sum().item()
-            r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
-
-            # --- MCC (mean cosine similarity on matched pairs, using W columns) ---
-            W = tm.W.detach()  # (D_HIDDEN, N_FEATURES)
-            W_dec_t = sae.W_dec.detach().T  # (D_HIDDEN, N_DICT)
-            W_norm = W / W.norm(dim=0, keepdim=True).clamp(min=1e-8)
-            Wd_norm = W_dec_t / W_dec_t.norm(dim=0, keepdim=True).clamp(min=1e-8)
-            cos_mcc = (W_norm.T @ Wd_norm).cpu().numpy()
-            cos_mcc_abs = np.abs(cos_mcc)
-            mcc_feat_idx, mcc_dict_idx = linear_sum_assignment(-cos_mcc_abs)
-            mcc = float(cos_mcc_abs[mcc_feat_idx, mcc_dict_idx].mean())
-
-            # --- Purity (diagonality of SAE activations on one-hot inputs) ---
-            sae_acts = sae.encode(D_enc).cpu().numpy()  # (N_FEATURES, N_DICT)
-            cos_purity = (D_enc_normed @ W_dec_normed.T).cpu().numpy()
-            pf_idx, pd_idx = linear_sum_assignment(-cos_purity)
-
-            matched_feats = set(pf_idx)
-            matched_dicts = set(pd_idx)
-            unmatched_feats = [f for f in range(N_FEATURES) if f not in matched_feats]
-            unmatched_dicts = [d for d in range(N_DICT) if d not in matched_dicts]
-            row_order = list(pf_idx) + unmatched_feats
-            col_order = list(pd_idx) + unmatched_dicts
-            sae_acts_matched = sae_acts[np.ix_(row_order, col_order)]
-
-            n_matched = len(pf_idx)
-            diag_sum = sum(sae_acts_matched[i, i] for i in range(n_matched))
-            total_sum = sae_acts_matched.sum()
-            purity = diag_sum / total_sum if total_sum > 0 else 0.0
-
-        res["f1"].append(mean_f1)
-        res["precision"].append(precision.mean().item())
-        res["recall"].append(recall.mean().item())
-        res["l0"].append(l0)
-        res["r2"].append(r2)
-        res["mcc"].append(mcc)
-        res["purity"].append(purity)
+    for i, l1 in enumerate(res["l1"]):
         print(
-            f"  {name} L1={l1_coef}  F1={mean_f1:.4f}"
-            f"  Prec={precision.mean().item():.4f}  Rec={recall.mean().item():.4f}"
-            f"  L0={l0:.1f}  R²={r2:.4f}  MCC={mcc:.4f}  Purity={purity:.4f}"
+            f"  {name:25s}  L1={l1:.2f}"
+            f"  F1={res['f1'][i]:.4f}±{res['f1_std'][i]:.4f}"
+            f"  L0={res['l0'][i]:.1f}±{res['l0_std'][i]:.1f}"
+            f"  R²={res['r2'][i]:.4f}±{res['r2_std'][i]:.4f}"
         )
+
+# %%
+# =============================================================================
+#  VISUALIZATION — run from here to re-plot without retraining
+# =============================================================================
+
+# --- Rename keys if sweep_results used old naming convention ---
+_RENAME = {
+    "Trained": "Trained AE",
+    "Trained (unit norm)": "Trained AE w/ Unit Norms",
+    "Constructed": "Constructed AE",
+}
+sweep_results = {_RENAME.get(k, k): v for k, v in sweep_results.items()}
+
+# --- Publication-ready figure styling (matches synth_v_trained_sparse.py) ---
+MODEL_COLORS = {
+    "Trained AE": "#000c7a",
+    "Constructed AE": "#fcba03",
+    "Trained AE w/ Unit Norms": "#DC2626",
+}
+
+_AXIS = dict(
+    showgrid=True,
+    gridcolor="#E5E7EB",
+    showline=True,
+    linecolor="black",
+    linewidth=1.2,
+    ticks="outside",
+    ticklen=8,
+    tickwidth=1.5,
+    tickcolor="black",
+    minor=dict(ticks="outside", ticklen=4, tickwidth=1, tickcolor="black"),
+    zeroline=False,
+    tickfont=dict(size=24, color="black"),
+    title_font=dict(size=24, color="black"),
+)
+
+
+def style_fig(fig, nticksx=10, nticksy=8):
+    """Apply publication-ready styling."""
+    fig.update_layout(
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        font=dict(family="Times New Roman, Times, serif", size=24, color="black"),
+        title_font=dict(size=24),
+        legend=dict(
+            bgcolor="rgba(255,255,255,0.95)",
+            bordercolor="#D1D5DB",
+            borderwidth=1,
+            itemsizing="constant",
+            font=dict(size=24),
+        ),
+    )
+    fig.update_xaxes(**_AXIS, nticks=nticksx)
+    fig.update_yaxes(**_AXIS, nticks=nticksy)
+    return fig
+
+
+def _hex_to_rgba(hex_color, alpha):
+    """Convert '#RRGGBB' to 'rgba(r,g,b,a)'."""
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
+
+
+def _add_band(fig, x, y_mean, y_std, color, name, row=None, col=None):
+    """Add a ±1 std shaded band (fully invisible on hover)."""
+    y_mean = np.asarray(y_mean)
+    y_std = np.asarray(y_std)
+    x_band = list(x) + list(reversed(x))
+    y_band = list(y_mean + y_std) + list(reversed(y_mean - y_std))
+    kw = dict(row=row, col=col) if row is not None else {}
+    fig.add_trace(
+        go.Scatter(
+            x=x_band,
+            y=y_band,
+            fill="toself",
+            fillcolor=_hex_to_rgba(color, 0.15),
+            line=dict(width=0),
+            mode="none",
+            showlegend=False,
+            hoverinfo="skip",
+        ),
+        **kw,
+    )
+
 
 # %%
 # --- Plot: F1 vs L0 ---
-fig = go.Figure()
+fig_f1 = go.Figure()
 for name, res in sweep_results.items():
-    fig.add_trace(
+    color = MODEL_COLORS[name]
+    x = np.array(res["l0"])
+    y = np.array(res["f1"])
+    order = np.argsort(x)
+    x_s, y_s = x[order], y[order]
+    y_std_s = np.array(res["f1_std"])[order]
+    # l1_s = np.array(res["l1"])[order]
+
+    _add_band(fig_f1, x_s, y_s, y_std_s, color, name)
+    fig_f1.add_trace(
         go.Scatter(
-            x=res["l0"],
-            y=res["f1"],
+            x=x_s.tolist(),
+            y=y_s.tolist(),
             mode="lines+markers+text",
             name=name,
-            text=[f"L1={l1}" for l1 in res["l1"]],
+            # text=[f"L1={l1}" for l1 in l1_s],
             textposition="top center",
-            textfont=dict(size=16),
-            marker=dict(size=12, color=PALETTE[name]),
-            line=dict(color=PALETTE[name], width=3),
+            textfont=dict(size=14),
+            marker=dict(size=10, color=color, line=dict(width=1, color="white")),
+            line=dict(color=color, width=2.5),
         )
     )
 
 true_mean_l0 = sum(firing_probs)
-fig.add_vline(
+fig_f1.add_vline(
     x=true_mean_l0,
     line_dash="dot",
-    line_color="#888888",
-    line_width=2,
-    annotation_text=f"True L0 = {true_mean_l0:.1f}",
-    annotation_font_size=18,
-    annotation_font_color="#888888",
+    line_color="#9CA3AF",
+    line_width=1.5,
+    annotation_text=f"True <i>L</i><sup>0</sup> = {true_mean_l0:.1f}",
+    annotation_font_size=20,
+    annotation_font_color="black",
     annotation_position="bottom right",
 )
-fig.update_layout(
-    **LAYOUT_DEFAULTS,
-    # title=f"SAE F1 vs Mean L0 — L1 Sweep (N={N_FEATURES}, D={D_HIDDEN}, dict={N_DICT})",
-    xaxis_title="Mean L0",
-    yaxis_title="F1 Score",
-    width=900,
-    height=600,
+fig_f1.update_layout(
+    xaxis_title='<span style="font-family:Times New Roman; font-style:italic;">L</span><sup>0</sup><sub>SAE</sub>',
+    yaxis_title='<span style="font-family:Times New Roman; font-style:italic;">F</span><sub>1</sub>-score',
+    yaxis_range=[0, 0.52],
+    width=1100,
+    height=500,
+    margin=dict(l=60, r=30, t=30, b=60),
+    legend=dict(x=0.98, y=0.98, xanchor="right", yanchor="top"),
 )
-fig.update_xaxes(**AXIS_STYLE)
-fig.update_yaxes(**AXIS_STYLE)
-fig.show()
+style_fig(fig_f1)
+fig_f1.show()
 
 # %%
-# --- Plot: Recall vs Precision ---
-fig2 = go.Figure()
-for name, res in sweep_results.items():
-    best_idx = int(np.argmax(res["f1"]))
-    fig2.add_trace(
-        go.Scatter(
-            x=res["precision"],
-            y=res["recall"],
-            mode="lines+markers+text",
-            name=name,
-            text=[f"L1={l1}" for l1 in res["l1"]],
-            textposition="bottom center",
-            textfont=dict(size=14),
-            marker=dict(size=12, color=PALETTE[name]),
-            line=dict(color=PALETTE[name], width=3),
-        )
-    )
-    # Highlight best F1 point
-    fig2.add_trace(
-        go.Scatter(
-            x=[res["precision"][best_idx]],
-            y=[res["recall"][best_idx]],
-            mode="markers+text",
-            name=f"{name} best F1",
-            text=[f"★ F1={res['f1'][best_idx]:.3f}"],
-            textposition="bottom center",
-            textfont=dict(size=11),
-            marker=dict(
-                size=14,
-                color=PALETTE[name],
-                symbol="star",
-                line=dict(width=1.5, color="#333333"),
-            ),
-            showlegend=False,
-        )
-    )
-
-fig2.update_layout(
-    **LAYOUT_DEFAULTS,
-    title=f"SAE Recall vs Precision — L1 Sweep (N={N_FEATURES}, D={D_HIDDEN}, dict={N_DICT})",
-    xaxis_title="Mean Precision",
-    yaxis_title="Mean Recall",
-    width=900,
-    height=600,
+# --- Plot: Precision & Recall vs L1 (stacked subplots, shared x-axis) ---
+fig_pr = make_subplots(
+    rows=2,
+    cols=1,
+    shared_xaxes=True,
+    vertical_spacing=0.08,
+    subplot_titles=["Precision", "Recall"],
 )
-fig2.update_xaxes(**AXIS_STYLE)
-fig2.update_yaxes(**AXIS_STYLE)
-fig2.show()
 
-# %%
-# --- Print summary table ---
-print(
-    f"\n{'Model':25s}  {'L1':>6s}  {'F1':>8s}  {'Prec':>8s}  {'Recall':>8s}  {'L0':>8s}"
-    f"  {'R²':>8s}  {'MCC':>8s}  {'Purity':>8s}"
-)
-print("-" * 103)
 for name, res in sweep_results.items():
-    for l1, f1, prec, rec, l0, r2, mcc, purity in zip(
-        res["l1"],
-        res["f1"],
-        res["precision"],
-        res["recall"],
-        res["l0"],
-        res["r2"],
-        res["mcc"],
-        res["purity"],
+    color = MODEL_COLORS[name]
+    l1_arr = np.array(res["l1"])
+    order = np.argsort(l1_arr)
+    l1_s = l1_arr[order]
+
+    for ri, (metric, metric_std) in enumerate(
+        [("precision", "precision_std"), ("recall", "recall_std")], start=1
     ):
+        y_s = np.array(res[metric])[order]
+        y_std_s = np.array(res[metric_std])[order]
+
+        _add_band(fig_pr, l1_s, y_s, y_std_s, color, name, row=ri, col=1)
+        fig_pr.add_trace(
+            go.Scatter(
+                x=l1_s.tolist(),
+                y=y_s.tolist(),
+                mode="lines+markers",
+                name=name,
+                legendgroup=name,
+                showlegend=(ri == 2),
+                marker=dict(size=8, color=color, line=dict(width=1, color="white")),
+                line=dict(color=color, width=2.5, dash="dash"),
+            ),
+            row=ri,
+            col=1,
+        )
+
+# Shared x-axis label on bottom only
+fig_pr.update_xaxes(title_text="SAE L1 Coefficient", row=2, col=1)
+fig_pr.update_yaxes(title_text="Precision", row=1, col=1)
+fig_pr.update_yaxes(title_text="Recall", row=2, col=1)
+
+# Style subplot titles
+for ann in fig_pr.layout.annotations:
+    ann.font = dict(size=18)
+
+fig_pr.update_layout(
+    width=1100,
+    height=700,
+    margin=dict(l=60, r=30, t=40, b=60),
+    legend=dict(x=0.98, y=0.02, xanchor="right", yanchor="bottom"),
+)
+style_fig(fig_pr)
+fig_pr.show()
+
+# %%
+# --- Print summary table (decoder matching) ---
+print(
+    f"\n{'Model':25s}  {'L1':>6s}  {'F1':>15s}  {'Prec':>15s}  {'Recall':>15s}"
+    f"  {'L0':>12s}  {'R²':>15s}  {'MCC':>15s}"
+)
+print("-" * 140)
+for name, res in sweep_results.items():
+    for i, l1 in enumerate(res["l1"]):
         print(
-            f"{name:25s}  {l1:6.2f}  {f1:8.4f}  {prec:8.4f}  {rec:8.4f}  {l0:8.1f}"
-            f"  {r2:8.4f}  {mcc:8.4f}  {purity:8.4f}"
+            f"{name:25s}  {l1:6.2f}"
+            f"  {res['f1'][i]:6.4f}±{res['f1_std'][i]:.4f}"
+            f"  {res['precision'][i]:6.4f}±{res['precision_std'][i]:.4f}"
+            f"  {res['recall'][i]:6.4f}±{res['recall_std'][i]:.4f}"
+            f"  {res['l0'][i]:5.1f}±{res['l0_std'][i]:.1f}"
+            f"  {res['r2'][i]:6.4f}±{res['r2_std'][i]:.4f}"
+            f"  {res['mcc'][i]:6.4f}±{res['mcc_std'][i]:.4f}"
         )
 
 # %%
-# --- W^T W for TiedLinearRelu ---
-with torch.no_grad():
-    W = tm_tied.W.detach().cpu().numpy()  # (D_HIDDEN, N_FEATURES)
-    WtW = W.T @ W  # (N_FEATURES, N_FEATURES)
-
-fig = px.imshow(
-    WtW,
-    color_continuous_scale="RdBu",
-    color_continuous_midpoint=0,
-    title="W<sup>T</sup>W — TiedLinearRelu",
-    labels=dict(x="Feature j", y="Feature i", color="W<sup>T</sup>W"),
+# --- Print summary table (encoder matching) ---
+print(
+    f"\n{'Model':25s}  {'L1':>6s}  {'EncF1':>15s}  {'EncPrec':>15s}  {'EncRecall':>15s}"
+    f"  {'EncMCC':>15s}"
 )
-fig.update_layout(**LAYOUT_DEFAULTS, height=550, width=650)
-fig.show()
+print("-" * 100)
+for name, res in sweep_results.items():
+    for i, l1 in enumerate(res["l1"]):
+        print(
+            f"{name:25s}  {l1:6.2f}"
+            f"  {res['enc_f1'][i]:6.4f}±{res['enc_f1_std'][i]:.4f}"
+            f"  {res['enc_precision'][i]:6.4f}±{res['enc_precision_std'][i]:.4f}"
+            f"  {res['enc_recall'][i]:6.4f}±{res['enc_recall_std'][i]:.4f}"
+            f"  {res['enc_mcc'][i]:6.4f}±{res['enc_mcc_std'][i]:.4f}"
+        )
+
+# %%
+# --- W^T W heatmaps ---
+_wtw_models = [
+    ("Trained AE", tm_trained),
+    ("Trained AE w/ Unit Norms", tm_trained_normed),
+]
+for _wtw_name, _wtw_tm in _wtw_models:
+    with torch.no_grad():
+        _W = _wtw_tm.W.detach().cpu().numpy()
+        _WtW = _W.T @ _W
+    _fig_wtw = go.Figure(
+        go.Heatmap(z=_WtW, colorscale="RdBu_r", zmid=0, showscale=True)
+    )
+    _fig_wtw.update_layout(
+        title=f"W<sup>T</sup>W — {_wtw_name}",
+        xaxis_title="Feature j",
+        yaxis_title="Feature i",
+        width=600,
+        height=550,
+        margin=dict(l=60, r=30, t=50, b=60),
+    )
+    style_fig(_fig_wtw)
+    _fig_wtw.show()
+
+# %%
+# --- Save figures as vector (PDF + SVG) ---
+_fig_dir = os.path.join(os.path.dirname(__file__), "figures")
+os.makedirs(_fig_dir, exist_ok=True)
+
+fig_f1.write_image(os.path.join(_fig_dir, "sae_f1_vs_l0.pdf"), engine="kaleido")
+fig_f1.write_image(os.path.join(_fig_dir, "sae_f1_vs_l0.svg"), engine="kaleido")
+fig_pr.write_image(os.path.join(_fig_dir, "sae_prec_vs_recall.pdf"), engine="kaleido")
+fig_pr.write_image(os.path.join(_fig_dir, "sae_prec_vs_recall.svg"), engine="kaleido")
+print(f"Saved to {_fig_dir}/")
 
 # %%

@@ -883,7 +883,7 @@ for i, (name, mat) in enumerate(_intf_models):
             showscale=(i == _intf_n - 1),
             colorbar=dict(
                 title=dict(
-                    text="Group Mean<br>⟨(<i>Ŵ<sub>i</sub></i> · <i>W<sub>j</sub></i>)²⟩<sub><i>i∈A, j∈B</i></sub>",
+                    text="Group Mean Interference<br>⟨(<i>Ŵ<sub>i</sub></i> · <i>W<sub>j</sub></i>)²⟩<sub><i>i∈A, j∈B</i></sub>",
                     font=dict(size=18),
                     side="top",
                 ),
