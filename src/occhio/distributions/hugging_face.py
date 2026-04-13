@@ -106,7 +106,7 @@ class HuggingFaceDistribution(Distribution):
         ):
             target_bytes = 1.5 * 1024**3  # 1.5 GB
             bytes_per_sample = self.n_features * samples.element_size()
-            buffer_size = target_bytes // bytes_per_sample
+            buffer_size = int(target_bytes // bytes_per_sample)
         self.buffer_size = buffer_size
         self._buffer: torch.Tensor | None = None
         self._buffer_ptr: int = 0

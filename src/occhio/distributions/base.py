@@ -8,9 +8,9 @@ from hashlib import sha256
 from math import prod
 from pathlib import Path
 from typing import Literal
-import numpy as np
 from warnings import warn
 
+import numpy as np
 import torch
 from safetensors.torch import save_file
 from torch import Tensor, hash_tensor
