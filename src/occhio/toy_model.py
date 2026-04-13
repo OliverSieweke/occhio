@@ -111,11 +111,13 @@ class ToyModel:
         ae: AutoEncoderBase,
         device: torch.device | str | None = None,
         importances: Tensor | list | None = None,
+        hooks: list[Callable] | None = None,
     ):
 
         self.distribution = distribution
         self.ae = ae
         self.saes = {}
+        self.hooks: list[Callable] = list(hooks or [])
 
         if distribution.n_features != ae.n_features:
             raise ValueError(
@@ -209,7 +211,6 @@ class ToyModel:
         track_losses: bool = True,
         optimizer: Optimizer | None = None,
         hooks: list[Callable] | None = None,
-        hook_freq: int = 1,
         verbose: bool = False,
         sample_every: int = 25,
         precomputed_data: str | Path | None = None,
@@ -307,18 +308,27 @@ class ToyModel:
             loss = self.ae.loss(raw, x_hat, self.importances)  # type: ignore[call-arg]
             loss.backward()
             optimizer.step()
+            for h in self.hooks:
+                h(self)
 
             if loss_buffer is not None:
                 loss_buffer[ep] = loss.detach()
             if verbose and (ep + 1) % 5000 == 0:
                 print(f"AE Epoch {ep + 1}/{n_epochs}, Loss: {loss.item():.6f}")
-            if hooks and (ep % hook_freq == 0 or ep == n_epochs - 1):
+            if hooks:
                 with torch.no_grad():
                     hook_data = dict(
-                        tm=self, epoch=ep, loss=loss.detach(), x=x, x_hat=x_hat
+                        tm=self,
+                        epoch=ep,
+                        n_epochs=n_epochs,
+                        loss=loss.detach(),
+                        x=x,
+                        x_hat=x_hat,
                     )
                     for i, h in enumerate(hooks):
-                        hook_returns[i].append(h(hook_data))
+                        result = h(hook_data)
+                        if result is not None:
+                            hook_returns[i].append(result)
 
         losses = loss_buffer.cpu().tolist() if loss_buffer is not None else []
         self.distribution.clear_buffer()

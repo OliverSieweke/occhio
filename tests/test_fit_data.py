@@ -60,7 +60,7 @@ class TestFitFromData:
             called.append(d["epoch"])
 
         _, hook_returns = tm.fit(
-            n_epochs=5, batch_size=32, precomputed_data=path, hooks=[hook], hook_freq=1
+            n_epochs=5, batch_size=32, precomputed_data=path, hooks=[hook]
         )
         assert len(called) == 5
 

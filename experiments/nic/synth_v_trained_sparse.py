@@ -1,84 +1,266 @@
 # %%
-"""Compare Trained vs Constructed on SparseUniform with zipfian firing probabilities.
+"""Compare Trained AE vs Constructed AE on SparseUniform with zipfian firing probabilities.
 
-Same experiment structure as synth_v_trained.py but using a simpler SparseUniform
-distribution instead of the full SyntheticDataModel. The zipfian firing pattern
-(p_max=0.4, p_min=0.5/N, alpha=0.5) is matched to the SyntheticDataModel config.
+Trained AE (TiedLinearRelu): learns W + bias from data via gradient descent.
+Constructed AE (SynthAE): unit-norm tied weights positioned roughly orthogonally, bias only.
+Uses a soft power-law firing decay (p_max=0.2, p_min=0.01).
+SAEs trained via SAELens StandardTrainingSAE.
 """
 
 import torch
 import numpy as np
 import plotly.graph_objects as go
-import plotly.express as px
 from plotly.subplots import make_subplots
 from scipy.optimize import linear_sum_assignment
 
+from sae_lens import StandardTrainingSAE, StandardTrainingSAEConfig
+
 from occhio.autoencoder import TiedLinearRelu, SynthAE
-from occhio.sae.sae import SAESimple
 from occhio.distributions.sparse import SparseUniform
 from occhio.toy_model import ToyModel
 
-# --- Paper-quality plot defaults ---
-PALETTE = {"Trained": "#2166ac", "Constructed": "#4daf4a"}
-FONT = dict(family="Times New Roman, serif", size=24, color="#333333")
-AXIS_STYLE = dict(
-    showgrid=False,
-    gridcolor="rgba(0,0,0,0.08)",
-    gridwidth=1,
-    zeroline=False,
-    linecolor="#666666",
-    linewidth=1,
+# --- Publication-ready figure styling ---
+MODEL_COLORS = {
+    "Trained AE": "#000c7a",
+    "Constructed AE": "#fcba03",
+    "Trained AE w/ Unit Norms": "#DC2626",
+    "Trained AE w/ Scalar Bias": "#297a58",
+}
+_THRESH_COLORS = ["#3B82F6", "#F59E0B", "#EF4444"]
+
+_AXIS = dict(
+    showgrid=True,
+    gridcolor="#E5E7EB",
+    showline=True,
+    linecolor="#374151",
+    linewidth=1.2,
     ticks="outside",
-    ticklen=4,
-    tickwidth=1,
-    tickcolor="#666666",
-    tickfont_size=18,
-    minor=dict(ticks="outside", ticklen=2),
+    tickcolor="#374151",
+    minor=dict(ticks="outside", tickcolor="#9CA3AF"),
+    zeroline=False,
+    tickfont=dict(size=15),
+    title_font=dict(size=15),
 )
-LAYOUT_DEFAULTS = dict(
-    template="plotly_white",
-    font=FONT,
-    title_font_size=24,
-    legend=dict(
-        bgcolor="rgba(255,255,255,0.9)",
-        bordercolor="#cccccc",
-        borderwidth=1,
-        font_size=24,
-    ),
-    margin=dict(l=60, r=20, t=50, b=50),
-    plot_bgcolor="white",
-    paper_bgcolor="white",
-)
-LINE_WIDTH = 2
+
+
+def style_fig(fig, nticksx=10, nticksy=8):
+    """Apply publication-ready styling."""
+    fig.update_layout(
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        font=dict(family="Times New Roman, Times, serif", size=13, color="#1F2937"),
+        title_font=dict(size=15),
+        legend=dict(
+            bgcolor="rgba(255,255,255,0.95)",
+            bordercolor="#D1D5DB",
+            borderwidth=1,
+            itemsizing="constant",
+            font=dict(size=16),
+        ),
+    )
+    fig.update_xaxes(**_AXIS, nticks=nticksx)
+    fig.update_yaxes(**_AXIS, nticks=nticksy)
+    return fig
+
+
+def make_epoch_slider(
+    epoch_arrays,
+    static_arrays,
+    epochs,
+    titles,
+    x=None,
+    xlabel="Feature Rank",
+    extra_animated=None,
+):
+    """Build 1×N subplot figure with epoch slider (animated + static scatter).
+
+    Parameters
+    ----------
+    extra_animated : list of (name, epoch_arrays_dict), optional
+        Additional animated series. Each entry's epoch_arrays_dict has the same
+        structure as *epoch_arrays* (``{prop: (N, n_snapshots)}``).
+    """
+    props = list(epoch_arrays.keys())
+    n = len(props)
+    if extra_animated is None:
+        extra_animated = []
+    if x is None:
+        x = np.arange(epoch_arrays[props[0]].shape[0])
+
+    fig = make_subplots(rows=1, cols=n, subplot_titles=titles)
+
+    # Stable y-ranges across all snapshots
+    y_ranges = {}
+    for prop in props:
+        vals = [epoch_arrays[prop].ravel()]
+        if static_arrays and prop in static_arrays:
+            vals.append(static_arrays[prop])
+        for _, ea in extra_animated:
+            if prop in ea:
+                vals.append(ea[prop].ravel())
+        all_vals = np.concatenate(vals)
+        lo, hi = float(np.nanmin(all_vals)), float(np.nanmax(all_vals))
+        pad = (hi - lo) * 0.05
+        y_ranges[prop] = [lo - pad, hi + pad]
+
+    _ms = 3
+    _opacity = 0.7
+
+    # Variable-bandwidth Gaussian: exact at rank 0, very smooth at high ranks
+    _n_pts = len(x)
+    _xs = np.arange(_n_pts, dtype=float)
+    _sigmas = 1.0 + (_n_pts / 4) * (_xs / _n_pts)  # 1 → n/4
+    _diffs = _xs[:, None] - _xs[None, :]  # (n, n)
+    _W = np.exp(-0.5 * (_diffs / _sigmas[:, None]) ** 2)
+    _W /= _W.sum(axis=1, keepdims=True)
+
+    def _smooth(y):
+        return _W @ np.asarray(y)
+
+    def _add_dots_and_curve(y, name, color, col, show_legend):
+        """Add a scatter + faint trend curve for one series in one subplot."""
+        fig.add_trace(
+            go.Scatter(
+                x=x,
+                y=y,
+                name=name,
+                legendgroup=name,
+                mode="markers",
+                marker=dict(size=_ms, opacity=_opacity, color=color),
+                showlegend=show_legend,
+            ),
+            row=1,
+            col=col,
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=x,
+                y=_smooth(y),
+                legendgroup=name,
+                mode="lines",
+                line=dict(width=2, color=color),
+                opacity=0.388,
+                showlegend=False,
+            ),
+            row=1,
+            col=col,
+        )
+
+    # Initial traces: dots + curves for each series per subplot
+    for i, prop in enumerate(props):
+        _add_dots_and_curve(
+            epoch_arrays[prop][:, 0],
+            "Trained AE",
+            MODEL_COLORS["Trained AE"],
+            i + 1,
+            i == 0,
+        )
+        for ea_name, ea in extra_animated:
+            if prop in ea:
+                _add_dots_and_curve(
+                    ea[prop][:, 0],
+                    ea_name,
+                    MODEL_COLORS[ea_name],
+                    i + 1,
+                    i == 0,
+                )
+        if static_arrays and prop in static_arrays:
+            _add_dots_and_curve(
+                static_arrays[prop],
+                "Constructed AE",
+                MODEL_COLORS["Constructed AE"],
+                i + 1,
+                i == 0,
+            )
+
+    # Slider: update dots + curves for all series
+    has_static = static_arrays is not None
+    steps = []
+    for s in range(len(epochs)):
+        y_update = []
+        for prop in props:
+            y_update.append(epoch_arrays[prop][:, s])
+            y_update.append(_smooth(epoch_arrays[prop][:, s]))
+            for _, ea in extra_animated:
+                if prop in ea:
+                    y_update.append(ea[prop][:, s])
+                    y_update.append(_smooth(ea[prop][:, s]))
+            if has_static and prop in static_arrays:
+                y_update.append(static_arrays[prop])
+                y_update.append(_smooth(static_arrays[prop]))
+        steps.append(
+            dict(method="update", label=str(epochs[s]), args=[{"y": y_update}])
+        )
+
+    fig.update_layout(
+        height=500,
+        width=max(600, 350 * n),
+        sliders=[
+            dict(
+                active=0,
+                currentvalue=dict(prefix="Epoch: "),
+                pad=dict(t=50),
+                steps=steps,
+            )
+        ],
+    )
+    # Subplot titles 40% larger than base
+    for ann in fig.layout.annotations:
+        ann.font = dict(size=22)
+    for i, prop in enumerate(props):
+        fig.update_yaxes(range=y_ranges[prop], row=1, col=i + 1)
+        fig.update_xaxes(title_text=None, row=1, col=i + 1)
+    # Single shared x-axis label centered below all subplots (clear of tick labels)
+    fig.add_annotation(
+        text=xlabel,
+        xref="paper",
+        yref="paper",
+        x=0.5,
+        y=-0.23,
+        showarrow=False,
+        font=dict(size=22),
+    )
+    fig.update_layout(margin=dict(b=100))
+    return style_fig(fig)
+
 
 # %%
 # --- Configuration ---
 DEVICE = "mps"
 SEED = 42
-N_FEATURES = 1296
-D_HIDDEN = 100
+N_FEATURES = 500
+D_HIDDEN = 64
 N_EPOCHS = 30_000
 BATCH_SIZE = 512
 EVAL_SAMPLES = 2**14
 EVAL_FREQ = 250
 
 # %%
-# --- Zipfian firing probabilities ---
+# --- Zipfian firing probabilities (soft decay) ---
 high = 0.3
-low = 1.28 / N_FEATURES
+low = 1.28 / N_FEATURES  # zipfian decay
 alpha = np.log(high / low) / np.log(N_FEATURES)
 print(f"{alpha=}")
-firing_probs = [high / (i + 1) ** alpha for i in range(N_FEATURES)]
 
+firing_probs = [high / (i + 1) ** alpha for i in range(N_FEATURES)]
 firing_probs = torch.tensor(firing_probs, dtype=torch.float32)
 
 dist = SparseUniform(N_FEATURES, p_active=firing_probs, device=DEVICE)
 
+# Sort features by firing probability (most frequent first) — used throughout
+fp_np = firing_probs.cpu().numpy()
+sort_idx = np.argsort(-fp_np)
+# Inverse map: rank_of[feature_idx] = its rank by firing probability
+rank_of = torch.empty(N_FEATURES, device=DEVICE)
+rank_of[torch.from_numpy(sort_idx).to(DEVICE)] = torch.arange(
+    N_FEATURES, device=DEVICE, dtype=torch.float32
+)
+
 # %%
 # Quick sanity check
-activations = dist.sample(100_000)
+activations = dist.sample(1024)
 print(f"Activations shape: {activations.shape}")
-print(f"Mean L0: {(activations > 0).float().sum(dim=-1).mean():.2f}")
+print(f"Mean L0: {(activations > 0).float().sum(dim=-1).mean():.1f}")
 print(
     f"Mean L2 norm: {activations.norm(dim=-1).mean():.2f} ± {activations.norm(dim=-1).std():.2f}"
 )
@@ -86,6 +268,17 @@ print(
 
 # %%
 # --- Hooks for evaluation ---
+def every(freq, hook):
+    """Wrap a hook so it only fires every `freq` epochs (returns None otherwise)."""
+
+    def wrapper(data):
+        if data["epoch"] % freq == 0:
+            return hook(data)
+        return None
+
+    return wrapper
+
+
 def eval_hook(data):
     """Compute eval loss on a large fresh sample."""
     tm = data["tm"]
@@ -102,453 +295,175 @@ def per_feature_hook(data):
     return (eye - x_hat).pow(2).sum(dim=-1).cpu().numpy()
 
 
-# %%
-# --- Helper: evaluate a (non-trained) model once ---
-def evaluate_model(tm):
-    """Return (eval_loss, per_feature_mse) for a model without training."""
+_GEOM_N_GROUPS = 100
+_GEOM_GROUP_SIZE = N_FEATURES // _GEOM_N_GROUPS
+
+
+def _interference_group_matrix(I_sq_np):
+    """Compute N_GROUPS×N_GROUPS mean squared interference between frequency groups."""
+    I_sorted = I_sq_np[np.ix_(sort_idx, sort_idx)]
+    mat = np.zeros((_GEOM_N_GROUPS, _GEOM_N_GROUPS))
+    for a in range(_GEOM_N_GROUPS):
+        for b in range(_GEOM_N_GROUPS):
+            block = I_sorted[
+                a * _GEOM_GROUP_SIZE : (a + 1) * _GEOM_GROUP_SIZE,
+                b * _GEOM_GROUP_SIZE : (b + 1) * _GEOM_GROUP_SIZE,
+            ]
+            if a == b:
+                mask = ~np.eye(_GEOM_GROUP_SIZE, dtype=bool)
+                mat[a, b] = block[mask].mean()
+            else:
+                mat[a, b] = block.mean()
+    return mat
+
+
+def geometry_hook(data):
+    """Capture geometric properties, mean partner rank, and group interference matrix."""
+    tm = data["tm"]
+    I_sq = tm.interferences_sq.detach().clone()
+    I_sq.fill_diagonal_(0)
+    mpr = (I_sq * rank_of.unsqueeze(0)).sum(dim=1) / I_sq.sum(dim=1).clamp(min=1e-8)
+    I_sq_np = tm.interferences_sq.detach().cpu().numpy()
+    return {
+        "fd": tm.feature_dimensionalities.detach().cpu().numpy(),
+        "fn": tm.feature_norms.detach().cpu().numpy(),
+        "ti": tm.total_feature_interferences.detach().cpu().numpy(),
+        "bias": tm.ae.b.detach().cpu().numpy() * np.ones(tm.ae.n_features),
+        "mpr": mpr.cpu().numpy(),
+        "group_mat": _interference_group_matrix(I_sq_np),
+    }
+
+
+def normalize_W(tm):
+    """Project W columns to unit norm after each optimizer step."""
     with torch.no_grad():
-        x = tm.distribution.sample(EVAL_SAMPLES).to(tm.device)
-        x_hat = tm.ae(x)[0]
-        eval_loss = tm.ae.loss(x, x_hat, tm.importances).item()
-
-        eye = torch.eye(N_FEATURES, device=tm.device)
-        e_hat = tm.ae(eye)[0]
-        pf_mse = (eye - e_hat).pow(2).sum(dim=-1).cpu().numpy()
-    return eval_loss, pf_mse
+        tm.ae.W.data /= tm.ae.W.data.norm(dim=0, keepdim=True).clamp(min=1e-8)
 
 
 # %%
-# --- Train TiedLinearRelu ---
-print("Training TiedLinearRelu...")
+# --- Train Trained AE ---
+print("Training Trained AE...")
 gen1 = torch.Generator(DEVICE).manual_seed(SEED)
-ae_tied = TiedLinearRelu(N_FEATURES, D_HIDDEN, device=DEVICE, generator=gen1)
-tm_tied = ToyModel(distribution=dist, ae=ae_tied, device=DEVICE)
-
-_, hook_results_tied = tm_tied.fit(
-    N_EPOCHS,
+tm_trained = ToyModel(
+    distribution=dist,
+    ae=TiedLinearRelu(N_FEATURES, D_HIDDEN, device=DEVICE, generator=gen1),
+    device=DEVICE,
+    # hooks=[normalize_W],
+)
+_, hook_results_trained = tm_trained.fit(
+    30000,
     batch_size=BATCH_SIZE,
-    hooks=[eval_hook, per_feature_hook],
-    hook_freq=EVAL_FREQ,
+    hooks=[every(EVAL_FREQ, h) for h in [eval_hook, per_feature_hook, geometry_hook]],
     verbose=True,
 )
-eval_losses_tied = hook_results_tied[0]
-per_feature_tied = hook_results_tied[1]
-print(f"  Final eval loss: {eval_losses_tied[-1]:.6f}")
+eval_losses_trained = hook_results_trained[0]
+per_feature_trained = hook_results_trained[1]
+geometry_trained = hook_results_trained[2]
+print(f"  Final eval loss: {eval_losses_trained[-1]:.6f}")
 
 # %%
-# --- SynthAE (train bias only) ---
-print("Training SynthAE (orthogonalized, bias only)...")
+# --- Train Trained AE (unit norms) ---
+print("Training Trained AE w/ Unit Norms...")
+gen2 = torch.Generator(DEVICE).manual_seed(SEED)
+tm_unit_norm = ToyModel(
+    distribution=dist,
+    ae=TiedLinearRelu(N_FEATURES, D_HIDDEN, device=DEVICE, generator=gen2),
+    device=DEVICE,
+    hooks=[normalize_W],
+)
+_, hook_results_unit_norm = tm_unit_norm.fit(
+    30000,
+    batch_size=BATCH_SIZE,
+    hooks=[every(EVAL_FREQ, h) for h in [eval_hook, per_feature_hook, geometry_hook]],
+    verbose=True,
+)
+eval_losses_unit_norm = hook_results_unit_norm[0]
+per_feature_unit_norm = hook_results_unit_norm[1]
+geometry_unit_norm = hook_results_unit_norm[2]
+print(f"  Final eval loss: {eval_losses_unit_norm[-1]:.6f}")
+
+# %%
+# --- Train Trained AE (scalar bias) ---
+print("Training TiedLinearRelu (scalar bias shared across features)...")
+gen_sb = torch.Generator(DEVICE).manual_seed(SEED)
+ae_scalar_bias = TiedLinearRelu(N_FEATURES, D_HIDDEN, device=DEVICE, generator=gen_sb)
+ae_scalar_bias.b = torch.nn.Parameter(torch.zeros(1, device=DEVICE))
+tm_scalar_bias = ToyModel(distribution=dist, ae=ae_scalar_bias, device=DEVICE)
+_, hook_results_scalar_bias = tm_scalar_bias.fit(
+    30000,
+    batch_size=BATCH_SIZE,
+    hooks=[every(EVAL_FREQ, h) for h in [eval_hook, per_feature_hook, geometry_hook]],
+    verbose=True,
+)
+eval_losses_scalar_bias = hook_results_scalar_bias[0]
+per_feature_scalar_bias = hook_results_scalar_bias[1]
+geometry_scalar_bias = hook_results_scalar_bias[2]
+print(f"  Final eval loss: {eval_losses_scalar_bias[-1]:.6f}")
+
+# %%
+# --- Constructed AE (bias only) ---
+print("Training Constructed AE...")
 gen3 = torch.Generator(DEVICE).manual_seed(SEED)
-ae_synth_ortho = SynthAE(
+ae_constructed = SynthAE(
     N_FEATURES,
     D_HIDDEN,
     orthogonalize=True,
-    ortho_steps=100,
+    ortho_steps=1000,
     ortho_lr=3e-4,
     device=DEVICE,
     generator=gen3,
 )
-tm_synth_ortho = ToyModel(distribution=dist, ae=ae_synth_ortho, device=DEVICE)
+tm_constructed = ToyModel(distribution=dist, ae=ae_constructed, device=DEVICE)
 print("Initialized")
-N_EPOCHS_SYNTH = 10_000
-_, hook_results_synth = tm_synth_ortho.fit(
-    N_EPOCHS_SYNTH,
+N_EPOCHS_CONSTRUCTED = 10_000
+_, hook_results_constructed = tm_constructed.fit(
+    N_EPOCHS_CONSTRUCTED,
     batch_size=BATCH_SIZE,
-    hooks=[eval_hook, per_feature_hook],
-    hook_freq=EVAL_FREQ,
+    hooks=[every(EVAL_FREQ, h) for h in [eval_hook, per_feature_hook, geometry_hook]],
     verbose=True,
 )
-eval_losses_synth = hook_results_synth[0]
-per_feature_synth = hook_results_synth[1]
-loss_synth_ortho = eval_losses_synth[-1]
-pf_synth_ortho = per_feature_synth[-1]
-print(f"  Final eval loss: {loss_synth_ortho:.6f}")
+eval_losses_constructed = hook_results_constructed[0]
+per_feature_constructed = hook_results_constructed[1]
+geometry_constructed = hook_results_constructed[2]
+loss_constructed = eval_losses_constructed[-1]
+pf_constructed = per_feature_constructed[-1]
+print(f"  Final eval loss: {loss_constructed:.6f}")
 
-# %%
-# --- Plot: Eval loss curve (TiedLinearRelu) with SynthAE baselines ---
-eval_epochs = list(range(0, N_EPOCHS, EVAL_FREQ)) + [N_EPOCHS - 1]
-
-fig = go.Figure()
-fig.add_trace(
-    go.Scatter(
-        x=eval_epochs,
-        y=eval_losses_tied,
-        name="Trained",
-        line=dict(color=PALETTE["Trained"], width=LINE_WIDTH),
-    )
-)
-fig.add_hline(
-    y=loss_synth_ortho,
-    line_dash="dash",
-    line_color=PALETTE["Constructed"],
-    line_width=LINE_WIDTH,
-    annotation_text="Constructed",
-    annotation_font_size=12,
-    annotation_font_color=PALETTE["Constructed"],
-)
-fig.update_layout(
-    **LAYOUT_DEFAULTS,
-    title=f"Eval Loss — SparseUniform (N={N_FEATURES}, D={D_HIDDEN})",
-    xaxis_title="Epoch",
-    yaxis_title="Loss",
-    yaxis_type="log",
-    height=450,
-    width=700,
-)
-fig.update_xaxes(**AXIS_STYLE)
-fig.update_yaxes(**AXIS_STYLE)
-fig.show()
-
-# %%
-# --- Plot: Per-feature reconstruction MSE ---
-final_tied = np.array(per_feature_tied[-1])
-
-# Sort features by firing probability (most frequent first)
-fp_np = firing_probs.cpu().numpy()
-sort_idx = np.argsort(-fp_np)
-
-fig = go.Figure()
-fig.add_trace(
-    go.Scatter(
-        x=np.arange(N_FEATURES),
-        y=final_tied[sort_idx],
-        name="Trained",
-        mode="lines",
-        line=dict(color=PALETTE["Trained"], width=LINE_WIDTH),
-    )
-)
-fig.add_trace(
-    go.Scatter(
-        x=np.arange(N_FEATURES),
-        y=pf_synth_ortho[sort_idx],
-        name="Constructed",
-        mode="lines",
-        line=dict(color=PALETTE["Constructed"], width=LINE_WIDTH),
-    )
-)
-fig.update_layout(
-    **LAYOUT_DEFAULTS,
-    title="Per-Feature Reconstruction MSE",
-    xaxis_title="Feature rank (most frequent → rarest)",
-    yaxis_title="MSE",
-    height=450,
-    width=700,
-)
-fig.update_xaxes(**AXIS_STYLE)
-fig.update_yaxes(**AXIS_STYLE)
-fig.show()
-
-# %%
-# --- Plot: Features recovered (MSE < threshold) vs epoch, with SynthAE baselines ---
-THRESHOLDS = [0.01, 0.2, 0.5]
-THRESHOLD_COLORS = ["#9626d3", "#d62728", "#ff7f0e"]
-
-fig = go.Figure()
-for thresh, color in zip(THRESHOLDS, THRESHOLD_COLORS):
-    n_recovered_tied = [int((np.array(s) < thresh).sum()) for s in per_feature_tied]
-    fig.add_trace(
-        go.Scatter(
-            x=eval_epochs,
-            y=n_recovered_tied,
-            name=f"Trained (τ={thresh})",
-            mode="lines",
-            line=dict(color=color, width=LINE_WIDTH),
-        )
-    )
-    n_recovered_ortho = int((pf_synth_ortho < thresh).sum())
-    fig.add_hline(
-        y=n_recovered_ortho,
-        line_dash="dash",
-        line_color=color,
-        line_width=1.5,
-        annotation_text=f"Constructed τ={thresh}",
-        annotation_font_size=10,
-        annotation_font_color=color,
-    )
-fig.update_layout(
-    **LAYOUT_DEFAULTS,
-    title="Features Recovered (MSE < τ) Over Training",
-    xaxis_title="Epoch",
-    yaxis_title="Number of features recovered",
-    height=450,
-    width=700,
-)
-fig.update_xaxes(**AXIS_STYLE)
-fig.update_yaxes(**AXIS_STYLE)
-fig.show()
-
-# %%
-# --- Plot: Per-feature MSE over training (heatmap, Trained only) ---
-arr = np.array(per_feature_tied).T[:, 1:]  # (N_FEATURES, n_eval_points), skip step 0
-arr_sorted = arr[sort_idx]
-
-fig = go.Figure(
-    go.Heatmap(
-        z=arr_sorted,
-        x=eval_epochs[1:],
-        y=np.arange(N_FEATURES),
-        colorscale="Viridis",
-        reversescale=True,
-        colorbar=dict(title=dict(text="MSE", font=dict(size=13)), thickness=15),
-    )
-)
-fig.update_layout(
-    **LAYOUT_DEFAULTS,
-    title="Per-Feature MSE Over Training — Trained",
-    xaxis_title="Epoch",
-    yaxis_title="Feature rank (most frequent → rarest)",
-    height=500,
-    width=750,
-)
-fig.update_xaxes(**AXIS_STYLE)
-fig.update_yaxes(**AXIS_STYLE)
-fig.show()
-
-# %%
-# --- W^T W comparison ---
-models = [("Trained", tm_tied), ("Constructed", tm_synth_ortho)]
-
-fig = make_subplots(
-    rows=1,
-    cols=2,
-    subplot_titles=["Trained", "Constructed"],
-    horizontal_spacing=0.08,
-)
-
-for i, (name, tm) in enumerate(
-    [
-        ("Trained", tm_tied),
-        ("Constructed", tm_synth_ortho),
-    ]
-):
-    W = tm.W.detach().cpu().numpy()
-    WtW = W.T @ W
-    fig.add_trace(
-        go.Heatmap(
-            z=WtW,
-            colorscale="RdBu_r",
-            zmid=0,
-            showscale=(i == 1),
-            colorbar=dict(thickness=15) if i == 1 else None,
-        ),
-        row=1,
-        col=i + 1,
-    )
-
-fig.update_layout(
-    **LAYOUT_DEFAULTS, title="W<sup>T</sup>W Comparison", height=450, width=950
-)
-fig.update_annotations(font_size=14)
-fig.show()
-
-# %%
-# --- Plot: Spectrum of W W^T ---
-fig = go.Figure()
-for name, tm in models:
-    W = tm.W.detach().cpu()
-    eigvals = torch.linalg.eigvalsh(W @ W.T).flip(0).numpy()
-    fig.add_trace(
-        go.Scatter(
-            x=np.arange(1, D_HIDDEN + 1),
-            y=eigvals,
-            name=name,
-            mode="lines+markers",
-            line=dict(color=PALETTE[name], width=LINE_WIDTH),
-            marker=dict(size=5, color=PALETTE[name]),
-        )
-    )
-fig.update_layout(
-    **LAYOUT_DEFAULTS,
-    title="Spectrum of WW<sup>T</sup>",
-    xaxis_title="Eigenvalue index",
-    yaxis_title="Eigenvalue",
-    height=450,
-    width=700,
-)
-fig.update_layout(
-    legend=dict(x=0.95, y=0.95, xanchor="right", yanchor="top"),
-)
-fig.update_xaxes(**AXIS_STYLE)
-fig.update_yaxes(**AXIS_STYLE)
-fig.show()
-
-# %%
-# --- Plot: Geometric properties comparison ---
-fig = make_subplots(
-    rows=1,
-    cols=3,
-    subplot_titles=[
-        "Feature Dimensionality",
-        "Feature Norm",
-        "Total Interference",
-    ],
-    horizontal_spacing=0.08,
-)
-
-
-for name, tm in models:
-    fd = tm.feature_dimensionalities.detach().cpu().numpy()[sort_idx]
-    fn = tm.feature_norms.detach().cpu().numpy()[sort_idx]
-    ti = tm.total_feature_interferences.detach().cpu().numpy()[sort_idx]
-    x = np.arange(N_FEATURES)
-    color = PALETTE[name]
-
-    fig.add_trace(
-        go.Scatter(
-            x=x, y=fd, name=name, mode="lines", line=dict(color=color, width=LINE_WIDTH)
-        ),
-        row=1,
-        col=1,
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=x,
-            y=fn,
-            name=name,
-            mode="lines",
-            showlegend=False,
-            line=dict(color=color, width=LINE_WIDTH),
-        ),
-        row=1,
-        col=2,
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=x,
-            y=ti,
-            name=name,
-            mode="lines",
-            showlegend=False,
-            line=dict(color=color, width=LINE_WIDTH),
-        ),
-        row=1,
-        col=3,
-    )
-
-fig.update_layout(
-    **LAYOUT_DEFAULTS,
-    # title="Geometric Properties (sorted by firing probability)",
-    height=400,
-    width=1200,
-)
-fig.update_annotations(font_size=24)
-for col in range(1, 4):
-    fig.update_xaxes(title_text="Feature rank", row=1, col=col, **AXIS_STYLE)
-    fig.update_yaxes(row=1, col=col, **AXIS_STYLE)
-fig.update_layout(yaxis2=dict(range=[0.8, None]))
-fig.show()
-
-# %%
-# --- Plot: Bias comparison ---
-fig = go.Figure()
-for name, tm in models:
-    b = tm.ae.b.detach().cpu().numpy()[sort_idx]  # ty:ignore
-    fig.add_trace(
-        go.Scatter(
-            x=np.arange(N_FEATURES),
-            y=b,
-            name=name,
-            mode="lines",
-            line=dict(color=PALETTE[name], width=LINE_WIDTH),
-        )
-    )
-fig.update_layout(
-    **LAYOUT_DEFAULTS,
-    # title="Learned Bias <i>b</i>",
-    xaxis_title="Feature rank (most frequent → rarest)",
-    yaxis_title="<i>b</i>",
-    height=450,
-    width=700,
-)
-fig.update_layout(
-    legend=dict(x=0.95, y=0.95, xanchor="right", yanchor="top"),
-)
-fig.update_xaxes(**AXIS_STYLE)
-fig.update_yaxes(**AXIS_STYLE)
-fig.show()
-
-# %%
-# --- Plot: Feature norms² + bias (Trained) ---
-fn2 = tm_tied.feature_norms.detach().cpu().numpy() ** 2
-b_tied = tm_tied.ae.b.detach().cpu().numpy()  # ty:ignore
-combined = (fn2 + b_tied)[sort_idx]
-
-fig = go.Figure()
-fig.add_trace(
-    go.Scatter(
-        x=np.arange(N_FEATURES),
-        y=combined,
-        mode="lines",
-        name="‖w‖² + b",
-        line=dict(color=PALETTE["Trained"], width=LINE_WIDTH),
-    )
-)
-fig.update_layout(
-    **LAYOUT_DEFAULTS,
-    title="Trained: ‖w‖² + b",
-    xaxis_title="Feature rank (most frequent → rarest)",
-    yaxis_title="‖w‖² + b",
-    height=450,
-    width=700,
-)
-fig.update_xaxes(**AXIS_STYLE)
-fig.update_yaxes(**AXIS_STYLE)
-fig.show()
-
-# %%
-# --- Summary statistics ---
-print("\n=== Summary ===")
-for name, eval_loss, pf in [
-    ("Trained", eval_losses_tied[-1], per_feature_tied[-1]),
-    ("Constructed", loss_synth_ortho, pf_synth_ortho),
-]:
-    final_mse = np.array(pf)
-    recovered = "  ".join(f"τ={t}: {int((final_mse < t).sum())}" for t in THRESHOLDS)
-    print(
-        f"{name:25s}  eval_loss={eval_loss:.6f}  "
-        f"recovered=[{recovered}]  "
-        f"mean_feature_MSE={final_mse.mean():.4f}"
-    )
-
-# %% --- SAE training on both models ---
+# %% --- SAE training on both models (SAELens Standard SAE) ---
 N_DICT = N_FEATURES // 2
-SAE_STEPS = 50_000
 SAE_BATCH = 1024
 SAE_LR = 3e-4
-SAE_L1 = 0.3
+SAE_L1 = 0.2
+SAE_TRAINING_SAMPLES = 200_000 * SAE_BATCH  # ~200k steps
 
 sae_results = {}
 
-for name, tm in [("Trained", tm_tied), ("Constructed", tm_synth_ortho)]:
+for name, tm in [("Trained AE", tm_trained), ("Constructed AE", tm_constructed)]:
     print(f"\nTraining SAE on {name}...")
 
-    sae = SAESimple(
-        n_latent=D_HIDDEN,
-        n_dict=N_DICT,
-        l1_coef=SAE_L1,
+    sae_config = StandardTrainingSAEConfig(
+        d_in=D_HIDDEN,
+        d_sae=N_DICT,
+        l1_coefficient=SAE_L1,
         device=DEVICE,
-    ).to(DEVICE)
+    )
+    sae = StandardTrainingSAE(sae_config)
 
-    def make_data_fn(tm_ref):
-        def data_fn(n: int) -> torch.Tensor:
-            x = tm_ref.distribution.sample(n).to(DEVICE)
-            return tm_ref.ae.encode(x)
-
-        return data_fn
-
-    sae_losses = sae.train_sae(
-        data_fn=make_data_fn(tm),
-        n_steps=SAE_STEPS,
+    tm.train_saes(
+        {name: sae},
+        training_samples=SAE_TRAINING_SAMPLES,
         batch_size=SAE_BATCH,
         lr=SAE_LR,
+        verbose=True,
     )
 
     # Compute metrics
+    trained_sae = tm.saes[name].sae
     with torch.no_grad():
         test_x = dist.sample(10_000).to(DEVICE)
         test_hidden = tm.ae.encode(test_x)
-        test_z = sae.encode(test_hidden)
-        test_recon = sae.decode(test_z)
+        test_z = trained_sae.encode(test_hidden)
+        test_recon = trained_sae.decode(test_z)
 
         # L0 sparsity: mean number of active (> 0) dict elements per sample
         l0 = (test_z > 0).float().sum(dim=-1).mean().item()
@@ -564,7 +479,7 @@ for name, tm in [("Trained", tm_tied), ("Constructed", tm_synth_ortho)]:
         # Per-feature faithfulness: encode one-hot, round-trip through SAE
         eye = torch.eye(N_FEATURES, device=DEVICE)
         h_eye = tm.ae.encode(eye)
-        h_eye_recon = sae.decode(sae.encode(h_eye))
+        h_eye_recon = trained_sae.decode(trained_sae.encode(h_eye))
         per_feat_sae_mse = (h_eye - h_eye_recon).pow(2).sum(dim=-1).cpu().numpy()
 
         # Explained variance ratio
@@ -573,9 +488,6 @@ for name, tm in [("Trained", tm_tied), ("Constructed", tm_synth_ortho)]:
         explained_var = 1 - residual_var / total_var
 
     sae_results[name] = {
-        "sae": sae,
-        "tm": tm,
-        "losses": sae_losses,
         "l0": l0,
         "n_dead": n_dead,
         "n_alive": n_alive,
@@ -587,30 +499,525 @@ for name, tm in [("Trained", tm_tied), ("Constructed", tm_synth_ortho)]:
         f"  L0={l0:.1f}  Dead={n_dead}/{N_DICT}  MSE={recon_mse:.6f}  ExplVar={explained_var:.4f}"
     )
 
-# %% --- SAE loss curves ---
+# %%
+# --- Plot: Eval loss curve ---
+# Derive eval_epochs from actual hook data (avoids off-by-one with last epoch)
+_n_evals = len(eval_losses_trained)
+eval_epochs = sorted(set(range(0, N_EPOCHS, EVAL_FREQ)) | {N_EPOCHS - 1})[:_n_evals]
+
 fig = go.Figure()
-for name, res in sae_results.items():
+fig.add_trace(
+    go.Scatter(
+        x=eval_epochs,
+        y=eval_losses_trained,
+        name="Trained AE",
+        mode="lines",
+        line=dict(width=2, color=MODEL_COLORS["Trained AE"]),
+    )
+)
+fig.add_hline(
+    y=loss_constructed,
+    line_dash="dash",
+    line_color=MODEL_COLORS["Constructed AE"],
+    annotation_text="Constructed AE",
+)
+fig.update_layout(
+    title=f"Eval Loss — SparseUniform (N={N_FEATURES}, D={D_HIDDEN})",
+    xaxis_title="Epoch",
+    yaxis_title="Loss",
+    yaxis_type="log",
+)
+style_fig(fig)
+fig.show()
+
+# %%
+# --- Plot: Per-feature reconstruction MSE (epoch slider) ---
+
+pf_arr = np.array(per_feature_trained).T[sort_idx]  # (N_FEATURES, n_snapshots)
+make_epoch_slider(
+    epoch_arrays={"mse": pf_arr},
+    static_arrays={"mse": pf_constructed[sort_idx]},
+    epochs=np.array(eval_epochs),
+    titles=["Per-Feature Reconstruction MSE"],
+).show()
+
+# %%
+# --- Plot: Features recovered (MSE < threshold) vs epoch ---
+THRESHOLDS = [0.2, 0.5, 1.0]
+COLORS = _THRESH_COLORS
+
+fig = go.Figure()
+for thresh, color in zip(THRESHOLDS, COLORS):
+    n_recovered_trained = [
+        int((np.array(s) < thresh).sum()) for s in per_feature_trained
+    ]
     fig.add_trace(
         go.Scatter(
-            y=res["losses"],
+            x=eval_epochs,
+            y=n_recovered_trained,
+            name=f"Trained AE (τ={thresh})",
             mode="lines",
+            line=dict(color=color, width=2),
+        )
+    )
+    n_recovered_constructed = int((pf_constructed < thresh).sum())
+    fig.add_hline(
+        y=n_recovered_constructed,
+        line_dash="dash",
+        line_color=color,
+    )
+fig.update_layout(
+    title="Features Recovered (MSE < τ) Over Training",
+    xaxis_title="Epoch",
+    yaxis_title="# features recovered",
+)
+style_fig(fig)
+fig.show()
+
+# %%
+# --- W^T W comparison (half-size) ---
+
+models = [
+    ("Trained AE", tm_trained),
+    ("Trained AE w/ Unit Norms", tm_unit_norm),
+    ("Trained AE w/ Scalar Bias", tm_scalar_bias),
+    ("Constructed AE", tm_constructed),
+]
+models_dict = dict(models)
+
+_wtw_n = len(models)
+_wtw_zoom = 50
+_wtw_cols_per = 3  # WtW, bias, gap
+_wtw_cols = _wtw_n * _wtw_cols_per - 1
+
+# Scale subplot widths down by half
+_wtw_widths = []
+for i in range(_wtw_n):
+    _wtw_widths += [0.11, 0.004]
+    if i < _wtw_n - 1:
+        _wtw_widths.append(0.0125)
+
+_wtw_specs_row = []
+for i in range(_wtw_n):
+    _wtw_specs_row += [{}, {}]
+    if i < _wtw_n - 1:
+        _wtw_specs_row.append(None)
+
+# Row 1: "Model Name<br><br>W^T W" on WtW col, "b" on bias col.  Row 2: empty.
+_wtw_titles_r1 = []
+for name, _ in models:
+    _wtw_titles_r1.append(f"{name}<br><i>W</i><sup> T</sup><i>W</i>")
+    _wtw_titles_r1.append("<i>b</i>")
+_wtw_titles = _wtw_titles_r1 + [""] * len(_wtw_titles_r1)
+
+fig = make_subplots(
+    rows=2,
+    cols=_wtw_cols,
+    subplot_titles=_wtw_titles,
+    column_widths=_wtw_widths,
+    specs=[_wtw_specs_row, _wtw_specs_row],
+    horizontal_spacing=0.004,
+    vertical_spacing=0.12,
+)
+
+for i, (name, tm) in enumerate(models):
+    W = tm.W.detach().cpu().numpy()
+    WtW = (W.T @ W)[np.ix_(sort_idx, sort_idx)]
+    b = tm.ae.b.detach().cpu().numpy()
+    if b.shape[0] == 1:
+        b = np.full(N_FEATURES, b[0])
+    b_sorted = b[sort_idx]
+
+    wtw_col = i * _wtw_cols_per + 1
+    b_col = wtw_col + 1
+
+    fig.add_trace(
+        go.Heatmap(z=WtW, colorscale="RdBu_r", zmid=0, showscale=False),
+        row=1,
+        col=wtw_col,
+    )
+    fig.add_trace(
+        go.Heatmap(
+            z=b_sorted.reshape(-1, 1), colorscale="RdBu_r", zmid=0, showscale=False
+        ),
+        row=1,
+        col=b_col,
+    )
+    fig.add_trace(
+        go.Heatmap(
+            z=WtW[:, :_wtw_zoom],
+            colorscale="RdBu_r",
+            zmid=0,
+            showscale=(i == _wtw_n - 1),
+            colorbar=dict(
+                title=dict(
+                    text="Interference<br><i>W<sub>i</sub></i> · <i>W<sub>j</sub></i>",
+                    font=dict(size=20),
+                    side="top",
+                ),
+                len=0.45,
+                y=0.22,
+                x=1.01,
+                tickfont=dict(size=15),
+            )
+            if (i == _wtw_n - 1)
+            else None,
+        ),
+        row=2,
+        col=wtw_col,
+    )
+
+_sq = 500
+fig.update_layout(
+    height=_sq * 2 + 80,
+    width=_sq * _wtw_n + 100,
+    margin=dict(t=100),
+)
+# Subplot title annotations: left-align the W^T W part, keep model names centered
+for ann in fig.layout.annotations:
+    if "<i>b</i>" in (ann.text or ""):
+        ann.font = dict(size=22)
+    elif ann.text:
+        ann.font = dict(size=22)
+
+style_fig(fig)
+
+# Override ticks AFTER style_fig (so nticks doesn't clobber tickmode="array")
+_main_tv = dict(
+    tickmode="array",
+    tickvals=[0, 100, 200, 300, 400, 499],
+    ticktext=["0", "100", "200", "300", "400", "500"],
+    range=[-0.5, 499.5],
+    minor=dict(
+        tickmode="linear", tick0=0, dtick=20, ticks="outside", tickcolor="#9CA3AF"
+    ),
+)
+_zoom_tv_x = dict(
+    tickmode="array",
+    tickvals=[0, 10, 20, 30, 40, 49],
+    ticktext=["0", "10", "20", "30", "40", "50"],
+    range=[-0.5, 49.5],
+    minor=dict(
+        tickmode="linear", tick0=0, dtick=2, ticks="outside", tickcolor="#9CA3AF"
+    ),
+)
+for i in range(_wtw_n):
+    wtw_col = i * _wtw_cols_per + 1
+    b_col = wtw_col + 1
+    fig.update_xaxes(_main_tv, row=1, col=wtw_col)
+    fig.update_yaxes(_main_tv, row=1, col=wtw_col)
+    fig.update_xaxes(_zoom_tv_x, row=2, col=wtw_col)
+    fig.update_yaxes(_main_tv, row=2, col=wtw_col)
+
+# Nuclear bias tick removal: find axes paired with narrow x-domains (bias strips).
+# The row=/col= targeting misfires with None-spec gaps, so we trace through
+# the figure data to find which y-axes share a subplot with a narrow x-axis.
+_kill = dict(
+    showticklabels=False,
+    ticks="",
+    showline=False,
+    showgrid=False,
+    zeroline=False,
+    minor_ticks="",
+)
+_layout_json = fig.layout.to_plotly_json()
+
+# Step 1: find all narrow x-axis keys
+_narrow_xkeys = set()
+for key, val in _layout_json.items():
+    if key.startswith("xaxis") and isinstance(val, dict) and "domain" in val:
+        if val["domain"][1] - val["domain"][0] < 0.02:
+            _narrow_xkeys.add(key)
+
+# Step 2: for each trace, check if its x-axis is narrow → kill its y-axis too
+_bias_ykeys = set()
+for trace in fig.data:
+    xref = trace.xaxis or "x"  # "x", "x2", "x3", ...
+    yref = trace.yaxis or "y"
+    xkey = "xaxis" + xref[1:] if len(xref) > 1 else "xaxis"
+    ykey = "yaxis" + yref[1:] if len(yref) > 1 else "yaxis"
+    if xkey in _narrow_xkeys:
+        _bias_ykeys.add(ykey)
+
+# Step 3: kill ticks on all narrow x-axes AND their paired y-axes
+for key in _narrow_xkeys | _bias_ykeys:
+    fig.layout[key].update(**_kill)
+
+fig.show()
+
+# %%
+# --- Save Gram Matrix as vector ---
+import os
+
+_fig_dir = os.path.join(os.path.dirname(__file__), "figures")
+os.makedirs(_fig_dir, exist_ok=True)
+fig.write_image(os.path.join(_fig_dir, "gram_matrix.pdf"), engine="kaleido")
+fig.write_image(os.path.join(_fig_dir, "gram_matrix.svg"), engine="kaleido")
+print(f"Saved to {_fig_dir}/gram_matrix.{{pdf,svg}}")
+
+# %%
+# --- Plot: Spectrum of W W^T ---
+fig = go.Figure()
+for name, tm in models:
+    W = tm.W.detach().cpu()
+    eigvals = torch.linalg.eigvalsh(W @ W.T).flip(0).numpy()
+    fig.add_trace(
+        go.Scatter(
+            x=np.arange(1, D_HIDDEN + 1),
+            y=eigvals,
             name=name,
-            line=dict(color=PALETTE[name], width=LINE_WIDTH),
+            mode="lines+markers",
+            line=dict(width=2, color=MODEL_COLORS[name]),
+            marker=dict(size=6, color=MODEL_COLORS[name]),
         )
     )
 fig.update_layout(
-    **LAYOUT_DEFAULTS,
-    title="SAE Training Loss",
-    xaxis_title="Step",
-    yaxis_title="Loss",
-    yaxis_type="log",
-    height=450,
-    width=700,
+    title="Spectrum of W W^T",
+    xaxis_title="Eigenvalue index",
+    yaxis_title="Eigenvalue",
 )
-fig.update_xaxes(**AXIS_STYLE)
-fig.update_yaxes(**AXIS_STYLE)
+style_fig(fig)
 fig.show()
 
+# %%
+# --- Plot: Geometric properties + bias over training (slider) ---
+_geom_props = ["bias", "fn", "ti", "mpr", "fd"]
+_geom_titles = [
+    "Learned Bias",
+    "Feature Norms",
+    "Total Interference",
+    "Mean Partner Rank",
+    "Feature Dimensionalities",
+]
+
+geom_arrays = {}
+for prop in _geom_props:
+    arr = np.array([g[prop] for g in geometry_trained]).T  # (N_FEATURES, n_snapshots)
+    geom_arrays[prop] = arr[sort_idx]
+
+geom_arrays_unit_norm = {}
+for prop in _geom_props:
+    arr = np.array([g[prop] for g in geometry_unit_norm]).T
+    geom_arrays_unit_norm[prop] = arr[sort_idx]
+
+n_snapshots = geom_arrays["fd"].shape[1]
+geom_epochs = (np.arange(n_snapshots) * EVAL_FREQ).astype(int)
+
+_gc_final = geometry_constructed[-1]
+constructed_props = {prop: _gc_final[prop][sort_idx] for prop in _geom_props}
+
+make_epoch_slider(
+    epoch_arrays=geom_arrays,
+    static_arrays=constructed_props,
+    epochs=geom_epochs,
+    titles=_geom_titles,
+    extra_animated=[("Trained AE w/ Unit Norms", geom_arrays_unit_norm)],
+).show()
+
+# %%
+# --- Plot: Geometric properties (scalar bias ablation) ---
+geom_arrays_scalar_bias = {}
+for prop in _geom_props:
+    arr = np.array([g[prop] for g in geometry_scalar_bias]).T
+    geom_arrays_scalar_bias[prop] = arr[sort_idx]
+
+make_epoch_slider(
+    epoch_arrays=geom_arrays,
+    static_arrays=constructed_props,
+    epochs=geom_epochs,
+    titles=_geom_titles,
+    extra_animated=[("Trained AE w/ Scalar Bias", geom_arrays_scalar_bias)],
+).show()
+
+# %%
+# --- Plot: ‖w‖² + b over training (epoch slider) ---
+fn2_bias_arr = geom_arrays["fn"] ** 2 + geom_arrays["bias"]  # (N_FEATURES, n_snapshots)
+constructed_fn2_bias = constructed_props["fn"] ** 2 + constructed_props["bias"]
+
+make_epoch_slider(
+    epoch_arrays={"fn2b": fn2_bias_arr},
+    static_arrays={"fn2b": constructed_fn2_bias},
+    epochs=geom_epochs,
+    titles=["‖w‖² + b"],
+).show()
+
+# %%
+# --- Feature interference by rank group ---
+_intf_zoom = 10
+
+_intf_models = [
+    ("Trained AE", geometry_trained[-1]["group_mat"]),
+    ("Trained AE w/ Unit Norms", geometry_unit_norm[-1]["group_mat"]),
+    ("Trained AE w/ Scalar Bias", geometry_scalar_bias[-1]["group_mat"]),
+    ("Constructed AE", geometry_constructed[-1]["group_mat"]),
+]
+_intf_n = len(_intf_models)
+
+_all_intf_vals = np.concatenate([mat.ravel() for _, mat in _intf_models])
+_iz_min, _iz_max = float(_all_intf_vals.min()), float(_all_intf_vals.max())
+
+_intf_titles = [name for name, _ in _intf_models] + [""] * _intf_n
+
+fig = make_subplots(
+    rows=2,
+    cols=_intf_n,
+    subplot_titles=_intf_titles,
+    horizontal_spacing=0.05,
+    vertical_spacing=0.12,
+)
+
+for i, (name, mat) in enumerate(_intf_models):
+    fig.add_trace(
+        go.Heatmap(
+            z=mat, colorscale="Inferno", zmin=_iz_min, zmax=_iz_max, showscale=False
+        ),
+        row=1,
+        col=i + 1,
+    )
+    fig.add_trace(
+        go.Heatmap(
+            z=mat[:, :_intf_zoom],
+            colorscale="Inferno",
+            zmin=_iz_min,
+            zmax=_iz_max,
+            showscale=(i == _intf_n - 1),
+            colorbar=dict(
+                title=dict(
+                    text="Group Mean Interference<br>⟨(<i>Ŵ<sub>i</sub></i> · <i>W<sub>j</sub></i>)²⟩<sub><i>i∈A, j∈B</i></sub>",
+                    font=dict(size=18),
+                    side="top",
+                ),
+                len=0.51,
+                y=0.25,
+                x=1.03,
+                tickfont=dict(size=15),
+            )
+            if (i == _intf_n - 1)
+            else None,
+        ),
+        row=2,
+        col=i + 1,
+    )
+
+fig.add_annotation(
+    text="Feature Rank (Grouped)",
+    xref="paper",
+    yref="paper",
+    x=0.5,
+    y=-0.08,
+    showarrow=False,
+    font=dict(size=24),
+)
+fig.add_annotation(
+    text="Feature Rank (Grouped)",
+    xref="paper",
+    yref="paper",
+    x=-0.05,
+    y=0.5,
+    showarrow=False,
+    font=dict(size=24),
+    textangle=-90,
+)
+
+_sq = 500
+fig.update_layout(
+    height=_sq * 2 + 80,
+    width=_sq * _intf_n + 150,
+    margin=dict(b=110, t=80, l=120),
+    showlegend=False,
+)
+for ann in fig.layout.annotations:
+    ann.font = dict(size=24)
+
+style_fig(fig)
+
+# Override ticks AFTER style_fig
+_intf_main_tv = dict(
+    tickmode="array",
+    tickvals=[0, 20, 40, 60, 80, 99],
+    ticktext=["0", "100", "200", "300", "400", "500"],
+    range=[-0.5, 99.5],
+    minor=dict(
+        tickmode="linear", tick0=0, dtick=4, ticks="outside", tickcolor="#9CA3AF"
+    ),
+)
+_intf_zoom_tv_x = dict(
+    tickmode="array",
+    tickvals=[0, 2, 4, 6, 8, 9],
+    ticktext=["0", "10", "20", "30", "40", "50"],
+    range=[-0.5, 9.5],
+)
+_intf_zoom_tv_y = dict(
+    tickmode="array",
+    tickvals=[0, 20, 40, 60, 80, 99],
+    ticktext=["0", "100", "200", "300", "400", "500"],
+    range=[-0.5, 99.5],
+    minor=dict(
+        tickmode="linear", tick0=0, dtick=4, ticks="outside", tickcolor="#9CA3AF"
+    ),
+)
+for i in range(_intf_n):
+    fig.update_xaxes(_intf_main_tv, row=1, col=i + 1)
+    fig.update_yaxes(_intf_main_tv, row=1, col=i + 1)
+    fig.update_xaxes(_intf_zoom_tv_x, row=2, col=i + 1)
+    fig.update_yaxes(_intf_zoom_tv_y, row=2, col=i + 1)
+fig.show()
+
+# %%
+# --- Save interference group plot as vector ---
+_fig_dir = os.path.join(os.path.dirname(__file__), "figures")
+os.makedirs(_fig_dir, exist_ok=True)
+fig.write_image(os.path.join(_fig_dir, "interference_groups.pdf"), engine="kaleido")
+fig.write_image(os.path.join(_fig_dir, "interference_groups.svg"), engine="kaleido")
+print(f"Saved to {_fig_dir}/interference_groups.{{pdf,svg}}")
+
+# %%
+# --- Interference entropy per feature ---
+# Normalized entropy of each feature's interference distribution (0=concentrated, 1=uniform)
+for name, tm in models:
+    I_sq = tm.interferences_sq.detach().clone()
+    I_sq.fill_diagonal_(0)
+    p = I_sq / I_sq.sum(dim=1, keepdim=True).clamp(min=1e-8)  # normalize rows
+    log_p = torch.log(p.clamp(min=1e-12))
+    H = -(p * log_p).sum(dim=1)  # Shannon entropy per feature
+    H_max = np.log(N_FEATURES - 1)  # max possible entropy (uniform over N-1 partners)
+    H_norm = (H / H_max).cpu().numpy()
+    print(
+        f"{name:20s}  mean_entropy={H_norm.mean():.4f}  "
+        f"head_150={H_norm[sort_idx[:150]].mean():.4f}  "
+        f"tail_150={H_norm[sort_idx[-150:]].mean():.4f}"
+    )
+
+# %%
+# --- Summary statistics ---
+N_HEAD = 150  # top features by firing probability
+N_TAIL = 150  # bottom features by firing probability
+expected_l0 = float(firing_probs.sum())
+head_idx = sort_idx[:N_HEAD]
+tail_idx = sort_idx[-N_TAIL:]
+
+print(f"\n=== Summary  |  E[L0]={expected_l0:.2f}  |  head={N_HEAD}  tail={N_TAIL} ===")
+for name, eval_loss, pf in [
+    ("Trained AE", eval_losses_trained[-1], per_feature_trained[-1]),
+    ("Constructed AE", loss_constructed, pf_constructed),
+]:
+    final_mse = np.array(pf)
+    head_mse, tail_mse = final_mse[head_idx], final_mse[tail_idx]
+    for scope, mse_slice in [
+        ("all", final_mse),
+        ("head", head_mse),
+        ("tail", tail_mse),
+    ]:
+        recovered = "  ".join(
+            f"τ={t}: {int((mse_slice < t).sum())}" for t in THRESHOLDS
+        )
+        label = name if scope == "all" else f"  ({scope})"
+        extra = f"  eval_loss={eval_loss:.6f}" if scope == "all" else ""
+        print(
+            f"{label:25s}{extra}  "
+            f"mean_MSE={mse_slice.mean():.4f}  "
+            f"recovered=[{recovered}]"
+        )
 
 # %% --- Per-feature SAE reconstruction error ---
 names = list(sae_results.keys())
@@ -622,122 +1029,107 @@ for name in names:
             x=np.arange(N_FEATURES),
             y=res["per_feat_sae_mse"][sort_idx],
             name=name,
-            mode="lines",
-            line=dict(color=PALETTE[name], width=LINE_WIDTH),
+            mode="markers",
+            marker=dict(size=3.25, opacity=0.6, color=MODEL_COLORS[name]),
         )
     )
 fig.update_layout(
-    **LAYOUT_DEFAULTS,
-    title="SAE Per-Feature Reconstruction Error",
-    xaxis_title="Feature rank (most frequent → rarest)",
+    title="SAE Per-Feature Reconstruction Error (sorted by firing probability)",
+    xaxis_title="Feature Rank ",
     yaxis_title="MSE (hidden space)",
-    height=450,
-    width=700,
 )
-fig.update_xaxes(**AXIS_STYLE)
-fig.update_yaxes(**AXIS_STYLE)
+style_fig(fig)
 fig.show()
 
-# %% --- SAE activations on one-hot features (matched) ---
-
-
+# %% --- SAE activations on one-hot features (cosine matched) ---
+_cos_match_data = {}
 for name in names:
-    sae = sae_results[name]["sae"]
-    tm_ref = tm_tied if name == "Trained" else tm_synth_ortho
+    tm_ref = models_dict[name]
+    sae = tm_ref.saes[name].sae
     with torch.no_grad():
         eye = torch.eye(N_FEATURES, device=DEVICE)
-
-        # SAE activations on one-hot features
-        sae_acts = (
-            sae.encode(tm_ref.ae.encode(eye)).cpu().numpy()
-        )  # (N_FEATURES, N_DICT)
-
-        # Cosine similarity matching
-        D = tm_ref.ae.encode(eye)  # (N_FEATURES, D_HIDDEN)
+        sae_acts = sae.encode(tm_ref.ae.encode(eye)).cpu().numpy()
+        D = tm_ref.ae.encode(eye)
         D_normed = D / D.norm(dim=1, keepdim=True)
-        W_dec = sae.W_dec.data  # (N_DICT, D_HIDDEN)
+        W_dec = sae.W_dec.data
         W_dec_normed = W_dec / W_dec.norm(dim=1, keepdim=True)
-        cosine_sim = (D_normed @ W_dec_normed.T).cpu().numpy()  # (N_FEATURES, N_DICT)
+        cosine_sim = (D_normed @ W_dec_normed.T).cpu().numpy()
 
     feat_idx, dict_idx = linear_sum_assignment(-cosine_sim)
-
-    # Reorder both rows and columns: matched pairs form the top-left diagonal,
-    # then append unmatched features (rows) and unmatched dict elements (cols)
-    matched_feats = set(feat_idx)
-    matched_dicts = set(dict_idx)
+    matched_feats, matched_dicts = set(feat_idx), set(dict_idx)
     unmatched_feats = [f for f in range(N_FEATURES) if f not in matched_feats]
     unmatched_dicts = [d for d in range(N_DICT) if d not in matched_dicts]
-
     row_order = list(feat_idx) + unmatched_feats
     col_order = list(dict_idx) + unmatched_dicts
 
-    sae_acts_matched = sae_acts[np.ix_(row_order, col_order)]
-    row_labels = [f"f{f}" for f in row_order]
-    col_labels = [f"d{d}" for d in col_order]
-
-    # Compute diagonality: fraction of total activation on the matched diagonal
+    acts_matched = sae_acts[np.ix_(row_order, col_order)]
+    cos_matched = cosine_sim[np.ix_(row_order, col_order)]
     n_matched = len(feat_idx)
-    diag_sum = sum(sae_acts_matched[i, i] for i in range(n_matched))
-    total_sum = sae_acts_matched.sum()
+    diag_sum = sum(acts_matched[i, i] for i in range(n_matched))
+    total_sum = acts_matched.sum()
     diagonality = diag_sum / total_sum if total_sum > 0 else 0.0
+    mean_cos = cosine_sim[feat_idx, dict_idx].mean()
     sae_results[name]["diagonality"] = diagonality
 
-    # Diagonality for abs-cosine matching
-    feat_idx_abs, dict_idx_abs = linear_sum_assignment(-np.abs(cosine_sim))
-    matched_feats_abs = set(feat_idx_abs)
-    matched_dicts_abs = set(dict_idx_abs)
-    unmatched_feats_abs = [f for f in range(N_FEATURES) if f not in matched_feats_abs]
-    unmatched_dicts_abs = [d for d in range(N_DICT) if d not in matched_dicts_abs]
-    row_order_abs = list(feat_idx_abs) + unmatched_feats_abs
-    col_order_abs = list(dict_idx_abs) + unmatched_dicts_abs
-    sae_acts_matched_abs = sae_acts[np.ix_(row_order_abs, col_order_abs)]
-    n_matched_abs = len(feat_idx_abs)
-    diag_sum_abs = sum(sae_acts_matched_abs[i, i] for i in range(n_matched_abs))
-    total_sum_abs = sae_acts_matched_abs.sum()
-    diagonality_abs = diag_sum_abs / total_sum_abs if total_sum_abs > 0 else 0.0
-    sae_results[name]["diagonality_abs"] = diagonality_abs
+    _cos_match_data[name] = {
+        "acts": acts_matched,
+        "cos": cos_matched,
+        "diag": diagonality,
+        "mean_cos": mean_cos,
+    }
+    print(f"{name}: diag={diagonality:.4f}  mean_cos={mean_cos:.4f}")
 
-    mean_cosine = cosine_sim[feat_idx, dict_idx].mean()
-    print(
-        f"{name}: diagonality = {diagonality:.4f} (diag_sum={diag_sum:.2f}, total={total_sum:.2f})  "
-        f"mean_cosine = {mean_cosine:.4f}"
-    )
-
-    _fig = px.imshow(
-        sae_acts_matched,
-        labels=dict(
-            x="SAE dict element (cosine matched)", y="Feature (cosine matched)"
+fig = make_subplots(
+    rows=2,
+    cols=2,
+    subplot_titles=[
+        f"{n} — Activations (diag={_cos_match_data[n]['diag']:.3f})" for n in names
+    ]
+    + [f"{n} — Cosine Sim (mean={_cos_match_data[n]['mean_cos']:.3f})" for n in names],
+    vertical_spacing=0.12,
+)
+for i, name in enumerate(names):
+    d = _cos_match_data[name]
+    fig.add_trace(
+        go.Heatmap(
+            z=d["acts"],
+            colorscale="ylgnbu_r",
+            showscale=(i == 1),
+            colorbar=dict(y=0.78, len=0.4, title="Act"),
         ),
-        x=col_labels,
-        y=row_labels,
-        title=f"SAE Activations (cosine matched, diag={diagonality:.3f}) — {name}",
-        aspect="auto",
-        color_continuous_scale="Viridis",
+        row=1,
+        col=i + 1,
     )
-    _fig.update_layout(**LAYOUT_DEFAULTS, height=550, width=700)
-    _fig.show()
-
-    cosine_sim_matched = cosine_sim[np.ix_(row_order, col_order)]
-    _fig = px.imshow(
-        cosine_sim_matched,
-        labels=dict(
-            x="SAE dict element (cosine matched)", y="Feature (cosine matched)"
+    fig.add_trace(
+        go.Heatmap(
+            z=d["cos"],
+            colorscale="RdBu",
+            zmid=0,
+            zmin=-1,
+            zmax=1,
+            showscale=(i == 1),
+            colorbar=dict(y=0.22, len=0.4, title="Cos"),
         ),
-        x=col_labels,
-        y=row_labels,
-        title=f"Cosine Similarity (matched, mean={mean_cosine:.3f}) — {name}",
-        aspect="auto",
-        color_continuous_scale="RdBu",
-        zmin=-1,
-        zmax=1,
+        row=2,
+        col=i + 1,
     )
-    _fig.update_layout(**LAYOUT_DEFAULTS, height=550, width=700)
-    _fig.show()
+for row in range(1, 3):
+    for col in range(1, 3):
+        fig.update_xaxes(title_text="Matched SAE Dictionary Element", row=row, col=col)
+        fig.update_yaxes(title_text="Feature", row=row, col=col)
+fig.update_layout(
+    title="Cosine-Matched SAE Heatmaps",
+    height=1000,
+    width=1200,
+    showlegend=False,
+)
+style_fig(fig)
+fig.show()
 
 # %% --- SAE evaluation: MCC, detection metrics ---
 for name, res in sae_results.items():
-    sae = res["sae"]
-    tm = res["tm"]
+    tm = models_dict[name]
+    sae = tm.saes[name].sae
 
     with torch.no_grad():
         # Mean Correlation Coefficient (MCC) — O'Neill et al. (2025)
@@ -813,105 +1205,111 @@ for name, res in sae_results.items():
     )
 
 # %% --- SAE summary print ---
-_hdr1 = f"{'Model':25s}  {'MSE↓':>10s}  {'L0↓':>6s}  {'Dead↓':>6s}  {'Alive↑':>6s}  {'ExplVar↑':>8s}  {'Diag↑':>6s}"
-_hdr2 = f"{'':25s}  {'MCC_abs↑':>8s}  {'MCC_cos↑':>8s}  {'Prec↑':>6s}  {'Rec↑':>6s}  {'F1↑':>6s}  {'FPR↓':>6s}"
+print(f"\n{'=' * 80}")
+print(f"SAE Overview  |  L1={SAE_L1}  E[L0]={expected_l0:.2f}  head={N_HEAD}")
+print(f"{'=' * 80}")
+_hdr = f"{'Model':20s}  {'MSE↓':>10s}  {'L0':>6s}  {'Dead':>5s}  {'Alive':>5s}  {'ExplVar↑':>8s}  {'Diag↑':>6s}"
+print(_hdr)
+print("-" * len(_hdr))
+for name, res in sae_results.items():
+    print(
+        f"{name:20s}  {res['recon_mse']:10.6f}  {res['l0']:6.1f}  "
+        f"{res['n_dead']:5d}  {res['n_alive']:5d}  {res['explained_var']:8.4f}  "
+        f"{res.get('diagonality', 0):6.4f}"
+    )
 
-for match_label, sfx in [("abs cos-sim", "_abs"), ("cos-sim", "_cos")]:
-    print(f"\n|| SAE Summary (matched on {match_label}) || L1 = {SAE_L1}")
-    print(_hdr1)
-    print(_hdr2)
+for match_label, sfx in [("cos-sim", "_cos"), ("|cos-sim|", "_abs")]:
+    print(f"\nDetection ({match_label})")
+    _dhdr = f"{'Model':20s}  {'Scope':>7s}  {'|cos|↑':>7s}  {'cos↑':>7s}  {'Prec↑':>6s}  {'Rec↑':>6s}  {'F1↑':>6s}  {'FPR↓':>6s}"
+    print(_dhdr)
+    print("-" * len(_dhdr))
     for name, res in sae_results.items():
+        mcc_abs = res.get(f"mcc{sfx}_abs", 0)
+        mcc_cos = res.get(f"mcc{sfx}_cos", 0)
         print(
-            f"{name:25s}  {res['recon_mse']:10.6f}  {res['l0']:6.1f}  "
-            f"{res['n_dead']:6d}  {res['n_alive']:6d}  {res['explained_var']:8.4f}  "
-            f"{res.get('diagonality', 0):6.4f}"
-        )
-        print(
-            f"{'':25s}  {res.get(f'mcc{sfx}_abs', 0):8.4f}  {res.get(f'mcc{sfx}_cos', 0):8.4f}  "
+            f"{name:20s}  {'all':>7s}  {mcc_abs:7.4f}  {mcc_cos:7.4f}  "
             f"{res[f'precision{sfx}']:6.4f}  {res[f'recall{sfx}']:6.4f}  "
             f"{res[f'f1{sfx}']:6.4f}  {res[f'fpr{sfx}']:6.4f}"
         )
+        for scope, slc in [
+            ("head", slice(None, N_HEAD)),
+            ("tail", slice(-N_TAIL, None)),
+        ]:
+            pp = res[f"precision_per{sfx}"][slc]
+            pr = res[f"recall_per{sfx}"][slc]
+            pf = res[f"f1_per{sfx}"][slc]
+            pfpr = res[f"fpr_per{sfx}"][slc]
+            n = N_HEAD if scope == "head" else N_TAIL
+            print(
+                f"{'':20s}  {f'{scope} {n}':>7s}  {'':>7s}  {'':>7s}  "
+                f"{pp.mean():6.4f}  {pr.mean():6.4f}  "
+                f"{pf.mean():6.4f}  {pfpr.mean():6.4f}"
+            )
 
 
-# %% --- Per-feature detection metrics (sorted by firing probability) ---
+# %% --- SAE Comparison bar chart ---
+_bar_metrics = [
+    ("recon_mse", "Recon MSE", True),
+    ("l0", "Mean L0", True),
+    ("n_dead", "Dead Features", True),
+    ("explained_var", "Explained Var", False),
+    ("diagonality", "Diagonality", False),
+    ("mcc_cos_cos", "MCC (cosine)", False),
+]
 fig = make_subplots(
     rows=1,
-    cols=4,
-    subplot_titles=["Precision", "Recall (TPR)", "F1 Score", "FPR"],
-    horizontal_spacing=0.06,
+    cols=len(_bar_metrics),
+    subplot_titles=[m[1] for m in _bar_metrics],
 )
+for col, (key, label, lower_better) in enumerate(_bar_metrics, 1):
+    for name in names:
+        fig.add_trace(
+            go.Bar(
+                x=[name],
+                y=[sae_results[name].get(key, 0)],
+                name=name,
+                legendgroup=name,
+                marker_color=MODEL_COLORS[name],
+                showlegend=(col == 1),
+            ),
+            row=1,
+            col=col,
+        )
+fig.update_layout(title="SAE Comparison", height=400, width=1400, barmode="group")
+style_fig(fig)
+fig.show()
 
-for name in names:
-    res = sae_results[name]
-    feat_order = np.argsort(-fp_np[res["mcc_feat_idx_cos"]])
-    color = PALETTE[name]
-    x = np.arange(len(feat_order))
-
-    fig.add_trace(
-        go.Scatter(
-            x=x,
-            y=res["precision_per_cos"][feat_order],
-            name=name,
-            mode="lines",
-            line=dict(color=color, width=LINE_WIDTH),
-        ),
-        row=1,
-        col=1,
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=x,
-            y=res["recall_per_cos"][feat_order],
-            name=name,
-            mode="lines",
-            showlegend=False,
-            line=dict(color=color, width=LINE_WIDTH),
-        ),
-        row=1,
-        col=2,
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=x,
-            y=res["f1_per_cos"][feat_order],
-            name=name,
-            mode="lines",
-            showlegend=False,
-            line=dict(color=color, width=LINE_WIDTH),
-        ),
-        row=1,
-        col=3,
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=x,
-            y=res["fpr_per_cos"][feat_order],
-            name=name,
-            mode="lines",
-            showlegend=False,
-            line=dict(color=color, width=LINE_WIDTH),
-        ),
-        row=1,
-        col=4,
-    )
-
-fig.update_layout(
-    **LAYOUT_DEFAULTS,
-    title="Per-Feature Detection Metrics",
-    height=400,
-    width=1400,
+# %% --- Confusion Matrices ---
+fig = make_subplots(
+    rows=1,
+    cols=len(names),
+    subplot_titles=names,
 )
-fig.update_annotations(font_size=14)
-for col in range(1, 5):
-    fig.update_xaxes(title_text="Feature rank", row=1, col=col, **AXIS_STYLE)
-    fig.update_yaxes(row=1, col=col, **AXIS_STYLE)
+for i, name in enumerate(names):
+    cm = sae_results[name]["confusion_cos"]
+    cm_norm = cm / cm.sum()
+    fig.add_trace(
+        go.Heatmap(
+            z=cm_norm,
+            x=["Pred Inactive", "Pred Active"],
+            y=["GT Inactive", "GT Active"],
+            colorscale="Blues",
+            showscale=(i == len(names) - 1),
+            text=[[f"{v:.4f}" for v in row] for row in cm_norm],
+            texttemplate="%{text}",
+        ),
+        row=1,
+        col=i + 1,
+    )
+fig.update_layout(title="Confusion Matrices (cosine matching)", height=400, width=800)
+style_fig(fig)
 fig.show()
 
 # %% --- Encoder-based matching (using SAE activations on one-hot inputs) ---
 for name in names:
     res = sae_results[name]
-    sae = res["sae"]
-    tm = res["tm"]
+    tm = models_dict[name]
+    sae = tm.saes[name].sae
 
     with torch.no_grad():
         eye = torch.eye(N_FEATURES, device=DEVICE)
@@ -985,48 +1383,93 @@ for name in names:
         f"{n_agree_abs}/{N_FEATURES} with |cos-sim|"
     )
 
-# %% --- Encoder-matched SAE activations heatmap ---
+# %% --- Encoder-matched SAE heatmaps (activations + cosine similarity) ---
+_enc_match_data = {}
 for name in names:
     res = sae_results[name]
-    sae = res["sae"]
-    tm = res["tm"]
+    tm = models_dict[name]
+    sae = tm.saes[name].sae
 
     with torch.no_grad():
         eye = torch.eye(N_FEATURES, device=DEVICE)
         sae_acts = sae.encode(tm.ae.encode(eye)).cpu().numpy()
 
+        # Cosine similarity matrix (same as MCC computation)
+        D = tm.W.detach()
+        W_dec_t = sae.W_dec.detach().T
+        D_norm = D / D.norm(dim=0, keepdim=True).clamp(min=1e-8)
+        W_norm = W_dec_t / W_dec_t.norm(dim=0, keepdim=True).clamp(min=1e-8)
+        cos_sim = (D_norm.T @ W_norm).cpu().numpy()
+
     enc_fi, enc_di = res["enc_feat_idx"], res["enc_dict_idx"]
-    matched_feats = set(enc_fi)
-    matched_dicts = set(enc_di)
+    matched_feats, matched_dicts = set(enc_fi), set(enc_di)
     unmatched_feats = [f for f in range(N_FEATURES) if f not in matched_feats]
     unmatched_dicts = [d for d in range(N_DICT) if d not in matched_dicts]
-
     row_order = list(enc_fi) + unmatched_feats
     col_order = list(enc_di) + unmatched_dicts
 
-    sae_acts_matched = sae_acts[np.ix_(row_order, col_order)]
-    row_labels = [f"f{f}" for f in row_order]
-    col_labels = [f"d{d}" for d in col_order]
-
+    acts_matched = sae_acts[np.ix_(row_order, col_order)]
+    cos_matched = cos_sim[np.ix_(row_order, col_order)]
     n_matched = len(enc_fi)
-    diag_sum = sum(sae_acts_matched[i, i] for i in range(n_matched))
-    total_sum = sae_acts_matched.sum()
+    diag_sum = sum(acts_matched[i, i] for i in range(n_matched))
+    total_sum = acts_matched.sum()
     diag_enc = diag_sum / total_sum if total_sum > 0 else 0.0
+    mean_cos_enc = cos_sim[enc_fi, enc_di].mean()
     res["diagonality_enc"] = diag_enc
 
-    _fig = px.imshow(
-        sae_acts_matched,
-        labels=dict(
-            x="SAE dict element (encoder matched)", y="Feature (encoder matched)"
+    _enc_match_data[name] = {
+        "acts": acts_matched,
+        "cos": cos_matched,
+        "diag": diag_enc,
+        "mean_cos": mean_cos_enc,
+    }
+
+fig = make_subplots(
+    rows=2,
+    cols=2,
+    subplot_titles=[
+        f"{n} — Activations (diag={_enc_match_data[n]['diag']:.3f})" for n in names
+    ]
+    + [f"{n} — Cosine Sim (mean={_enc_match_data[n]['mean_cos']:.3f})" for n in names],
+    vertical_spacing=0.12,
+)
+for i, name in enumerate(names):
+    d = _enc_match_data[name]
+    fig.add_trace(
+        go.Heatmap(
+            z=d["acts"],
+            colorscale="ylgnbu_r",
+            showscale=(i == 1),
+            colorbar=dict(y=0.78, len=0.4, title="Act"),
         ),
-        x=col_labels,
-        y=row_labels,
-        title=f"SAE Activations (encoder matched, diag={diag_enc:.3f}) — {name}",
-        aspect="auto",
-        color_continuous_scale="Viridis",
+        row=1,
+        col=i + 1,
     )
-    _fig.update_layout(**LAYOUT_DEFAULTS, height=550, width=700)
-    _fig.show()
+    fig.add_trace(
+        go.Heatmap(
+            z=d["cos"],
+            colorscale="RdBu",
+            zmid=0,
+            zmin=-1,
+            zmax=1,
+            showscale=(i == 1),
+            colorbar=dict(y=0.22, len=0.4, title="Cos"),
+        ),
+        row=2,
+        col=i + 1,
+    )
+for row in range(1, 3):
+    for col in range(1, 3):
+        fig.update_xaxes(title_text="Matched SAE Dictionary Element", row=row, col=col)
+        fig.update_yaxes(title_text="Feature", row=row, col=col)
+fig.update_layout(
+    title="Encoder-Matched SAE Heatmaps",
+    height=1000,
+    width=1200,
+    showlegend=False,
+)
+style_fig(fig)
+fig.show()
 
 # %% --- Comparison table: decoder vs encoder matching ---
 print(f"\n{'=' * 90}")
@@ -1051,7 +1494,7 @@ for name, res in sae_results.items():
     print(
         f"{'':25s}  {'dec_abs':>8s}  {res['mcc_abs_abs']:9.4f}  {res['mcc_abs_cos']:8.4f}  "
         f"{res['precision_abs']:6.4f}  {res['recall_abs']:6.4f}  "
-        f"{res['f1_abs']:6.4f}  {res['fpr_abs']:6.4f}  {res.get('diagonality_abs', 0):6.4f}"
+        f"{res['f1_abs']:6.4f}  {res['fpr_abs']:6.4f}  {'':>6s}"
     )
     # Encoder matching
     print(
@@ -1065,76 +1508,284 @@ for name, res in sae_results.items():
     )
     print()
 
-# %% --- Per-feature detection metrics: encoder vs decoder matching ---
-fig = make_subplots(
-    rows=2,
-    cols=4,
-    subplot_titles=[
-        "Precision (dec)",
-        "Recall (dec)",
-        "F1 (dec)",
-        "FPR (dec)",
-        "Precision (enc)",
-        "Recall (enc)",
-        "F1 (enc)",
-        "FPR (enc)",
-    ],
-    horizontal_spacing=0.06,
-    vertical_spacing=0.12,
-)
+# %% --- Per-feature detection metrics (matching method slider) ---
+_det_metrics = ["precision", "recall", "f1", "fpr"]
+_det_titles = ["Precision", "Recall (TPR)", "F1 Score", "FPR"]
+_match_methods = [
+    ("Cosine", "_cos", "mcc_feat_idx_cos"),
+    ("|Cosine|", "_abs", "mcc_feat_idx_abs"),
+    ("Encoder", "_enc", "enc_feat_idx"),
+]
 
-for name in names:
-    res = sae_results[name]
-    color = PALETTE[name]
+fig = make_subplots(rows=1, cols=4, subplot_titles=_det_titles)
+x = np.arange(N_FEATURES)
 
-    # Row 1: decoder matching (cos)
-    feat_order_dec = np.argsort(-fp_np[res["mcc_feat_idx_cos"]])
-    x = np.arange(len(feat_order_dec))
-    for col, metric in enumerate(
-        ["precision_per_cos", "recall_per_cos", "f1_per_cos", "fpr_per_cos"], 1
-    ):
+# Initial traces: first matching method for all models × metrics
+init_sfx, init_fidx_key = _match_methods[0][1], _match_methods[0][2]
+for col, metric in enumerate(_det_metrics):
+    for name in names:
+        res = sae_results[name]
+        feat_order = np.argsort(-fp_np[res[init_fidx_key]])
         fig.add_trace(
             go.Scatter(
                 x=x,
-                y=res[metric][feat_order_dec],
+                y=res[f"{metric}_per{init_sfx}"][feat_order],
                 name=name,
-                mode="lines",
-                line=dict(color=color, width=LINE_WIDTH),
-                showlegend=(col == 1),
+                legendgroup=name,
+                mode="markers",
+                marker=dict(size=3.25, opacity=0.6, color=MODEL_COLORS[name]),
+                showlegend=(col == 0),
             ),
             row=1,
-            col=col,
+            col=col + 1,
         )
 
-    # Row 2: encoder matching
-    feat_order_enc = np.argsort(-fp_np[res["enc_feat_idx"]])
-    for col, metric in enumerate(
-        ["precision_per_enc", "recall_per_enc", "f1_per_enc", "fpr_per_enc"], 1
-    ):
-        fig.add_trace(
-            go.Scatter(
-                x=x,
-                y=res[metric][feat_order_enc],
-                name=name,
-                mode="lines",
-                line=dict(color=color, width=LINE_WIDTH),
-                showlegend=False,
-            ),
-            row=2,
-            col=col,
-        )
+# Slider: one step per matching method
+steps = []
+for label, sfx, fidx_key in _match_methods:
+    y_update = []
+    for metric in _det_metrics:
+        for name in names:
+            res = sae_results[name]
+            feat_order = np.argsort(-fp_np[res[fidx_key]])
+            y_update.append(res[f"{metric}_per{sfx}"][feat_order])
+    steps.append(dict(method="update", label=label, args=[{"y": y_update}]))
 
 fig.update_layout(
-    **LAYOUT_DEFAULTS,
-    title="Per-Feature Detection: Decoder (top) vs Encoder (bottom) Matching",
-    height=650,
+    title="Per-Feature Detection Metrics (sorted by firing prob.)",
+    height=400,
     width=1400,
+    sliders=[
+        dict(
+            active=0,
+            currentvalue=dict(prefix="Matching: "),
+            pad=dict(t=50),
+            steps=steps,
+        )
+    ],
 )
-fig.update_annotations(font_size=13)
-for row in range(1, 3):
-    for col in range(1, 5):
-        fig.update_xaxes(title_text="Feature rank", row=row, col=col, **AXIS_STYLE)
-        fig.update_yaxes(row=row, col=col, **AXIS_STYLE)
+for col in range(1, 5):
+    fig.update_xaxes(title_text="Feature Rank", row=1, col=col)
+style_fig(fig)
 fig.show()
+
+# %%
+# =============================================================================
+# EXPORT: Static geometric properties figure (no slider) — vector-ready
+# =============================================================================
+# Delete everything below this line when done exporting.
+
+import os
+
+_export_props = ["bias", "fn", "ti", "mpr", "fd"]
+_export_titles = [
+    "Learned Bias",
+    "Feature Norms",
+    "Total Interference",
+    "Mean Partner Rank",
+    "Feature Dimensionalities",
+]
+_n_export = len(_export_props)
+_x = np.arange(N_FEATURES)
+
+# Use the FINAL epoch snapshot for each animated series
+_final_trained = {p: geom_arrays[p][:, -1] for p in _export_props}
+_final_ablation = {p: geom_arrays_scalar_bias[p][:, -1] for p in _export_props}
+_final_constructed = {p: constructed_props[p] for p in _export_props}
+
+# Variable-bandwidth Gaussian smooth (same as make_epoch_slider)
+_n_pts = len(_x)
+_xs_sm = np.arange(_n_pts, dtype=float)
+_sigmas_sm = 1.0 + (_n_pts / 4) * (_xs_sm / _n_pts)
+_diffs_sm = _xs_sm[:, None] - _xs_sm[None, :]
+_W_sm = np.exp(-0.5 * (_diffs_sm / _sigmas_sm[:, None]) ** 2)
+_W_sm /= _W_sm.sum(axis=1, keepdims=True)
+
+
+def _sm(y):
+    return _W_sm @ np.asarray(y)
+
+
+_ms = 3
+_opacity = 0.7
+_curve_opacity = 0.388
+
+_series = [
+    ("Trained AE", _final_trained),
+    ("Trained AE w/ Scalar Bias", _final_ablation),
+    ("Constructed AE", _final_constructed),
+]
+
+_sb_props = ["bias", "fn", "ti", "mpr"]
+_sb_titles = [
+    "Learned Bias",
+    "Feature Norms",
+    "Total Interference",
+    "Mean Partner Rank",
+]
+_n_sb = len(_sb_props)
+
+fig_export = make_subplots(rows=1, cols=_n_sb, subplot_titles=_sb_titles)
+
+for i, prop in enumerate(_sb_props):
+    for j, (name, data) in enumerate(_series):
+        color = MODEL_COLORS[name]
+        fig_export.add_trace(
+            go.Scatter(
+                x=_x,
+                y=data[prop],
+                name=name,
+                legendgroup=name,
+                mode="markers",
+                marker=dict(size=_ms, opacity=_opacity, color=color),
+                showlegend=(i == 0),
+            ),
+            row=1,
+            col=i + 1,
+        )
+        fig_export.add_trace(
+            go.Scatter(
+                x=_x,
+                y=_sm(data[prop]),
+                legendgroup=name,
+                mode="lines",
+                line=dict(width=2, color=color),
+                opacity=_curve_opacity,
+                showlegend=False,
+            ),
+            row=1,
+            col=i + 1,
+        )
+
+# Subplot titles
+for ann in fig_export.layout.annotations:
+    ann.font = dict(size=22)
+
+# Axes: no per-subplot xlabel
+for i in range(_n_sb):
+    fig_export.update_xaxes(title_text=None, row=1, col=i + 1)
+
+# Shared x-axis label
+fig_export.add_annotation(
+    text="Feature Rank",
+    xref="paper",
+    yref="paper",
+    x=0.5,
+    y=-0.23,
+    showarrow=False,
+    font=dict(size=22),
+)
+
+fig_export.update_layout(
+    height=500,
+    width=max(600, 440 * _n_sb),
+    margin=dict(b=100),
+    showlegend=True,
+)
+
+fig_export.update_yaxes(range=[215, 450], row=1, col=4)  # Mean Partner Rank
+
+style_fig(fig_export)
+fig_export.show()
+
+# %%
+# --- Save as vector (PDF + SVG) ---
+_fig_dir = os.path.join(os.path.dirname(__file__), "figures")
+os.makedirs(_fig_dir, exist_ok=True)
+
+fig_export.write_image(os.path.join(_fig_dir, "geom_scalar_bias.pdf"), engine="kaleido")
+fig_export.write_image(os.path.join(_fig_dir, "geom_scalar_bias.svg"), engine="kaleido")
+print(f"Saved to {_fig_dir}/geom_scalar_bias.{{pdf,svg}}")
+
+# %%
+# =============================================================================
+# EXPORT: Unit Norms ablation — same layout as scalar bias export
+# =============================================================================
+
+_final_unit_norm = {p: geom_arrays_unit_norm[p][:, -1] for p in _export_props}
+
+_series_un = [
+    ("Trained AE", _final_trained),
+    ("Trained AE w/ Unit Norms", _final_unit_norm),
+    ("Constructed AE", _final_constructed),
+]
+
+fig_export_un = make_subplots(rows=1, cols=_n_export, subplot_titles=_export_titles)
+
+for i, prop in enumerate(_export_props):
+    for j, (name, data) in enumerate(_series_un):
+        color = MODEL_COLORS[name]
+        fig_export_un.add_trace(
+            go.Scatter(
+                x=_x,
+                y=data[prop],
+                name=name,
+                legendgroup=name,
+                mode="markers",
+                marker=dict(size=_ms, opacity=_opacity, color=color),
+                showlegend=(i == 0),
+            ),
+            row=1,
+            col=i + 1,
+        )
+        fig_export_un.add_trace(
+            go.Scatter(
+                x=_x,
+                y=_sm(data[prop]),
+                legendgroup=name,
+                mode="lines",
+                line=dict(width=2, color=color),
+                opacity=_curve_opacity,
+                showlegend=False,
+            ),
+            row=1,
+            col=i + 1,
+        )
+
+for ann in fig_export_un.layout.annotations:
+    ann.font = dict(size=22)
+for i in range(_n_export):
+    fig_export_un.update_xaxes(title_text=None, row=1, col=i + 1)
+fig_export_un.add_annotation(
+    text="Feature Rank",
+    xref="paper",
+    yref="paper",
+    x=0.5,
+    y=-0.23,
+    showarrow=False,
+    font=dict(size=22),
+)
+fig_export_un.update_layout(
+    height=500,
+    width=max(600, 350 * _n_export),
+    margin=dict(b=100),
+    showlegend=True,
+    legend=dict(
+        x=0.89,
+        y=0.8,
+        xanchor="left",
+        yanchor="top",
+        bgcolor="rgba(255,255,255,0.85)",
+        bordercolor="#D1D5DB",
+        borderwidth=1,
+        itemsizing="constant",
+        font=dict(size=7),
+    ),
+)
+fig_export_un.update_yaxes(range=[220, 450], row=1, col=4)
+fig_export_un.update_yaxes(range=[0.1, 0.52], row=1, col=5)
+
+style_fig(fig_export_un)
+fig_export_un.show()
+
+# %%
+# --- Save unit norms as vector ---
+fig_export_un.write_image(
+    os.path.join(_fig_dir, "geom_unit_norms.pdf"), engine="kaleido"
+)
+fig_export_un.write_image(
+    os.path.join(_fig_dir, "geom_unit_norms.svg"), engine="kaleido"
+)
+print(f"Saved to {_fig_dir}/geom_unit_norms.{{pdf,svg}}")
 
 # %%
