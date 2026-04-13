@@ -115,7 +115,7 @@ matching_pursuit_total = [
     SAEEntry(
         sae=MatchingPursuitTrainingSAE(
             MatchingPursuitTrainingSAEConfig(
-                d_in=100, d_sae=648, max_iterations=max_iterations
+                d_in=100, d_sae=648, decoder_init_norm=1, max_iterations=max_iterations
             )
         ),
         type="MatchingPursuit",
@@ -173,6 +173,7 @@ def default_benchmark_saes() -> BenchmarkSAEsInput:
                     MatchingPursuitTrainingSAEConfig(
                         d_in=100,
                         d_sae=648,
+                        decoder_init_norm=1,
                         max_iterations=2,
                     )
                 ),
@@ -210,6 +211,7 @@ def default_benchmark_saes() -> BenchmarkSAEsInput:
                     MatchingPursuitTrainingSAEConfig(
                         d_in=100,
                         d_sae=648,
+                        decoder_init_norm=1,
                         max_iterations=2,  # check for higher
                     )
                 ),
@@ -247,6 +249,7 @@ def default_benchmark_saes() -> BenchmarkSAEsInput:
                     MatchingPursuitTrainingSAEConfig(
                         d_in=100,
                         d_sae=648,
+                        decoder_init_norm=1,
                         max_iterations=5,
                     )
                 ),
@@ -284,6 +287,7 @@ def default_benchmark_saes() -> BenchmarkSAEsInput:
                     MatchingPursuitTrainingSAEConfig(
                         d_in=100,
                         d_sae=648,
+                        decoder_init_norm=1,
                         max_iterations=2,
                     )
                 ),
@@ -321,6 +325,7 @@ def default_benchmark_saes() -> BenchmarkSAEsInput:
                     MatchingPursuitTrainingSAEConfig(
                         d_in=100,
                         d_sae=648,
+                        decoder_init_norm=1,
                         max_iterations=2,
                     )
                 ),
@@ -358,6 +363,7 @@ def default_benchmark_saes() -> BenchmarkSAEsInput:
                     MatchingPursuitTrainingSAEConfig(
                         d_in=100,
                         d_sae=648,
+                        decoder_init_norm=1,
                         max_iterations=3,
                     )
                 ),
@@ -395,6 +401,7 @@ def default_benchmark_saes() -> BenchmarkSAEsInput:
                     MatchingPursuitTrainingSAEConfig(
                         d_in=100,
                         d_sae=648,
+                        decoder_init_norm=1,
                         max_iterations=2,
                     )
                 ),
@@ -432,6 +439,7 @@ def default_benchmark_saes() -> BenchmarkSAEsInput:
                     MatchingPursuitTrainingSAEConfig(
                         d_in=100,
                         d_sae=648,
+                        decoder_init_norm=1,
                         max_iterations=5,
                     )
                 ),

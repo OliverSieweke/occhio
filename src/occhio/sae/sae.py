@@ -475,7 +475,6 @@ class CausalSAE(SparseAutoEncoderBase):
         self.W_dec.data = self.W_dec.data / self.W_dec.data.norm(dim=1, keepdim=True)
 
     def loss(self, x_true: Tensor, x_hat: Tensor, intermediate: Tensor) -> Tensor:
-
         residual = intermediate - intermediate @ torch.triu(self.causal, 1)
         sparsity_loss = torch.mean(
             torch.sum(

@@ -113,7 +113,6 @@ class ToyModel:
         device: torch.device | str | None = None,
         importances: Tensor | list | None = None,
     ):
-
         self.distribution = distribution
         self.ae = ae
         self.saes = {}

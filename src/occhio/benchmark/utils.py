@@ -17,7 +17,6 @@ def toy_model_from_benchmark(
     device: torch.device | str | None = None,
     generator: torch.Generator | None = None,
 ):
-
     return ToyModel(
         distribution=HuggingFaceDistribution(
             repo_id=OCCHIO_HF_DISTRIBUTIONS_REPO,

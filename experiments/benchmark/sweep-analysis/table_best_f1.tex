@@ -1,0 +1,53 @@
+\begin{table*}[t]
+  \centering
+
+  \small
+  \setlength{\tabcolsep}{4pt}
+
+  \begin{tabular}{
+      l
+      ccc
+      ccc
+      ccc
+      ccc
+    }
+    \toprule
+
+    & \multicolumn{3}{c}{Standard}
+    & \multicolumn{3}{c}{Matryoshka}
+    & \multicolumn{3}{c}{BatchTopK}
+    & \multicolumn{3}{c}{MatchingPursuit} \\
+
+    \cmidrule(lr){2-4} \cmidrule(lr){5-7} \cmidrule(lr){8-10} \cmidrule(lr){11-13}
+
+    Distribution
+    & $F_1$ $\uparrow$ & MCC $\uparrow$ & $R^2$ $\uparrow$
+    & $F_1$ $\uparrow$ & MCC $\uparrow$ & $R^2$ $\uparrow$
+    & $F_1$ $\uparrow$ & MCC $\uparrow$ & $R^2$ $\uparrow$
+    & $F_1$ $\uparrow$ & MCC $\uparrow$ & $R^2$ $\uparrow$\\
+
+    \midrule
+
+    Sparse Uniform       & 0.57 & 0.67 & 0.52 & 0.74 & \textbf{1.00} & 0.78 & \textbf{0.74} & \textbf{1.00} & 0.78 & 0.67 & 0.92 & \textbf{0.80} \\
+    Correlated Pairs     & 0.63 & 0.79 & 0.38 & 0.72 & 0.83 & 0.80 & \textbf{0.74} & \textbf{0.86} & 0.82 & 0.67 & 0.82 & \textbf{0.84} \\
+    Hierarchical Pairs   & 0.56 & 0.57 & 0.57 & 0.71 & 0.87 & 0.88 & 0.74 & \textbf{0.88} & \textbf{0.89} & \textbf{0.75} & 0.85 & 0.86 \\
+    DAG Random Walk      & 0.57 & 0.66 & 0.55 & 0.70 & 0.98 & 0.71 & 0.69 & \textbf{0.98} & 0.71 & \textbf{0.75} & 0.92 & \textbf{0.72} \\
+    Power Law Digraph    & \textbf{0.71} & 0.97 & 0.43 & 0.70 & 0.97 & 0.58 & 0.71 & \textbf{0.97} & 0.58 & 0.65 & 0.94 & \textbf{0.61} \\
+    Simplicial Complex   & \textbf{0.74} & \textbf{0.89} & 0.72 & 0.72 & 0.88 & 0.78 & 0.73 & 0.89 & 0.80 & 0.65 & 0.88 & \textbf{0.81} \\
+    Spherical            & 0.73 & 0.83 & 0.76 & 0.69 & 0.82 & 0.81 & 0.72 & \textbf{0.84} & 0.84 & \textbf{0.73} & 0.83 & \textbf{0.86} \\
+    Torus                & 0.80 & 0.91 & 0.60 & 0.74 & 0.89 & 0.71 & \textbf{0.82} & \textbf{0.92} & \textbf{0.73} & 0.78 & 0.91 & 0.71 \\
+
+    \midrule
+
+    Mean                 & 0.66 & 0.79 & 0.57 & 0.71 & 0.91 & 0.76 & \textbf{0.74} & \textbf{0.92} & 0.77 & 0.71 & 0.88 & \textbf{0.78} \\
+
+    \bottomrule
+  \end{tabular}
+  \caption{%
+    Performance of sparse autoencoders across the benchmark distributions,
+    selecting the hyperparameter configuration with the best $F_1$ score per SAE type.
+    Best result per metric and distribution is shown in \textbf{bold}.
+  }
+  \label{tab:results-best-f1}
+
+\end{table*}

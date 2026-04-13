@@ -51,7 +51,6 @@ class HuggingFaceDistribution(Distribution):
         generator: torch.Generator | None = None,
         buffer_size: int | None = None,
     ):
-
         # [2026-04-07 | OliverSieweke] TODO: Method should depend on repo type here / use dataset_info
         resolved_revision = (
             HfApi().repo_info(repo_id, revision=revision, repo_type=repo_type).sha
@@ -105,7 +104,7 @@ class HuggingFaceDistribution(Distribution):
             and self.device is not None
             and self.device.type != "cpu"
         ):
-            target_bytes = 1 * 1024**3  # 1 GB
+            target_bytes = 1.5 * 1024**3  # 1.5 GB
             bytes_per_sample = self.n_features * samples.element_size()
             buffer_size = target_bytes // bytes_per_sample
         self.buffer_size = buffer_size
