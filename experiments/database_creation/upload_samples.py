@@ -184,8 +184,8 @@ random.seed(RANDOM_SEED)
 
 dist = CorrelatedPairs(
     n_features=N_FEAT,
-    p_active=zipfian_p_active(N_FEAT, high=0.58, low=1.22 / N_FEAT),
-    p_individual=[0.5 + 0.5 * random.random() for _ in range(N_FEAT)],
+    p_active=zipfian_p_active(N_FEAT, high=0.999, low=0.25 / N_FEAT),
+    correlation=[0.92 + 0.08 * random.random() for _ in range(N_FEAT)],
     device=DEVICE,
     generator=dist_gen,
 )
