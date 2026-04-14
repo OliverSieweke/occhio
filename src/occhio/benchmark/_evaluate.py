@@ -44,6 +44,8 @@ def evaluate(
     export_dir: str | Path | None = None,
     n_loss_snapshots: int | None = None,
     n_seeds: int | None = None,
+    ae_type: str = "huggingface",
+    ae_kwargs: dict | None = None,
 ) -> EvaluationResult:
     """Evaluate SAEs on toy model benchmarks.
 
@@ -64,6 +66,9 @@ def evaluate(
             snapshots per SAE and include in the export. None (default) disables loss tracking.
         n_seeds: If set, sweep over this many seeds (0..n_seeds-1). None (default) runs
             a single model with no seed axis.
+        ae_type: Which autoencoder to use: "huggingface" (default) or "synth".
+        ae_kwargs: Extra keyword arguments forwarded to the SynthAE constructor when
+            ae_type="synth". Use this to specify n_hidden and other SynthAE parameters.
 
     Returns:
         An EvaluationResult with the trained grid and a tidy DataFrame of SAE metrics.
@@ -94,6 +99,8 @@ def evaluate(
             params["benchmark"].value,
             device=device,
             generator=torch.Generator(device=device),
+            ae_type=ae_type,
+            ae_kwargs=ae_kwargs,
         ),
         axes=axes,
     )
