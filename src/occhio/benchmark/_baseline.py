@@ -20,19 +20,25 @@ def compute_ae_baseline(
     tm: ToyModel,
     n_test: int = N_TEST_DEFAULT,
     n_thresholds: int = N_THRESHOLDS_DEFAULT,
+    n_eval_features: int | None = None,
 ) -> dict[str, float]:
     """Compute the best F1 achievable by the autoencoder alone (no SAE).
 
     Sweeps thresholds on ``ae.decode(ae.encode(x))`` against ``x > 0``
-    and returns the best macro/micro F1 at the optimal threshold.
+    independently per feature and returns the macro-averaged F1 at the
+    per-feature optimal thresholds.
 
     Args:
         tm: A trained ToyModel.
         n_test: Number of test samples.
-        n_thresholds: Number of thresholds to sweep in [0, 1].
+        n_thresholds: Number of thresholds to sweep.
+        n_eval_features: Number of leading features to evaluate on.
+            Defaults to ``n_features // 2`` to match the SAE latent space
+            dimensionality.
 
     Returns:
-        Dict with keys: threshold, f1_macro, f1_micro.
+        Dict with keys: f1_macro, precision_macro, recall_macro,
+        threshold_mean, threshold_min, threshold_max.
     """
     device = tm.device
 
@@ -41,13 +47,12 @@ def compute_ae_baseline(
         test_x = (raw[0] if isinstance(raw, tuple) else raw).to(device)
         test_xhat = tm.ae.decode(tm.ae.encode(test_x))
 
-    # Restrict to the first half of features (n_features // 2) to match the SAE
-    # latent space dimensionality, making the comparison fair.
-    n_half = tm.ae.n_features // 2
-    threshold, f1_macro, f1_micro = _best_threshold_f1(
-        test_x[:, :n_half], test_xhat[:, :n_half], n_thresholds=n_thresholds
-    )
-    return {"threshold": threshold, "f1_macro": f1_macro, "f1_micro": f1_micro}
+    if n_eval_features is None:
+        n_eval_features = tm.ae.n_features // 2
+    test_x = test_x[:, :n_eval_features]
+    test_xhat = test_xhat[:, :n_eval_features]
+
+    return _per_feature_threshold_f1(test_x, test_xhat, n_thresholds=n_thresholds)
 
 
 def benchmark_ae_baselines(
@@ -55,7 +60,10 @@ def benchmark_ae_baselines(
     device: str | None = None,
     n_test: int = N_TEST_DEFAULT,
     n_thresholds: int = N_THRESHOLDS_DEFAULT,
+    n_eval_features: int | None = None,
     cache_path: str | Path | None = None,
+    ae_type: str = "huggingface",
+    ae_kwargs: dict | None = None,
 ) -> pd.DataFrame:
     """Compute AE F1 baselines for all (or selected) benchmark distributions.
 
@@ -64,12 +72,18 @@ def benchmark_ae_baselines(
         device: Device for computation.
         n_test: Number of test samples per distribution.
         n_thresholds: Number of thresholds to sweep.
+        n_eval_features: Number of leading features to evaluate on.
+            Forwarded to :func:`compute_ae_baseline`.
         cache_path: If set, load results from this file when it exists,
             or save computed results there. Supports ``.parquet`` and ``.csv``.
+        ae_type: Which autoencoder to use: "huggingface" (default) or "synth".
+        ae_kwargs: Extra keyword arguments forwarded to the autoencoder constructor
+            when ae_type="synth" (e.g. ``{"n_hidden": 200}``).
 
     Returns:
         DataFrame indexed by benchmark name with columns:
-        threshold, f1_macro, f1_micro.
+        f1_macro, precision_macro, recall_macro, threshold_mean,
+        threshold_min, threshold_max.
     """
     if cache_path is not None:
         cache_path = Path(cache_path)
@@ -83,8 +97,18 @@ def benchmark_ae_baselines(
 
     rows: list[dict[str, object]] = []
     for dist_name in distributions:
-        tm = toy_model_from_benchmark(dist_name.value, device=device)
-        metrics = compute_ae_baseline(tm, n_test=n_test, n_thresholds=n_thresholds)
+        tm = toy_model_from_benchmark(
+            dist_name.value,
+            device=device,
+            ae_type=ae_type,
+            ae_kwargs=ae_kwargs,
+        )
+        metrics = compute_ae_baseline(
+            tm,
+            n_test=n_test,
+            n_thresholds=n_thresholds,
+            n_eval_features=n_eval_features,
+        )
         rows.append({"benchmark": dist_name.value, **metrics})
 
     df = pd.DataFrame(rows).set_index("benchmark")
@@ -99,43 +123,49 @@ def benchmark_ae_baselines(
     return df
 
 
-def _best_threshold_f1(
+def _per_feature_threshold_f1(
     x: Tensor,
     xhat: Tensor,
     n_thresholds: int = N_THRESHOLDS_DEFAULT,
-) -> tuple[float, float, float]:
-    """Sweep thresholds on xhat, return (best_threshold, macro_f1, micro_f1).
+    threshold_chunk_size: int = 10,
+) -> dict[str, float]:
+    """Sweep thresholds independently per feature and return macro-averaged metrics.
 
-    Optimises for micro F1.
+    For each feature, selects the threshold that maximises its F1 score, then
+    reports the mean (macro) precision, recall, and F1 across features.
     """
-    gt_active = x > 0
-    thresholds = torch.linspace(0, 1, n_thresholds, device=x.device)
+    gt_active = x > 0  # (N, F)
+    thresholds = torch.linspace(0, 0.5, n_thresholds, device=x.device)  # (T,)
 
-    best_f1_micro = -1.0
-    best_threshold = 0.0
-    best_f1_macro = 0.0
+    # Process thresholds in chunks to avoid materialising the full (T, N, F) tensor.
+    tp_t = torch.zeros(n_thresholds, x.shape[1], device=x.device)
+    fp_t = torch.zeros(n_thresholds, x.shape[1], device=x.device)
+    fn_t = torch.zeros(n_thresholds, x.shape[1], device=x.device)
 
-    for t in thresholds:
-        pred_active = xhat > t
+    gt_unsqueezed = gt_active.unsqueeze(0)  # (1, N, F)
+    for start in range(0, n_thresholds, threshold_chunk_size):
+        chunk = thresholds[start : start + threshold_chunk_size]  # (C,)
+        pred_chunk = xhat.unsqueeze(0) > chunk.view(-1, 1, 1)  # (C, N, F)
+        end = start + len(chunk)
+        tp_t[start:end] = (gt_unsqueezed & pred_chunk).float().sum(dim=1)
+        fp_t[start:end] = (~gt_unsqueezed & pred_chunk).float().sum(dim=1)
+        fn_t[start:end] = (gt_unsqueezed & ~pred_chunk).float().sum(dim=1)
 
-        tp = (gt_active & pred_active).float().sum(dim=0)
-        fp = (~gt_active & pred_active).float().sum(dim=0)
-        fn = (gt_active & ~pred_active).float().sum(dim=0)
+    prec_t = tp_t / (tp_t + fp_t + 1e-8)  # (T, F)
+    rec_t = tp_t / (tp_t + fn_t + 1e-8)
+    f1_t = 2 * prec_t * rec_t / (prec_t + rec_t + 1e-8)
 
-        prec = tp / (tp + fp + 1e-8)
-        rec = tp / (tp + fn + 1e-8)
-        f1_per_feature = 2 * prec * rec / (prec + rec + 1e-8)
+    # Best threshold per feature (argmax over T axis)
+    f1_per_feat, best_t_idx = f1_t.max(dim=0)  # (F,), (F,)
+    best_thresholds = thresholds[best_t_idx]  # (F,)
 
-        tp_tot = tp.sum()
-        fp_tot = fp.sum()
-        fn_tot = fn.sum()
-        prec_micro = (tp_tot / (tp_tot + fp_tot + 1e-8)).item()
-        rec_micro = (tp_tot / (tp_tot + fn_tot + 1e-8)).item()
-        f1_micro = 2 * prec_micro * rec_micro / (prec_micro + rec_micro + 1e-8)
+    feat_idx = torch.arange(x.shape[1], device=x.device)
 
-        if f1_micro > best_f1_micro:
-            best_f1_micro = f1_micro
-            best_threshold = t.item()
-            best_f1_macro = f1_per_feature.mean().item()
-
-    return best_threshold, best_f1_macro, best_f1_micro
+    return {
+        "f1_macro": f1_per_feat.mean().item(),
+        "precision_macro": prec_t[best_t_idx, feat_idx].mean().item(),
+        "recall_macro": rec_t[best_t_idx, feat_idx].mean().item(),
+        "threshold_mean": best_thresholds.mean().item(),
+        "threshold_min": best_thresholds.min().item(),
+        "threshold_max": best_thresholds.max().item(),
+    }
