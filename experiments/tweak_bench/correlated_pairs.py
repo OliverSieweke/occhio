@@ -49,15 +49,15 @@ LAYOUT_DEFAULTS = dict(
 DEVICE = "mps"
 SEED = 42
 N_FEATURES = 1296
-D_HIDDEN = 100
+D_HIDDEN = 200
 N_EPOCHS = 25_000
 BATCH_SIZE = 512
 
 # %%
 # --- Distribution ---
-np.random.seed(8)
+# np.random.seed(8)
 
-high = 0.5
+high = 0.55
 low = 1.22 / N_FEATURES
 alpha = np.log(high / low) / np.log(N_FEATURES)
 print(f"{alpha=}")

@@ -81,6 +81,30 @@ tm = ToyModel(distribution=dist, ae=ae, device=DEVICE)
 losses, _ = tm.fit(N_EPOCHS, batch_size=BATCH_SIZE, verbose=True)
 
 # %%
+# --- Plot: Per-feature reconstruction loss ---
+with torch.no_grad():
+    recon_x = dist.sample(100_000).to(DEVICE)
+    recon_xhat = tm.ae.decode(tm.ae.encode(recon_x))
+    per_feature_mse = (recon_xhat - recon_x).abs().mean(dim=0).cpu().numpy()
+
+fig_recon = go.Figure()
+fig_recon.add_trace(
+    go.Scatter(
+        x=np.arange(N_FEATURES),
+        y=per_feature_mse,
+        mode="lines",
+        name="MSE",
+    )
+)
+fig_recon.update_xaxes(title_text="Feature index", **AXIS_STYLE)
+fig_recon.update_yaxes(title_text="MSE", **AXIS_STYLE)
+fig_recon.update_layout(
+    title="Per-feature reconstruction loss",
+    **LAYOUT_DEFAULTS,
+)
+fig_recon.show()
+
+# %%
 # --- Autoencoder F1 (does the AE round-trip preserve feature activity?) ---
 with torch.no_grad():
     ae_test_x = dist.sample(100_000).to(DEVICE)
