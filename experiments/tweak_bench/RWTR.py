@@ -69,6 +69,27 @@ std_l0 = (samples > 0).float().sum(dim=-1).std().item()
 print(f"Average L0: {mean_l0:.2f} +/- {std_l0:.2f}")
 
 # %%
+# --- Plot: Sorted feature firing probabilities ---
+firing_probs = (samples > 0).float().mean(dim=0).cpu().numpy()
+# firing_probs_sorted = np.sort(firing_probs)[::-1]
+
+fig_firing = go.Figure()
+fig_firing.add_trace(
+    go.Scatter(
+        x=np.arange(N_FEATURES),
+        y=firing_probs,
+        mode="lines",
+        name="Firing prob",
+    )
+)
+fig_firing.update_xaxes(title_text="Feature rank", **AXIS_STYLE)
+fig_firing.update_yaxes(title_text="P(active)", **AXIS_STYLE)
+fig_firing.update_layout(
+    title="Feature firing probabilities (sorted)", **LAYOUT_DEFAULTS
+)
+fig_firing.show()
+
+# %%
 # --- Train ---
 gen = torch.Generator(DEVICE).manual_seed(SEED)
 ae = TiedLinearRelu(N_FEATURES, D_HIDDEN, device=DEVICE, generator=gen)
@@ -81,46 +102,52 @@ losses, _ = tm.fit(N_EPOCHS, batch_size=BATCH_SIZE, verbose=True)
 px.line(losses)
 
 # %%
-# --- Autoencoder F1 (does the AE round-trip preserve feature activity?) ---
+# --- Autoencoder F1 (per-feature threshold sweep) ---
 with torch.no_grad():
-    ae_test_x = dist.sample(100_000).to(DEVICE)
+    ae_test_x = dist.sample(10_000).to(DEVICE)
     ae_test_xhat = tm.ae.decode(tm.ae.encode(ae_test_x))
 
-    gt_active_ae = ae_test_x > 0
-    pred_active_ae = ae_test_xhat > 0
+    thresholds = torch.linspace(0, 0.5, 50, device=DEVICE)  # (T,)
+    gt_active_ae = ae_test_x > 0  # (N, F)
 
-    tp_ae = (gt_active_ae & pred_active_ae).float().sum(dim=0)
-    fp_ae = (~gt_active_ae & pred_active_ae).float().sum(dim=0)
-    fn_ae = (gt_active_ae & ~pred_active_ae).float().sum(dim=0)
+    # (T, N, F): pred active per (threshold, sample, feature)
+    pred_active_t = ae_test_xhat.unsqueeze(0) > thresholds.view(-1, 1, 1)
 
-    prec_ae = tp_ae / (tp_ae + fp_ae + 1e-8)
-    rec_ae = tp_ae / (tp_ae + fn_ae + 1e-8)
-    f1_ae = 2 * prec_ae * rec_ae / (prec_ae + rec_ae + 1e-8)
+    tp_t = (gt_active_ae.unsqueeze(0) & pred_active_t).float().sum(dim=1)  # (T, F)
+    fp_t = (~gt_active_ae.unsqueeze(0) & pred_active_t).float().sum(dim=1)
+    fn_t = (gt_active_ae.unsqueeze(0) & ~pred_active_t).float().sum(dim=1)
 
-    tp_tot_ae = tp_ae.sum()
-    fp_tot_ae = fp_ae.sum()
-    fn_tot_ae = fn_ae.sum()
-    prec_micro_ae = (tp_tot_ae / (tp_tot_ae + fp_tot_ae + 1e-8)).item()
-    rec_micro_ae = (tp_tot_ae / (tp_tot_ae + fn_tot_ae + 1e-8)).item()
-    f1_micro_ae = (
-        2 * prec_micro_ae * rec_micro_ae / (prec_micro_ae + rec_micro_ae + 1e-8)
-    )
+    prec_t = tp_t / (tp_t + fp_t + 1e-8)
+    rec_t = tp_t / (tp_t + fn_t + 1e-8)
+    f1_t = 2 * prec_t * rec_t / (prec_t + rec_t + 1e-8)  # (T, F)
+
+    # Best threshold per feature (argmax over T axis)
+    f1_per_feat, best_t_idx = f1_t.max(dim=0)  # (F,), (F,)
+    best_thresholds = thresholds[best_t_idx]  # (F,)
+    f1_macro = f1_per_feat.mean().item()
+
+    feat_idx = torch.arange(ae_test_x.shape[1], device=DEVICE)
+    prec_macro = prec_t[best_t_idx, feat_idx].mean().item()
+    rec_macro = rec_t[best_t_idx, feat_idx].mean().item()
 
 print(
-    f"[AE round-trip] "
-    f"prec={prec_ae.mean():.4f}  rec={rec_ae.mean():.4f}  "
-    f"F1(macro)={f1_ae.mean().item():.4f}  F1(micro)={f1_micro_ae:.4f}"
+    f"[AE round-trip, per-feature thresholds] "
+    f"prec={prec_macro:.4f}  rec={rec_macro:.4f}  "
+    f"F1={f1_macro:.4f}"
+    f"\nthreshold stats: mean={best_thresholds.mean():.3f}  "
+    f"min={best_thresholds.min():.3f}  max={best_thresholds.max():.3f}"
 )
 
 # %%
-# --- Plot: Feature Norms and Feature Dimensionalities ---
+# --- Plot: Feature Norms, Dimensionalities, and Bias ---
 fn = tm.feature_norms.detach().cpu().numpy()
 fd = tm.feature_dimensionalities.detach().cpu().numpy()
+bias = tm.ae.get_parameter("b").detach().cpu().numpy()
 
 fig = make_subplots(
     rows=1,
-    cols=2,
-    subplot_titles=["Feature Norms", "Feature Dimensionalities"],
+    cols=3,
+    subplot_titles=["Feature Norms", "Feature Dimensionalities", "Bias"],
 )
 
 fig.add_trace(
@@ -138,15 +165,22 @@ fig.add_trace(
     row=1,
     col=2,
 )
+fig.add_trace(
+    go.Scatter(x=np.arange(N_FEATURES), y=bias, mode="lines", name="Bias"),
+    row=1,
+    col=3,
+)
 
 fig.update_xaxes(title_text="Feature index", row=1, col=1)
 fig.update_xaxes(title_text="Feature index", row=1, col=2)
+fig.update_xaxes(title_text="Feature index", row=1, col=3)
 fig.update_yaxes(title_text="‖w‖", row=1, col=1)
 fig.update_yaxes(title_text="Dimensionality", row=1, col=2)
+fig.update_yaxes(title_text="b", row=1, col=3)
 fig.update_layout(
     title=f"TiedLinearRelu — CorrelatedPairs (N={N_FEATURES}, D={D_HIDDEN})",
     height=400,
-    width=900,
+    width=1300,
 )
 fig.show()
 

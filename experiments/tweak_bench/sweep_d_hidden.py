@@ -65,12 +65,12 @@ N_DICT = N_FEATURES // 2
 SAE_STEPS = 30_000
 SAE_BATCH = 1024
 SAE_LR = 3e-4
-SAE_K = 4
+SAE_K = 3
 N_TEST = 100_000
 
 # Sweep
-D_HIDDEN_VALUES = [200, 250, 300, 350, 400]
-MATRYOSHKA_WIDTHS_FN = lambda n_dict: [n_dict // 4, n_dict // 2, n_dict]  # noqa: E731
+D_HIDDEN_VALUES = [100, 200, 250, 300, 350, 400]
+MATRYOSHKA_WIDTHS_FN = lambda n_dict: [n_dict // 2, n_dict]  # noqa: E731
 
 # %%
 # --- Distribution (shared across all runs) ---
@@ -98,6 +98,41 @@ def to_jumprelu(training_sae, device):
     with tempfile.TemporaryDirectory() as tmpdir:
         training_sae.save_inference_model(tmpdir)
         return SAE.load_from_disk(tmpdir, device=device)
+
+
+def compute_ae_best_f1(tm, n_test=N_TEST, n_thresholds=200):
+    """Compute the best macro-F1 the AE round-trip achieves by sweeping thresholds.
+
+    For each candidate threshold t in [0, 1], predicts feature i as active if
+    ``x_hat[:, i] > t`` (ground truth stays ``x_true > 0``). Returns the best
+    macro-F1 across all thresholds and the threshold that achieved it.
+    """
+    with torch.no_grad():
+        test_x = dist.sample(n_test).to(DEVICE)
+        test_xhat = tm.ae.decode(tm.ae.encode(test_x))
+
+        gt = test_x > 0  # (N, F)
+        gt_f = gt.float()
+        pos_per_feat = gt_f.sum(dim=0)  # (F,)
+
+        thresholds = torch.linspace(0.0, 1.0, n_thresholds, device=DEVICE)
+
+        best_f1 = -1.0
+        best_t = 0.0
+        for t in thresholds:
+            pred = test_xhat > t
+            tp = (gt & pred).float().sum(dim=0)
+            fp = (~gt & pred).float().sum(dim=0)
+            fn = pos_per_feat - tp  # gt_f.sum - tp
+
+            prec = tp / (tp + fp + 1e-8)
+            rec = tp / (tp + fn + 1e-8)
+            f1 = (2 * prec * rec / (prec + rec + 1e-8)).mean().item()
+            if f1 > best_f1:
+                best_f1 = f1
+                best_t = float(t.item())
+
+    return {"f1_macro": best_f1, "threshold": best_t}
 
 
 def compute_f1(sae_inf, tm, n_test=N_TEST):
@@ -170,6 +205,13 @@ for d_hidden in D_HIDDEN_VALUES:
     tm = ToyModel(distribution=dist, ae=ae, device=DEVICE)
     tm.fit(N_EPOCHS, batch_size=BATCH_SIZE, verbose=True)
 
+    # --- AE own F1 (best over threshold sweep) ---
+    ae_metrics = compute_ae_best_f1(tm)
+    print(
+        f"  [AE]         f1_macro={ae_metrics['f1_macro']:.4f}  "
+        f"threshold={ae_metrics['threshold']:.3f}"
+    )
+
     train_samples = SAE_STEPS * SAE_BATCH
 
     # --- Matryoshka ---
@@ -223,6 +265,7 @@ for d_hidden in D_HIDDEN_VALUES:
     results.append(
         {
             "d_hidden": d_hidden,
+            "ae": ae_metrics,
             "matryoshka": mat_metrics,
             "batchtopk": btk_metrics,
         }
@@ -233,6 +276,7 @@ for d_hidden in D_HIDDEN_VALUES:
 d_vals = [r["d_hidden"] for r in results]
 mat_f1 = [r["matryoshka"]["f1_macro"] for r in results]
 btk_f1 = [r["batchtopk"]["f1_macro"] for r in results]
+ae_f1 = [r["ae"]["f1_macro"] for r in results]
 mat_mcc = [r["matryoshka"]["mcc"] for r in results]
 btk_mcc = [r["batchtopk"]["mcc"] for r in results]
 mat_r2 = [r["matryoshka"]["r2"] for r in results]
@@ -247,8 +291,21 @@ fig = make_subplots(
 
 COLOR_MAT = "#636EFA"
 COLOR_BTK = "#EF553B"
+COLOR_AE = "#888888"
 
 # F1
+fig.add_trace(
+    go.Scatter(
+        x=d_vals,
+        y=ae_f1,
+        mode="lines+markers",
+        name="AE (best threshold)",
+        marker_color=COLOR_AE,
+        line=dict(color=COLOR_AE, dash="dot"),
+    ),
+    row=1,
+    col=1,
+)
 fig.add_trace(
     go.Scatter(
         x=d_vals,
@@ -347,15 +404,17 @@ fig.show()
 # %%
 # --- Summary table ---
 print(
-    f"\n{'D_HIDDEN':>8} | {'Matryoshka F1':>13} {'MCC':>6} {'R²':>6} {'L0':>5} {'DL':>4}"
+    f"\n{'D_HIDDEN':>8} | {'AE F1':>6} {'thr':>5}"
+    f" | {'Matryoshka F1':>13} {'MCC':>6} {'R²':>6} {'L0':>5} {'DL':>4}"
     f" | {'BatchTopK F1':>12} {'MCC':>6} {'R²':>6} {'L0':>5} {'DL':>4}"
 )
-print("-" * 95)
+print("-" * 110)
 for r in results:
-    m, b = r["matryoshka"], r["batchtopk"]
+    a, m, b = r["ae"], r["matryoshka"], r["batchtopk"]
     print(
         f"{r['d_hidden']:>8} | "
-        f"{m['f1_macro']:>13.4f} {m['mcc']:>6.3f} {m['r2']:>6.3f} {m['l0']:>5.1f} {m['dead']:>4}"
+        f"{a['f1_macro']:>6.4f} {a['threshold']:>5.3f}"
+        f" | {m['f1_macro']:>13.4f} {m['mcc']:>6.3f} {m['r2']:>6.3f} {m['l0']:>5.1f} {m['dead']:>4}"
         f" | {b['f1_macro']:>12.4f} {b['mcc']:>6.3f} {b['r2']:>6.3f} {b['l0']:>5.1f} {b['dead']:>4}"
     )
 # %%

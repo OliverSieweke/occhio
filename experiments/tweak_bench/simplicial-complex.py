@@ -75,7 +75,7 @@ faces = list(covering_faces)[:N_FACES]
 
 
 dist = SimplicialComplexDistribution(
-    n_vertices=N_FEATURES, faces=faces, sampling_mode="sparse", p_active=1 / N_FACES
+    n_vertices=N_FEATURES, faces=faces, sampling_mode="single", p_active=1 / N_FACES
 )
 
 # Average L0
@@ -83,6 +83,27 @@ samples = dist.sample(100_000)
 mean_l0 = (samples > 0).float().sum(dim=-1).mean().item()
 std_l0 = (samples > 0).float().sum(dim=-1).std().item()
 print(f"Average L0: {mean_l0:.2f} +/- {std_l0:.2f}")
+
+# %%
+# --- Plot: Sorted feature firing probabilities ---
+firing_probs = (samples > 0).float().mean(dim=0).cpu().numpy()
+firing_probs_sorted = np.sort(firing_probs)[::-1]
+
+fig_firing = go.Figure()
+fig_firing.add_trace(
+    go.Scatter(
+        x=np.arange(N_FEATURES),
+        y=firing_probs_sorted,
+        mode="lines",
+        name="Firing prob",
+    )
+)
+fig_firing.update_xaxes(title_text="Feature rank", **AXIS_STYLE)
+fig_firing.update_yaxes(title_text="P(active)", **AXIS_STYLE)
+fig_firing.update_layout(
+    title="Feature firing probabilities (sorted)", **LAYOUT_DEFAULTS
+)
+fig_firing.show()
 
 # %%
 # --- Train ---
