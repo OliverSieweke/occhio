@@ -30,6 +30,7 @@ EVAL_SAMPLES = 2**14
 
 # SAE sweep config
 L1_VALUES = [0.15, 0.2, 0.3, 0.4, 0.5, 0.7, 0.9]
+L0_VALUES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
 N_DICT = N_FEATURES // 2
 SAE_STEPS = 25_000
 N_SEEDS = 5
@@ -289,37 +290,44 @@ MODEL_COLORS = {
 _AXIS = dict(
     showgrid=True,
     gridcolor="#E5E7EB",
+    gridwidth=1,
     showline=True,
     linecolor="black",
-    linewidth=1.2,
+    linewidth=2.5,
+    mirror=True,
     ticks="outside",
     ticklen=8,
     tickwidth=1.5,
     tickcolor="black",
-    minor=dict(ticks="outside", ticklen=4, tickwidth=1, tickcolor="black"),
+    minor=dict(ticks="", showgrid=False),
     zeroline=False,
-    tickfont=dict(size=24, color="black"),
-    title_font=dict(size=24, color="black"),
+    tickfont=dict(size=43, color="black"),
+    title_font=dict(size=46, color="black"),
 )
 
 
-def style_fig(fig, nticksx=10, nticksy=8):
+def style_fig(fig, nticks=6):
     """Apply publication-ready styling."""
     fig.update_layout(
         plot_bgcolor="white",
         paper_bgcolor="white",
-        font=dict(family="Times New Roman, Times, serif", size=24, color="black"),
-        title_font=dict(size=24),
+        font=dict(family="Times New Roman, Times, serif", size=46, color="black"),
+        title_font=dict(size=46),
         legend=dict(
+            orientation="h",
+            x=0.5,
+            xanchor="center",
+            y=1.02,
+            yanchor="bottom",
             bgcolor="rgba(255,255,255,0.95)",
             bordercolor="#D1D5DB",
             borderwidth=1,
             itemsizing="constant",
-            font=dict(size=24),
+            font=dict(size=39),
         ),
     )
-    fig.update_xaxes(**_AXIS, nticks=nticksx)
-    fig.update_yaxes(**_AXIS, nticks=nticksy)
+    fig.update_xaxes(**_AXIS, nticks=nticks)
+    fig.update_yaxes(**_AXIS, nticks=nticks)
     return fig
 
 
@@ -353,54 +361,206 @@ def _add_band(fig, x, y_mean, y_std, color, name, row=None, col=None):
 
 
 # %%
-# --- Plot: F1 vs L0 ---
-fig_f1 = go.Figure()
-for name, res in sweep_results.items():
-    color = MODEL_COLORS[name]
-    x = np.array(res["l0"])
-    y = np.array(res["f1"])
-    order = np.argsort(x)
-    x_s, y_s = x[order], y[order]
-    y_std_s = np.array(res["f1_std"])[order]
-    # l1_s = np.array(res["l1"])[order]
+# --- Plot: F1, R², MCC vs L0 (combined horizontal) ---
+true_mean_l0 = sum(firing_probs)
 
-    _add_band(fig_f1, x_s, y_s, y_std_s, color, name)
-    fig_f1.add_trace(
-        go.Scatter(
-            x=x_s.tolist(),
-            y=y_s.tolist(),
-            mode="lines+markers+text",
-            name=name,
-            # text=[f"L1={l1}" for l1 in l1_s],
-            textposition="top center",
-            textfont=dict(size=14),
-            marker=dict(size=10, color=color, line=dict(width=1, color="white")),
-            line=dict(color=color, width=2.5),
+_MAIN_METRICS = [
+    ("f1", '<span style="font-style:italic;">F</span><sub>1</sub>-score'),
+    ("r2", '<span style="font-style:italic;">R</span><sup>2</sup>'),
+    ("mcc", "MCC"),
+]
+_L0_DASH = "15px 10px"
+_L0_COLOR = "#6B7280"
+_N_INTERVALS = 5  # both axes: 5 intervals → square grid cells
+
+
+def _nice_dtick(y_max, n=_N_INTERVALS):
+    """Pick smallest nice step so that n intervals cover y_max."""
+    raw = y_max / n
+    for step in (0.01, 0.02, 0.05, 0.1, 0.2, 0.25, 0.5, 1.0):
+        if step >= raw:
+            return step
+    return raw
+
+
+fig_main = make_subplots(
+    rows=1,
+    cols=3,
+    horizontal_spacing=0.10,
+)
+
+_y_dticks = []
+for ci, (mk, ylabel) in enumerate(_MAIN_METRICS, start=1):
+    for name, res in sweep_results.items():
+        color = MODEL_COLORS[name]
+        x = np.array(res["l0"])
+        y = np.array(res[mk])
+        order = np.argsort(x)
+        x_s, y_s = x[order], y[order]
+        y_std_s = np.array(res[f"{mk}_std"])[order]
+
+        _add_band(fig_main, x_s, y_s, y_std_s, color, name, row=1, col=ci)
+        fig_main.add_trace(
+            go.Scatter(
+                x=x_s.tolist(),
+                y=y_s.tolist(),
+                mode="lines+markers",
+                name=name,
+                legendgroup=name,
+                showlegend=(ci == 1),
+                marker=dict(size=10, color=color, line=dict(width=1, color="white")),
+                line=dict(color=color, width=2.5),
+            ),
+            row=1,
+            col=ci,
         )
+
+    # vline per panel (no annotation — label is in legend)
+    fig_main.add_vline(
+        x=true_mean_l0,
+        line_dash=_L0_DASH,
+        line_color=_L0_COLOR,
+        line_width=1.5,
+        row=1,
+        col=ci,
     )
 
-true_mean_l0 = sum(firing_probs)
-fig_f1.add_vline(
-    x=true_mean_l0,
-    line_dash="dot",
-    line_color="#9CA3AF",
-    line_width=1.5,
-    annotation_text=f"True <i>L</i><sup>0</sup> = {true_mean_l0:.1f}",
-    annotation_font_size=20,
-    annotation_font_color="black",
-    annotation_position="bottom right",
+    # compute nice y dtick for exactly 5 intervals
+    _all_y = [v for res in sweep_results.values() for v in res[mk]]
+    _all_std = [v for res in sweep_results.values() for v in res[f"{mk}_std"]]
+    _y_raw_max = max(yv + s for yv, s in zip(_all_y, _all_std)) * 1.05
+    _y_dticks.append(_nice_dtick(_y_raw_max))
+
+# Dummy trace for True L0 legend entry
+fig_main.add_trace(
+    go.Scatter(
+        x=[None],
+        y=[None],
+        mode="lines",
+        name="True <i>L</i><sup>0</sup>",
+        line=dict(color=_L0_COLOR, width=1.5, dash=_L0_DASH),
+        showlegend=True,
+    ),
+    row=1,
+    col=1,
 )
-fig_f1.update_layout(
-    xaxis_title='<span style="font-family:Times New Roman; font-style:italic;">L</span><sup>0</sup><sub>SAE</sub>',
-    yaxis_title='<span style="font-family:Times New Roman; font-style:italic;">F</span><sub>1</sub>-score',
-    yaxis_range=[0, 0.52],
-    width=1100,
-    height=500,
-    margin=dict(l=60, r=30, t=30, b=60),
-    legend=dict(x=0.98, y=0.98, xanchor="right", yanchor="top"),
+
+fig_main.update_shapes(layer="below")
+
+# --- Dimensions for square grid cells ---
+# X: range [0, 25], dtick=5 → 5 intervals
+# Y: 5 intervals (forced via _nice_dtick)
+# → need each panel to be a perfect square in pixel space.
+# Solve: panel_px = plot_height; width chosen so 3 panels + spacing + margins fit.
+_plot_h = 640  # target plot-area height (px)
+_margin = dict(l=100, r=50, t=110, b=100)
+_hs = 0.10  # horizontal_spacing fraction
+# panel_px = _plot_h → total_width = (3*_plot_h + margin_l + margin_r) / (1 - 2*_hs)
+_fig_w = int((3 * _plot_h + _margin["l"] + _margin["r"]) / (1 - 2 * _hs))
+_fig_h = _plot_h + _margin["t"] + _margin["b"]
+
+fig_main.update_layout(width=_fig_w, height=_fig_h, margin=_margin)
+style_fig(fig_main)
+
+# Per-panel axis overrides (after style_fig so dtick wins over nticks)
+for ci, (mk, ylabel) in enumerate(_MAIN_METRICS, start=1):
+    _dt = _y_dticks[ci - 1]
+    fig_main.update_yaxes(
+        title_text=ylabel,
+        range=[0, _N_INTERVALS * _dt],
+        dtick=_dt,
+        row=1,
+        col=ci,
+    )
+    fig_main.update_xaxes(range=[0, 25], dtick=5, row=1, col=ci)
+
+# x-axis title on middle panel only
+fig_main.update_xaxes(
+    title_text='<span style="font-family:Times New Roman; font-style:italic;">L</span><sup>0</sup><sub>SAE</sub>',
+    row=1,
+    col=2,
 )
-style_fig(fig_f1)
-fig_f1.show()
+
+# Legend: full width across top, no box, equidistant entries
+# Each of 4 entries gets _fig_w*0.9/4 px → equal start-to-start spacing across 90% of width
+fig_main.update_layout(
+    legend=dict(
+        orientation="h",
+        x=0.5,
+        xanchor="center",
+        y=1.06,
+        yanchor="bottom",
+        bgcolor="rgba(0,0,0,0)",
+        borderwidth=0,
+        bordercolor="rgba(0,0,0,0)",
+        font=dict(size=39),
+        itemsizing="constant",
+        itemwidth=50,
+        entrywidthmode="pixels",
+        entrywidth=int(_fig_w * 0.9 / 4),
+    ),
+)
+fig_main.show()
+
+# %%
+# --- Plot: Other metrics vs L0 ---
+_METRIC_PLOTS = {
+    "enc_precision": "Encoder Precision",
+    "enc_recall": "Encoder Recall",
+    "enc_f1": 'Encoder <span style="font-style:italic;">F</span><sub>1</sub>',
+    "enc_mcc": "Encoder MCC",
+    "purity": "Purity",
+}
+
+metric_figs = {}
+for _mk, _ml in _METRIC_PLOTS.items():
+    _fig = go.Figure()
+    for name, res in sweep_results.items():
+        color = MODEL_COLORS[name]
+        x = np.array(res["l0"])
+        y = np.array(res[_mk])
+        order = np.argsort(x)
+        x_s, y_s = x[order], y[order]
+        y_std_s = np.array(res[f"{_mk}_std"])[order]
+
+        _add_band(_fig, x_s, y_s, y_std_s, color, name)
+        _fig.add_trace(
+            go.Scatter(
+                x=x_s.tolist(),
+                y=y_s.tolist(),
+                mode="lines+markers",
+                name=name,
+                marker=dict(size=10, color=color, line=dict(width=1, color="white")),
+                line=dict(color=color, width=2.5),
+            )
+        )
+
+    _fig.add_vline(
+        x=true_mean_l0,
+        line_dash=_L0_DASH,
+        line_color=_L0_COLOR,
+        line_width=1.5,
+    )
+    _fig.update_shapes(layer="below")
+
+    _all_y = [v for res in sweep_results.values() for v in res[_mk]]
+    _all_std = [v for res in sweep_results.values() for v in res[f"{_mk}_std"]]
+    _y_max = max(yv + s for yv, s in zip(_all_y, _all_std)) * 1.15
+    _y_max = min(_y_max, 1.05)
+
+    _fig.update_layout(
+        xaxis_title='<span style="font-family:Times New Roman; font-style:italic;">L</span><sup>0</sup><sub>SAE</sub>',
+        yaxis_title=_ml,
+        xaxis_range=[0, 25],
+        xaxis_dtick=5,
+        yaxis_range=[0, _y_max],
+        width=1000,
+        height=1000,
+        margin=dict(l=100, r=100, t=100, b=100),
+    )
+    style_fig(_fig)
+    _fig.show()
+    metric_figs[_mk] = _fig
 
 # %%
 # --- Plot: Precision & Recall vs L1 (stacked subplots, shared x-axis) ---
@@ -447,13 +607,12 @@ fig_pr.update_yaxes(title_text="Recall", row=2, col=1)
 
 # Style subplot titles
 for ann in fig_pr.layout.annotations:
-    ann.font = dict(size=18)
+    ann.font = dict(size=27)
 
 fig_pr.update_layout(
-    width=1100,
-    height=700,
-    margin=dict(l=60, r=30, t=40, b=60),
-    legend=dict(x=0.98, y=0.02, xanchor="right", yanchor="bottom"),
+    width=1000,
+    height=1200,
+    margin=dict(l=100, r=100, t=100, b=100),
 )
 style_fig(fig_pr)
 fig_pr.show()
@@ -523,10 +682,13 @@ for _wtw_name, _wtw_tm in _wtw_models:
 _fig_dir = os.path.join(os.path.dirname(__file__), "figures")
 os.makedirs(_fig_dir, exist_ok=True)
 
-fig_f1.write_image(os.path.join(_fig_dir, "sae_f1_vs_l0.pdf"), engine="kaleido")
-fig_f1.write_image(os.path.join(_fig_dir, "sae_f1_vs_l0.svg"), engine="kaleido")
+fig_main.write_image(os.path.join(_fig_dir, "sae_main_metrics.pdf"), engine="kaleido")
+fig_main.write_image(os.path.join(_fig_dir, "sae_main_metrics.svg"), engine="kaleido")
 fig_pr.write_image(os.path.join(_fig_dir, "sae_prec_vs_recall.pdf"), engine="kaleido")
 fig_pr.write_image(os.path.join(_fig_dir, "sae_prec_vs_recall.svg"), engine="kaleido")
+for _mk, _mfig in metric_figs.items():
+    _mfig.write_image(os.path.join(_fig_dir, f"sae_{_mk}_vs_l0.pdf"), engine="kaleido")
+    _mfig.write_image(os.path.join(_fig_dir, f"sae_{_mk}_vs_l0.svg"), engine="kaleido")
 print(f"Saved to {_fig_dir}/")
 
 # %%
