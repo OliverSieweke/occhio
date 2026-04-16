@@ -120,7 +120,7 @@ class SphericalDistribution(Distribution):
 class TorusDistribution(Distribution):
     """Features arranged on a flat torus T^d = S¹ × … × S¹ with cosine-bump activation.
 
-    ``n_features`` points are placed on a uniform grid on the ``torus_dim``-dimensional
+    ``n_features`` points are placed at random angles on the ``torus_dim``-dimensional
     torus.  To generate a sample we draw a random point **θ** ∈ [0, 2π)^d and
     magnitude *m*.  The feature at angular position **φ** activates as
 
@@ -128,13 +128,8 @@ class TorusDistribution(Distribution):
 
     where d(θ, φ) is the geodesic (flat-torus) distance and ℓ is the length-scale.
 
-    When ``n_features`` is a perfect ``torus_dim``-th power, a regular grid is
-    used (e.g. 16 features on T² → 4 × 4 grid).  Otherwise features are placed
-    at random angles sampled uniformly on [0, 2π)^d.
-
     Args:
-        n_features: Number of features. When not a perfect ``torus_dim``-th
-            power, features are placed randomly instead of on a grid.
+        n_features: Number of features, placed at uniformly random angles on T^d.
         length_scale: Controls the width of the cosine bump. Smaller values
             give sparser activations.
         torus_dim: Number of circular factors (1 → circle, 2 → T², etc.).
@@ -155,33 +150,16 @@ class TorusDistribution(Distribution):
         self.torus_dim = torus_dim
         self.magnitude_range = magnitude_range
 
-        # Check whether a regular grid is possible
-        k = round(n_features ** (1.0 / torus_dim))
-        self.grid_size: int | None = k if k**torus_dim == n_features else None
-
         # Place features on the torus: (n_features, torus_dim) angles in [0, 2π)
         self.feature_angles = self._place_features()
 
     def _place_features(self) -> Tensor:
-        """Place features on a uniform grid on T^d, or randomly if no grid fits."""
-        if self.grid_size is None:
-            return (
-                2
-                * math.pi
-                * torch.rand(self.n_features, self.torus_dim, device=self.device)
-            )
-
-        angles_per_dim = torch.linspace(
-            0, 2 * math.pi, self.grid_size + 1, device=self.device
-        )[:-1]
-
-        if self.torus_dim == 1:
-            return angles_per_dim.unsqueeze(-1)
-
-        # Build d-dimensional grid via cartesian product
-        grids = [angles_per_dim] * self.torus_dim
-        mesh = torch.meshgrid(*grids, indexing="ij")
-        return torch.stack([m.reshape(-1) for m in mesh], dim=-1)
+        """Place features at uniformly random angles on T^d."""
+        return (
+            2
+            * math.pi
+            * torch.rand(self.n_features, self.torus_dim, device=self.device)
+        )
 
     def _torus_distance(self, a: Tensor, b: Tensor) -> Tensor:
         """Geodesic distance on the flat torus.

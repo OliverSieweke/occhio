@@ -49,7 +49,7 @@ LAYOUT_DEFAULTS = dict(
 DEVICE = "mps"
 SEED = 42
 N_FEATURES = 1296
-D_HIDDEN = 100
+D_HIDDEN = 200
 N_EPOCHS = 50_000
 BATCH_SIZE = 512
 
@@ -57,8 +57,10 @@ BATCH_SIZE = 512
 # --- Distribution ---
 np.random.seed(8)
 
-high = 0.45
-low = 1.3 / N_FEATURES
+high = 0.6
+low = 2.39 / N_FEATURES
+# high = 0.5
+# low = 1.2 / N_FEATURES
 alpha = np.log(high / low) / np.log(N_FEATURES)
 print(f"{alpha=}")
 firing_probs = [high / (i + 1) ** alpha for i in range(N_FEATURES)]
@@ -193,6 +195,44 @@ fig.show()
 
 
 # %%
+# --- Feature-collapse check ---
+# Normalize columns of W and inspect the Gram matrix. Off-diagonal entries
+# near ±1 indicate two features that have collapsed onto the same direction.
+COLLAPSE_THRESH = 0.8
+with torch.no_grad():
+    W_n = tm.W_normalized_features  # (D_HIDDEN, N_FEATURES)
+    gram = (W_n.T @ W_n).cpu()
+    i_idx, j_idx = torch.triu_indices(N_FEATURES, N_FEATURES, offset=1)
+    pair_sims = gram[i_idx, j_idx]
+    max_abs, max_k = pair_sims.max(dim=0)
+    collapsed_mask = pair_sims >= COLLAPSE_THRESH
+
+n_collapsed = int(collapsed_mask.sum().item())
+print(
+    f"[collapse] max|cos|={max_abs.item():.4f} "
+    f"(f{int(i_idx[max_k])}–f{int(j_idx[max_k])} = {pair_sims[max_k].item():+.4f})  "
+    f"pairs ≥ {COLLAPSE_THRESH}: {n_collapsed}"
+)
+if n_collapsed > 0:
+    top_k = collapsed_mask.nonzero(as_tuple=True)[0][:20]
+    for k in top_k:
+        k = int(k)
+        print(f"  f{int(i_idx[k])}–f{int(j_idx[k])}: cos={pair_sims[k].item():+.4f}")
+
+fig_gram = px.histogram(
+    x=pair_sims.numpy(),
+    nbins=120,
+    labels={"x": "cos(w_i, w_j)"},
+    title=f"Pairwise cosine similarity of W columns (max(·)={max_abs.item():.3f})",
+)
+fig_gram.add_vline(x=COLLAPSE_THRESH, line_color="red", line_dash="dash")
+fig_gram.update_layout(**LAYOUT_DEFAULTS)
+fig_gram.update_xaxes(**AXIS_STYLE)
+fig_gram.update_yaxes(type="log", **AXIS_STYLE)
+fig_gram.show()
+
+
+# %%
 # --- Plot: Empirical correlation vs interference ---
 empirical_corr = torch.corrcoef(samples.T.cpu())
 interferences = tm.interferences.detach().cpu()
@@ -249,10 +289,10 @@ from scipy.optimize import linear_sum_assignment
 from occhio.sae.sae import SAESimple
 
 N_DICT = N_FEATURES // 2
-SAE_STEPS = 20_000
+SAE_STEPS = 200_000
 SAE_BATCH = 1024
 SAE_LR = 3e-4
-SAE_L1 = 0.4
+SAE_L1 = 0.25
 
 sae_gen = torch.Generator().manual_seed(4)
 
@@ -266,11 +306,74 @@ def data_fn(n: int) -> torch.Tensor:
     return tm.ae.encode(x)
 
 
-sae_losses = sae.train_sae(
-    data_fn=data_fn, n_steps=SAE_STEPS, batch_size=SAE_BATCH, lr=SAE_LR
+HOOK_BATCH = 10_000
+HOOK_FREQ = 1000
+
+
+def loss_hook(d):
+    sae = d["sae"]
+    sae.eval()
+    with torch.no_grad():
+        x = dist.sample(HOOK_BATCH).to(DEVICE)
+        h = tm.ae.encode(x)
+        x_hat, z = sae.forward(h)
+        val = sae.loss(h, x_hat, z).item()
+    sae.train()
+    return (d["step"], val)
+
+
+def f1_hook(d):
+    sae = d["sae"]
+    sae.eval()
+    with torch.no_grad():
+        x = dist.sample(HOOK_BATCH).to(DEVICE)
+        h = tm.ae.encode(x)
+        z = sae.encode(h)
+
+        D_h = tm.W.detach()
+        W_dec_t = sae.W_dec.detach().T
+        D_norm = D_h / D_h.norm(dim=0, keepdim=True).clamp(min=1e-8)
+        W_norm = W_dec_t / W_dec_t.norm(dim=0, keepdim=True).clamp(min=1e-8)
+        cos_sim = (D_norm.T @ W_norm).cpu().numpy()
+        feat_idx, dict_idx = linear_sum_assignment(-cos_sim)
+
+        gt = x[:, feat_idx] > 0
+        pred = z[:, dict_idx] > 0
+        tp = (gt & pred).float().sum(dim=0)
+        fp = (~gt & pred).float().sum(dim=0)
+        fn_ = (gt & ~pred).float().sum(dim=0)
+        prec = tp / (tp + fp + 1e-8)
+        rec = tp / (tp + fn_ + 1e-8)
+        val = (2 * prec * rec / (prec + rec + 1e-8)).mean().item()
+    sae.train()
+    return (d["step"], val)
+
+
+loss_history, f1_history = sae.train_sae(
+    data_fn=data_fn,
+    n_steps=SAE_STEPS,
+    batch_size=SAE_BATCH,
+    lr=SAE_LR,
+    hooks=[loss_hook, f1_hook],
+    hook_freq=HOOK_FREQ,
 )
 # %%
-px.line(sae_losses)
+loss_steps, loss_values = zip(*loss_history)
+f1_steps, f1_values = zip(*f1_history)
+fig_sae_curves = make_subplots(specs=[[{"secondary_y": True}]])
+fig_sae_curves.add_trace(
+    go.Scatter(x=loss_steps, y=loss_values, mode="lines+markers", name="loss"),
+    secondary_y=False,
+)
+fig_sae_curves.add_trace(
+    go.Scatter(x=f1_steps, y=f1_values, mode="lines+markers", name="F1"),
+    secondary_y=True,
+)
+fig_sae_curves.update_xaxes(title_text="training step", **AXIS_STYLE)
+fig_sae_curves.update_yaxes(title_text="loss", secondary_y=False, **AXIS_STYLE)
+fig_sae_curves.update_yaxes(title_text="F1", secondary_y=True, **AXIS_STYLE)
+fig_sae_curves.update_layout(title="SAE training curves", **LAYOUT_DEFAULTS)
+fig_sae_curves.show()
 
 # %%
 # --- SAE Metrics ---
@@ -282,6 +385,8 @@ with torch.no_grad():
 
     # L0
     l0 = (test_z > 0).float().sum(dim=-1).mean().item()
+    # Dead latents: never fired across the test batch
+    dead = int((~(test_z > 0).any(dim=0)).sum().item())
 
     # R² (explained variance)
     total_var = test_hidden.var(dim=0).sum().item()
@@ -326,7 +431,9 @@ with torch.no_grad():
     total_sum = sae_acts_matched.sum()
     purity = diag_sum / total_sum if total_sum > 0 else 0.0
 print(f"L1={SAE_L1}, batch={SAE_BATCH}, LR={SAE_LR}")
-print(f"L0={l0:.1f}  MCC={mcc:.4f}  F1={f1:.4f}  R²={r2:.4f}  Purity={purity:.4f}")
+print(
+    f"L0={l0:.1f}  MCC={mcc:.4f}  F1={f1:.4f}  R²={r2:.4f}  EP={purity:.4f}  DL={dead}"
+)
 
 # %%
 # --- Plot: SAE one-hot activations (MCC matched) ---
@@ -383,8 +490,8 @@ from sae_lens import (
 )
 
 # Nested cumulative widths; final width must equal d_sae.
-MATRYOSHKA_WIDTHS = [N_DICT // 4, N_DICT // 2, N_DICT]
-MATRYOSHKA_K = 3
+MATRYOSHKA_WIDTHS = [N_DICT // 2, N_DICT]
+MATRYOSHKA_K = 5
 MATRYOSHKA_TRAIN_SAMPLES = 4 * SAE_STEPS * SAE_BATCH
 
 print("widths:", MATRYOSHKA_WIDTHS)

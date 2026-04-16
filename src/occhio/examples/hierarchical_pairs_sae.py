@@ -19,7 +19,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 # --- Paper-quality plot defaults ---
-FONT = dict(family="Times New Roman, serif", size=24, color="#333333")
+FONT = dict(family="Times New Roman, serif", size=30, color="#333333")
 AXIS_STYLE = dict(
     showgrid=True,
     gridcolor="rgba(0,0,0,0.02)",
@@ -46,7 +46,7 @@ LAYOUT_DEFAULTS = dict(
         bgcolor="rgba(255,255,255,0.9)",
         bordercolor="#cccccc",
         borderwidth=1,
-        font_size=20,
+        font_size=26,
         itemsizing="constant",
     ),
     margin=dict(l=60, r=20, t=50, b=50),
@@ -59,8 +59,8 @@ torch.set_printoptions(3, sci_mode=False)
 gen = torch.Generator()
 gen.manual_seed(4)
 
-N_FEAT = 8
-N_HIDDEN = 4
+N_FEAT = 2
+N_HIDDEN = 2
 
 dist = HierarchicalPairs(
     n_features=N_FEAT,
@@ -109,7 +109,7 @@ fig_emb
 
 # %%
 gen_sae = torch.Generator()
-gen_sae.manual_seed(4)
+gen_sae.manual_seed(3)
 
 sae = SAESimple(N_HIDDEN, N_FEAT + 4, l1_coef=0.15, generator=gen_sae)
 sae_losses = sae.train_sae(tm.sample_latent, 20_000)
@@ -200,9 +200,24 @@ feat_idx, dict_idx = linear_sum_assignment(-encoded_patterns)
 matched_W_dec = sae.W_dec.detach().numpy()[dict_idx]  # (n_matched, n_hidden)
 b_dec_np = sae.b_dec.detach().numpy()
 
-LABEL_SIZE = 26
+samples_match = dist.sample(128)
+embedded_match = tm.encode(samples_match).detach().numpy().T
+
+LABEL_SIZE = 30
 
 fig_match = go.Figure()
+
+# Encoded samples (drawn first so other markers sit on top)
+fig_match.add_trace(
+    go.Scatter(
+        x=embedded_match[0],
+        y=embedded_match[1],
+        mode="markers",
+        name="Encoded samples",
+        marker=dict(size=8, opacity=0.5, color="#111111"),
+        showlegend=False,
+    )
+)
 
 # Lines from origin to feature embeddings
 for j in range(N_FEAT):
@@ -218,16 +233,26 @@ for j in range(N_FEAT):
     )
 
 # Feature embeddings
+_label_dy = 0.25 * (emb[1].max() - emb[1].min() + 1e-6)
 fig_match.add_trace(
     go.Scatter(
         x=emb[0],
         y=emb[1],
-        mode="markers+text",
+        mode="markers",
         marker=dict(size=14, color="blue"),
+        name="AE features",
+    )
+)
+fig_match.add_trace(
+    go.Scatter(
+        x=emb[0],
+        y=emb[1] + _label_dy,
+        mode="text",
         text=["parent", "child"],
         textposition="top center",
         textfont=dict(size=LABEL_SIZE),
-        name="AE features",
+        showlegend=False,
+        hoverinfo="skip",
     )
 )
 
@@ -237,7 +262,7 @@ fig_match.add_trace(
         x=matched_W_dec[:, 0],
         y=matched_W_dec[:, 1],
         mode="markers+text",
-        marker=dict(size=14, symbol="diamond", color="red"),
+        marker=dict(size=18, symbol="diamond", color="red"),
         text=[" ", " "],
         textposition="top center",
         name="SAE latents",
@@ -275,7 +300,7 @@ fig_match.add_trace(
         x=[f0f1_sum[0]],
         y=[f0f1_sum[1]],
         mode="markers+text",
-        marker=dict(size=18, symbol="star", color="purple"),
+        marker=dict(size=20, symbol="star", color="purple"),
         text=["parent+child"],
         textposition="top center",
         textfont=dict(size=LABEL_SIZE),
@@ -289,9 +314,9 @@ fig_match.add_trace(
         x=[b_dec_np[0]],
         y=[b_dec_np[1]],
         mode="markers+text",
-        marker=dict(size=14, color="green", symbol="cross"),
+        marker=dict(size=16, color="green", symbol="cross"),
         text=["b_dec"],
-        textposition="middle right",
+        textposition="top center",
         textfont=dict(size=LABEL_SIZE),
         name="SAE bias",
     )
@@ -299,15 +324,61 @@ fig_match.add_trace(
 
 mcc = float(np.abs(encoded_patterns)[feat_idx, dict_idx].mean())
 fig_match.update_layout(
-    **LAYOUT_DEFAULTS,
+    **{**LAYOUT_DEFAULTS, "margin": dict(l=0, r=5, t=5, b=0)},
     # title=f"Feature embeddings vs matched SAE decoder (MCC={mcc:.3f})",
-    xaxis_title="h₀",
-    yaxis_title="h₁",
     height=600,
 )
-fig_match.update_xaxes(**AXIS_STYLE)
-fig_match.update_yaxes(**AXIS_STYLE)
+all_x = np.concatenate(
+    [
+        embedded_match[0],
+        emb[0],
+        matched_W_dec[:, 0],
+        [0, f0f1_sum[0], b_dec_np[0]],
+    ]
+)
+all_y = np.concatenate(
+    [
+        embedded_match[1],
+        emb[1],
+        matched_W_dec[:, 1],
+        [0, f0f1_sum[1], b_dec_np[1]],
+    ]
+)
+pad_x = 0.1 * (all_x.max() - all_x.min())
+pad_y = 0.1 * (all_y.max() - all_y.min())
+
+AXES_VISIBLE = False
+fig_match.update_xaxes(
+    visible=AXES_VISIBLE,
+    showticklabels=False,
+    ticks="",
+    title_text="",
+    showline=True,
+    linecolor="#666666",
+    linewidth=1,
+    mirror=True,
+    showgrid=False,
+    zeroline=False,
+    range=[all_x.min() - pad_x, all_x.max() + pad_x],
+)
+
+fig_match.update_yaxes(
+    visible=AXES_VISIBLE,
+    showticklabels=False,
+    ticks="",
+    title_text="",
+    showline=True,
+    linecolor="#666666",
+    linewidth=1,
+    mirror=True,
+    showgrid=False,
+    zeroline=False,
+    range=[all_y.min() - pad_y, all_y.max() + pad_y],
+)
 fig_match
+
+# %%
+fig_match.write_image("hierarchical_pairs_sae_match_no.pdf")
 
 # %%
 n_pairs = N_FEAT // 2
