@@ -24,8 +24,12 @@ from occhio.toy_model import ToyModel
 # %%
 # --- Configuration ---
 DEVICE = "cuda" if torch.cuda.is_available() else "mps"
+<<<<<<< HEAD
 print(f"Using device: {DEVICE}")
 
+=======
+print(f"{DEVICE=}")
+>>>>>>> 810431d (xp2)
 SEED = 42
 N_FEATURES = 500
 D_HIDDEN = 64
@@ -36,8 +40,13 @@ BATCH_SIZE = 512
 EVAL_SAMPLES = 2**14
 
 # SAE sweep config
+<<<<<<< HEAD
 L0_VALUES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
 BASE_L1_COEF = 0.3
+=======
+L1_VALUES = [0.15, 0.2, 0.3, 0.4, 0.5, 0.7, 0.9]
+L0_VALUES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+>>>>>>> 810431d (xp2)
 N_DICT = N_FEATURES // 2
 SAE_STEPS = 75_000
 N_SEEDS = 5
