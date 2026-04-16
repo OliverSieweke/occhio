@@ -2,6 +2,8 @@
 Implements Sparse AutoEncoders.
 """
 
+from typing import Callable
+
 from torch import Tensor
 from torch.optim import AdamW
 import torch
@@ -45,13 +47,17 @@ class SparseAutoEncoderBase(nn.Module, ABC):
         batch_size: int = 1024,
         lr: float = 3e-4,
         sample_every: int = 25,
-    ) -> list[float]:
+        hooks: list[Callable] | None = None,
+        hook_freq: int = 100,
+    ) -> list:
         if sample_every < 1:
             raise ValueError(f"sample_every must be positive, got {sample_every}")
 
         optimizer = AdamW(self.parameters(), lr=lr)
-        sae_device = next(self.parameters()).device
-        loss_buffer = torch.empty(n_steps, device=sae_device)
+
+        if hooks is None:
+            hooks = []
+        hook_returns = [[] for _ in hooks]
 
         raw_buffer: Tensor | None = None
 
@@ -76,11 +82,22 @@ class SparseAutoEncoderBase(nn.Module, ABC):
             optimizer.step()
             self.constrain_weights()
 
-            loss_buffer[step] = loss.detach()
             if (step + 1) % 5000 == 0:
                 print(f"  SAE step {step + 1}/{n_steps}  loss={loss.item():.4f}")
+            if hooks and (step % hook_freq == 0 or step == n_steps - 1):
+                with torch.no_grad():
+                    hook_data = dict(
+                        sae=self,
+                        step=step,
+                        loss=loss.detach(),
+                        x=x,
+                        x_hat=x_hat,
+                        z=z,
+                    )
+                    for i, h in enumerate(hooks):
+                        hook_returns[i].append(h(hook_data))
 
-        return loss_buffer.cpu().tolist()
+        return hook_returns
 
     def __init__(
         self,
@@ -471,14 +488,19 @@ class SimplexSAE(SparseAutoEncoderBase):
         batch_size: int = 1024,
         lr: float = 3e-4,
         sample_every: int = 25,
-    ) -> list[float]:
+        hooks: list[Callable] | None = None,
+        hook_freq: int = 1,
+    ) -> list:
         """Train loop using the 3-tuple forward."""
         if sample_every < 1:
             raise ValueError(f"sample_every must be positive, got {sample_every}")
 
         optimizer = AdamW(self.parameters(), lr=lr)
-        sae_device = next(self.parameters()).device
-        loss_buffer = torch.empty(n_steps, device=sae_device)
+
+        if hooks is None:
+            hooks = []
+        hook_returns = [[] for _ in hooks]
+
         raw_buffer: Tensor | None = None
 
         for step in range(n_steps):
@@ -500,11 +522,23 @@ class SimplexSAE(SparseAutoEncoderBase):
             optimizer.step()
             self.constrain_weights()
 
-            loss_buffer[step] = cur_loss.detach()
             if (step + 1) % 5000 == 0:
                 print(f"  SAE step {step + 1}/{n_steps}  loss={cur_loss.item():.4f}")
+            if hooks and (step % hook_freq == 0 or step == n_steps - 1):
+                with torch.no_grad():
+                    hook_data = dict(
+                        sae=self,
+                        step=step,
+                        loss=cur_loss.detach(),
+                        x=x,
+                        x_hat=x_hat,
+                        s=s,
+                        g=g,
+                    )
+                    for i, h in enumerate(hooks):
+                        hook_returns[i].append(h(hook_data))
 
-        return loss_buffer.cpu().tolist()
+        return hook_returns
 
 
 class CausalSAE(SparseAutoEncoderBase):
