@@ -10,7 +10,7 @@ import torch
 from huggingface_hub import hf_hub_download
 from safetensors.torch import load_file
 
-REPO_ID = "kaushikreddyxyz/occhio-distributions"
+REPO_ID = "kaushikreddyxyz/occhio-distributions"  # VALIDATE FROM REPO HERE
 
 DISTRIBUTIONS = [
     "sparse_uniform",
@@ -45,12 +45,12 @@ def inspect(name: str) -> None:
     print(f"  shape: {list(samples.shape)}, dtype: {samples.dtype}")
     print(f"  NaN count (full dataset): {nan_total}")
     print(f"  nonzero rows (full dataset): {nonzero_rows_total}/{n_samples}")
-    # E[L0]: expected number of active features per sample (target ≈ 5.0)
+    # E[L0]: expected number of active features per sample (target ≈ 8.0)
     e_l0 = active_per_row.mean().item()
     zero_frac = 1.0 - nonzero_rows_total / n_samples
 
     print(
-        f"  E[L0] = {e_l0:.2f}  (target ≈ 5.0) | "
+        f"  E[L0] = {e_l0:.2f}  (target ≈ 8.0) | "
         f"median={active_per_row.median():.0f}, max={active_per_row.max():.0f}"
     )
     print(f"  zero rows: {zero_frac:.1%}")
