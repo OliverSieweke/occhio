@@ -210,6 +210,9 @@ class DAGRandomWalkToRoot(Distribution):
         p_active: Probability distribution for selecting the starting node.
             If ``None``, uses uniform distribution. Can be a list or Tensor of
             length ``n_features``. Defaults to ``None``.
+        n_firings: Number of independent walks per sample. Each walk picks its
+            own starting node and propagates to a root; the resulting
+            activations are summed into a single sample. Defaults to 1.
         device: Torch device for all generated tensors.
         generator: Optional ``torch.Generator`` for deterministic sampling.
     """
@@ -224,12 +227,14 @@ class DAGRandomWalkToRoot(Distribution):
         beta: float = 1.0,
         p_active: list[float] | Tensor | None = None,
         shrinking: bool = True,
+        n_firings: int = 1,
         **kwargs,
     ):
         super().__init__(n_features, **kwargs)
         self.p_edge = p_edge
         self.beta = beta
         self.shrinking = shrinking
+        self.n_firings = n_firings
         if p_active is None:
             self.p_active = torch.ones(n_features, device=self.device) / n_features
         else:
@@ -288,18 +293,23 @@ class DAGRandomWalkToRoot(Distribution):
                 self._parent_padded[j, : len(parents)] = parents
 
     def sample(self, batch_size: int) -> Tensor:
-        """Sample sparse activations via random walk to root (vectorized)."""
-        values = torch.zeros(batch_size, self.n_features, device=self.device)
+        """Sample sparse activations via random walk to root (vectorized).
+
+        When ``n_firings > 1``, runs that many independent walks per requested
+        sample and sums their contributions.
+        """
+        effective_batch = batch_size * self.n_firings
+        values = torch.zeros(effective_batch, self.n_features, device=self.device)
 
         seeds = self._randint(
             0,
             self.n_features,
-            (batch_size,),
+            (effective_batch,),
             p=self.p_active,
         )
-        activations = self._rand(batch_size)
+        activations = self._rand(effective_batch)
 
-        batch_idx = torch.arange(batch_size, device=self.device)
+        batch_idx = torch.arange(effective_batch, device=self.device)
         values[batch_idx, seeds] = activations
 
         current_nodes = seeds
@@ -308,25 +318,18 @@ class DAGRandomWalkToRoot(Distribution):
         for _ in range(self.n_features):
             current_values = self.beta * current_values + (1.0 - self.beta) * (
                 current_values**self.shrinking
-            ) * self._rand(batch_size)
+            ) * self._rand(effective_batch)
 
-            still_walking = self._has_parents_mask[current_nodes]  # (batch_size,)
+            still_walking = self._has_parents_mask[current_nodes]
             if not still_walking.any():
                 break
 
-            active_counts = self._parent_counts[
-                current_nodes[still_walking]
-            ]  # (n_active,)
-            random_idx = (
-                self._rand(active_counts.shape) * active_counts
-            ).long()  # uniform in [0, count)
+            active_counts = self._parent_counts[current_nodes[still_walking]]
+            random_idx = (self._rand(active_counts.shape) * active_counts).long()
 
             active_nodes = current_nodes[still_walking]
-            chosen_parents = self._parent_padded[
-                active_nodes, random_idx
-            ]  # (n_active,)
+            chosen_parents = self._parent_padded[active_nodes, random_idx]
 
-            # Update
             next_nodes = current_nodes.clone()
             next_nodes[still_walking] = chosen_parents
 
@@ -334,7 +337,9 @@ class DAGRandomWalkToRoot(Distribution):
             values[active_idx, chosen_parents] += current_values[still_walking]
             current_nodes = next_nodes
 
-        return values
+        if self.n_firings == 1:
+            return values
+        return values.view(batch_size, self.n_firings, self.n_features).sum(dim=1)
 
     def to(self, device: torch.device | str):
         """Move distribution to device."""

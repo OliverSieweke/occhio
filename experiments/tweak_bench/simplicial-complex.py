@@ -50,13 +50,13 @@ LAYOUT_DEFAULTS = dict(
 DEVICE = "mps"
 SEED = 42
 N_FEATURES = 1296
-D_HIDDEN = 100
+D_HIDDEN = 200
 N_EPOCHS = 20_000
 BATCH_SIZE = 512
 
 # %%
 # --- Distribution ---
-FACE_DIM = 4
+FACE_DIM = 7
 N_FACES = 4 * (N_FEATURES // (FACE_DIM + 1))
 
 all_verts = list(range(N_FEATURES))
@@ -75,7 +75,7 @@ faces = list(covering_faces)[:N_FACES]
 
 
 dist = SimplicialComplexDistribution(
-    n_vertices=N_FEATURES, faces=faces, sampling_mode="sparse", p_active=1 / N_FACES
+    n_vertices=N_FEATURES, faces=faces, sampling_mode="single", p_active=1 / N_FACES
 )
 
 # Average L0
@@ -83,6 +83,27 @@ samples = dist.sample(100_000)
 mean_l0 = (samples > 0).float().sum(dim=-1).mean().item()
 std_l0 = (samples > 0).float().sum(dim=-1).std().item()
 print(f"Average L0: {mean_l0:.2f} +/- {std_l0:.2f}")
+
+# %%
+# --- Plot: Sorted feature firing probabilities ---
+firing_probs = (samples > 0).float().mean(dim=0).cpu().numpy()
+firing_probs_sorted = np.sort(firing_probs)[::-1]
+
+fig_firing = go.Figure()
+fig_firing.add_trace(
+    go.Scatter(
+        x=np.arange(N_FEATURES),
+        y=firing_probs_sorted,
+        mode="lines",
+        name="Firing prob",
+    )
+)
+fig_firing.update_xaxes(title_text="Feature rank", **AXIS_STYLE)
+fig_firing.update_yaxes(title_text="P(active)", **AXIS_STYLE)
+fig_firing.update_layout(
+    title="Feature firing probabilities (sorted)", **LAYOUT_DEFAULTS
+)
+fig_firing.show()
 
 # %%
 # --- Train ---
@@ -95,6 +116,38 @@ losses, _ = tm.fit(N_EPOCHS, batch_size=BATCH_SIZE, verbose=True)
 # %%
 # --- Plot losses ---
 px.line(losses)
+
+# %%
+# --- Autoencoder F1 (does the AE round-trip preserve feature activity?) ---
+with torch.no_grad():
+    ae_test_x = dist.sample(100_000).to(DEVICE)
+    ae_test_xhat = tm.ae.decode(tm.ae.encode(ae_test_x))
+
+    gt_active_ae = ae_test_x > 0
+    pred_active_ae = ae_test_xhat > 0
+
+    tp_ae = (gt_active_ae & pred_active_ae).float().sum(dim=0)
+    fp_ae = (~gt_active_ae & pred_active_ae).float().sum(dim=0)
+    fn_ae = (gt_active_ae & ~pred_active_ae).float().sum(dim=0)
+
+    prec_ae = tp_ae / (tp_ae + fp_ae + 1e-8)
+    rec_ae = tp_ae / (tp_ae + fn_ae + 1e-8)
+    f1_ae = 2 * prec_ae * rec_ae / (prec_ae + rec_ae + 1e-8)
+
+    tp_tot_ae = tp_ae.sum()
+    fp_tot_ae = fp_ae.sum()
+    fn_tot_ae = fn_ae.sum()
+    prec_micro_ae = (tp_tot_ae / (tp_tot_ae + fp_tot_ae + 1e-8)).item()
+    rec_micro_ae = (tp_tot_ae / (tp_tot_ae + fn_tot_ae + 1e-8)).item()
+    f1_micro_ae = (
+        2 * prec_micro_ae * rec_micro_ae / (prec_micro_ae + rec_micro_ae + 1e-8)
+    )
+
+print(
+    f"[AE round-trip] "
+    f"prec={prec_ae.mean():.4f}  rec={rec_ae.mean():.4f}  "
+    f"F1(macro)={f1_ae.mean().item():.4f}  F1(micro)={f1_micro_ae:.4f}"
+)
 
 # %%
 # --- Plot: Feature Norms and Feature Dimensionalities ---
@@ -133,6 +186,44 @@ fig.update_layout(
     width=900,
 )
 fig.show()
+
+
+# %%
+# --- Feature-collapse check ---
+# Normalize columns of W and inspect the Gram matrix. Off-diagonal entries
+# near ±1 indicate two features that have collapsed onto the same direction.
+COLLAPSE_THRESH = 0.8
+with torch.no_grad():
+    W_n = tm.W_normalized_features  # (D_HIDDEN, N_FEATURES)
+    gram = (W_n.T @ W_n).cpu()
+    i_idx, j_idx = torch.triu_indices(N_FEATURES, N_FEATURES, offset=1)
+    pair_sims = gram[i_idx, j_idx]
+    max_abs, max_k = pair_sims.max(dim=0)
+    collapsed_mask = pair_sims >= COLLAPSE_THRESH
+
+n_collapsed = int(collapsed_mask.sum().item())
+print(
+    f"[collapse] max|cos|={max_abs.item():.4f} "
+    f"(f{int(i_idx[max_k])}–f{int(j_idx[max_k])} = {pair_sims[max_k].item():+.4f})  "
+    f"pairs ≥ {COLLAPSE_THRESH}: {n_collapsed}"
+)
+if n_collapsed > 0:
+    top_k = collapsed_mask.nonzero(as_tuple=True)[0][:20]
+    for k in top_k:
+        k = int(k)
+        print(f"  f{int(i_idx[k])}–f{int(j_idx[k])}: cos={pair_sims[k].item():+.4f}")
+
+fig_gram = px.histogram(
+    x=pair_sims.numpy(),
+    nbins=120,
+    labels={"x": "cos(w_i, w_j)"},
+    title=f"Pairwise cosine similarity of W columns (max(·)={max_abs.item():.3f})",
+)
+fig_gram.add_vline(x=COLLAPSE_THRESH, line_color="red", line_dash="dash")
+fig_gram.update_layout(**LAYOUT_DEFAULTS)
+fig_gram.update_xaxes(**AXIS_STYLE)
+fig_gram.update_yaxes(type="log", **AXIS_STYLE)
+fig_gram.show()
 
 
 # %%
@@ -192,7 +283,7 @@ from scipy.optimize import linear_sum_assignment
 from occhio.sae.sae import SAESimple
 
 N_DICT = N_FEATURES // 2
-SAE_STEPS = 15_000
+SAE_STEPS = 100_000
 SAE_BATCH = 1024
 SAE_LR = 3e-4
 SAE_L1 = 0.2
@@ -209,11 +300,74 @@ def data_fn(n: int) -> torch.Tensor:
     return tm.ae.encode(x)
 
 
-sae_losses = sae.train_sae(
-    data_fn=data_fn, n_steps=SAE_STEPS, batch_size=SAE_BATCH, lr=SAE_LR
+HOOK_BATCH = 10_000
+HOOK_FREQ = 500
+
+
+def loss_hook(d):
+    sae = d["sae"]
+    sae.eval()
+    with torch.no_grad():
+        x = dist.sample(HOOK_BATCH).to(DEVICE)
+        h = tm.ae.encode(x)
+        x_hat, z = sae.forward(h)
+        val = sae.loss(h, x_hat, z).item()
+    sae.train()
+    return (d["step"], val)
+
+
+def f1_hook(d):
+    sae = d["sae"]
+    sae.eval()
+    with torch.no_grad():
+        x = dist.sample(HOOK_BATCH).to(DEVICE)
+        h = tm.ae.encode(x)
+        z = sae.encode(h)
+
+        D_h = tm.W.detach()
+        W_dec_t = sae.W_dec.detach().T
+        D_norm = D_h / D_h.norm(dim=0, keepdim=True).clamp(min=1e-8)
+        W_norm = W_dec_t / W_dec_t.norm(dim=0, keepdim=True).clamp(min=1e-8)
+        cos_sim = (D_norm.T @ W_norm).cpu().numpy()
+        feat_idx, dict_idx = linear_sum_assignment(-cos_sim)
+
+        gt = x[:, feat_idx] > 0
+        pred = z[:, dict_idx] > 0
+        tp = (gt & pred).float().sum(dim=0)
+        fp = (~gt & pred).float().sum(dim=0)
+        fn_ = (gt & ~pred).float().sum(dim=0)
+        prec = tp / (tp + fp + 1e-8)
+        rec = tp / (tp + fn_ + 1e-8)
+        val = (2 * prec * rec / (prec + rec + 1e-8)).mean().item()
+    sae.train()
+    return (d["step"], val)
+
+
+loss_history, f1_history = sae.train_sae(
+    data_fn=data_fn,
+    n_steps=SAE_STEPS,
+    batch_size=SAE_BATCH,
+    lr=SAE_LR,
+    hooks=[loss_hook, f1_hook],
+    hook_freq=HOOK_FREQ,
 )
 # %%
-px.line(sae_losses)
+loss_steps, loss_values = zip(*loss_history)
+f1_steps, f1_values = zip(*f1_history)
+fig_sae_curves = make_subplots(specs=[[{"secondary_y": True}]])
+fig_sae_curves.add_trace(
+    go.Scatter(x=loss_steps, y=loss_values, mode="lines+markers", name="loss"),
+    secondary_y=False,
+)
+fig_sae_curves.add_trace(
+    go.Scatter(x=f1_steps, y=f1_values, mode="lines+markers", name="F1"),
+    secondary_y=True,
+)
+fig_sae_curves.update_xaxes(title_text="training step", **AXIS_STYLE)
+fig_sae_curves.update_yaxes(title_text="loss", secondary_y=False, **AXIS_STYLE)
+fig_sae_curves.update_yaxes(title_text="F1", secondary_y=True, **AXIS_STYLE)
+fig_sae_curves.update_layout(title="SAE training curves", **LAYOUT_DEFAULTS)
+fig_sae_curves.show()
 
 # %%
 # --- SAE Metrics ---

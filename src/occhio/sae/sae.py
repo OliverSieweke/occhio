@@ -2,6 +2,8 @@
 Implements Sparse AutoEncoders.
 """
 
+from typing import Callable
+
 from torch import Tensor
 from torch.optim import AdamW
 import torch
@@ -45,13 +47,17 @@ class SparseAutoEncoderBase(nn.Module, ABC):
         batch_size: int = 1024,
         lr: float = 3e-4,
         sample_every: int = 25,
-    ) -> list[float]:
+        hooks: list[Callable] | None = None,
+        hook_freq: int = 100,
+    ) -> list:
         if sample_every < 1:
             raise ValueError(f"sample_every must be positive, got {sample_every}")
 
         optimizer = AdamW(self.parameters(), lr=lr)
-        sae_device = next(self.parameters()).device
-        loss_buffer = torch.empty(n_steps, device=sae_device)
+
+        if hooks is None:
+            hooks = []
+        hook_returns = [[] for _ in hooks]
 
         raw_buffer: Tensor | None = None
 
@@ -69,16 +75,29 @@ class SparseAutoEncoderBase(nn.Module, ABC):
 
             optimizer.zero_grad()
             x_hat, z = self.forward(x)
+            if hasattr(self, "_update_dead_latent_tracker"):
+                self._update_dead_latent_tracker(z)  # ty:ignore
             loss = self.loss(x, x_hat, z)
             loss.backward()
             optimizer.step()
             self.constrain_weights()
 
-            loss_buffer[step] = loss.detach()
             if (step + 1) % 5000 == 0:
                 print(f"  SAE step {step + 1}/{n_steps}  loss={loss.item():.4f}")
+            if hooks and (step % hook_freq == 0 or step == n_steps - 1):
+                with torch.no_grad():
+                    hook_data = dict(
+                        sae=self,
+                        step=step,
+                        loss=loss.detach(),
+                        x=x,
+                        x_hat=x_hat,
+                        z=z,
+                    )
+                    for i, h in enumerate(hooks):
+                        hook_returns[i].append(h(hook_data))
 
-        return loss_buffer.cpu().tolist()
+        return hook_returns
 
     def __init__(
         self,
@@ -99,6 +118,10 @@ class SAESimple(SparseAutoEncoderBase):
         n_dict: int,
         l1_coef: float = 0.1,
         dec_bias: bool = False,
+        aux_k: bool = False,
+        aux_coef: float = 1 / 32,
+        dead_latent_window: int = 1000,
+        ortho_coef: float = 0.0,
         **kwargs,
     ):
         super().__init__(l1_coef, **kwargs)
@@ -106,12 +129,19 @@ class SAESimple(SparseAutoEncoderBase):
         self.n_latent = n_latent
         self.n_dict = n_dict
         self.dec_bias = dec_bias
+        self.aux_k = aux_k
+        self.aux_coef = aux_coef
+        self.dead_latent_window = dead_latent_window
+        self.ortho_coef = ortho_coef
 
         self.W_enc = nn.Parameter(torch.empty((n_latent, n_dict)))
         self.b_enc = nn.Parameter(torch.zeros(n_dict))
 
         self.W_dec = nn.Parameter(torch.empty((n_dict, n_latent)))
         self.b_dec = nn.Parameter(torch.zeros(n_latent))
+
+        # Dead latent tracking (not a parameter, survives .to(device))
+        self.register_buffer("steps_since_fired", torch.zeros(n_dict, dtype=torch.long))
 
         self.resample_weights()
 
@@ -128,11 +158,72 @@ class SAESimple(SparseAutoEncoderBase):
     def encode(self, x: Tensor) -> Tensor:
         return torch.relu((x - self.b_dec) @ self.W_enc + self.b_enc)
 
+    def _encode_pre_act(self, x: Tensor) -> Tensor:
+        """Encoder pre-activations (before ReLU)."""
+        return (x - self.b_dec) @ self.W_enc + self.b_enc
+
     def decode(self, z: Tensor) -> Tensor:
         if self.dec_bias:
             return z @ self.W_dec + self.b_dec
         else:
             return z @ self.W_dec
+
+    def _auxk_loss(self, x: Tensor, x_hat: Tensor, hidden_pre: Tensor) -> Tensor:
+        """AuxK auxiliary loss for dead latent revival (Gao et al., 2024).
+
+        Dead latents (those that haven't fired in ``dead_latent_window`` steps)
+        are asked to reconstruct the residual error from the main forward pass.
+        """
+        dead_mask = self.steps_since_fired >= self.dead_latent_window
+        num_dead = int(dead_mask.sum().item())
+        if num_dead == 0:
+            return x.new_tensor(0.0)
+
+        k_aux = self.n_latent // 2
+        scale = min(num_dead / k_aux, 1.0)
+        k_aux = min(k_aux, num_dead)
+
+        # Among dead latents, pick the top-k_aux by pre-activation magnitude
+        dead_pre = torch.where(dead_mask[None], hidden_pre, torch.tensor(-torch.inf))
+        topk = dead_pre.topk(k_aux, dim=-1)
+        auxk_acts = torch.zeros_like(hidden_pre)
+        auxk_acts.scatter_(-1, topk.indices, topk.values.relu())
+
+        # Dead latents reconstruct the residual
+        residual = (x - x_hat).detach()
+        recon = auxk_acts @ self.W_dec
+        return scale * (recon - residual).pow(2).sum(dim=-1).mean()
+
+    def _ortho_loss(self) -> Tensor:
+        """Penalize off-diagonal cosine similarity of decoder rows.
+
+        W_dec rows are already unit-normalized (via ``constrain_weights``),
+        so ``W_dec @ W_dec.T`` gives the Gram (cosine-similarity) matrix.
+        We penalize the Frobenius norm of the off-diagonal entries.
+        """
+        gram = self.W_dec @ self.W_dec.T
+        off_diag = gram - torch.diag(gram.diag())
+        return off_diag.pow(2).sum() / self.n_dict
+
+    def loss(self, x_true: Tensor, x_hat: Tensor, intermediate: Tensor) -> Tensor:
+        base_loss = super().loss(x_true, x_hat, intermediate)
+
+        if self.aux_k and self.training:
+            hidden_pre = self._encode_pre_act(x_true)
+            aux_loss = self._auxk_loss(x_true, x_hat, hidden_pre)
+            base_loss = base_loss + self.aux_coef * aux_loss
+
+        if self.ortho_coef > 0:
+            base_loss = base_loss + self.ortho_coef * self._ortho_loss()
+
+        return base_loss
+
+    @torch.no_grad()
+    def _update_dead_latent_tracker(self, z: Tensor) -> None:
+        """Update steps-since-fired counter based on current batch activations."""
+        fired = (z > 0).any(dim=0)
+        self.steps_since_fired += 1
+        self.steps_since_fired[fired] = 0
 
 
 class TopKIgnoreSAE(SparseAutoEncoderBase):
@@ -397,14 +488,19 @@ class SimplexSAE(SparseAutoEncoderBase):
         batch_size: int = 1024,
         lr: float = 3e-4,
         sample_every: int = 25,
-    ) -> list[float]:
+        hooks: list[Callable] | None = None,
+        hook_freq: int = 1,
+    ) -> list:
         """Train loop using the 3-tuple forward."""
         if sample_every < 1:
             raise ValueError(f"sample_every must be positive, got {sample_every}")
 
         optimizer = AdamW(self.parameters(), lr=lr)
-        sae_device = next(self.parameters()).device
-        loss_buffer = torch.empty(n_steps, device=sae_device)
+
+        if hooks is None:
+            hooks = []
+        hook_returns = [[] for _ in hooks]
+
         raw_buffer: Tensor | None = None
 
         for step in range(n_steps):
@@ -426,11 +522,23 @@ class SimplexSAE(SparseAutoEncoderBase):
             optimizer.step()
             self.constrain_weights()
 
-            loss_buffer[step] = cur_loss.detach()
             if (step + 1) % 5000 == 0:
                 print(f"  SAE step {step + 1}/{n_steps}  loss={cur_loss.item():.4f}")
+            if hooks and (step % hook_freq == 0 or step == n_steps - 1):
+                with torch.no_grad():
+                    hook_data = dict(
+                        sae=self,
+                        step=step,
+                        loss=cur_loss.detach(),
+                        x=x,
+                        x_hat=x_hat,
+                        s=s,
+                        g=g,
+                    )
+                    for i, h in enumerate(hooks):
+                        hook_returns[i].append(h(hook_data))
 
-        return loss_buffer.cpu().tolist()
+        return hook_returns
 
 
 class CausalSAE(SparseAutoEncoderBase):
