@@ -186,7 +186,7 @@ random.seed(RANDOM_SEED)
 
 dist = CorrelatedPairs(
     n_features=N_FEAT,
-    p_active=zipfian_p_active(N_FEAT, high=0.6, low=2.55 / N_FEAT),
+    p_active=zipfian_p_active(N_FEAT, high=0.63, low=2.70 / N_FEAT),
     p_individual=[0.5 + 0.5 * random.random() for _ in range(N_FEAT)],
     device=DEVICE,
     generator=dist_gen,
@@ -199,7 +199,7 @@ upload_samples(
         "Features are grouped into pairs (2i, 2i+1). Each pair activates jointly "
         "with some probability, then each feature within an active pair fires "
         "independently with p_individual. The density follows a zipfian power-law "
-        "with high=0.6, low=2.55/N. Per-feature p_individual is drawn from "
+        "with high=0.63, low=2.70/N. Per-feature p_individual is drawn from "
         "[0.5, 1.0] (stdlib random seed=42). "
         "Models co-occurring features like 'peanut butter and jam'."
     ),
