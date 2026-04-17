@@ -39,7 +39,7 @@ EVAL_SAMPLES = 2**14
 L0_VALUES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
 BASE_L1_COEF = 0.3
 N_DICT = N_FEATURES // 2
-SAE_STEPS = 25_000
+SAE_STEPS = 75_000
 N_SEEDS = 5
 SAE_BATCH = 1024
 SAE_LR = 3e-4
@@ -353,6 +353,57 @@ for name in sweep_results:
         )
 
 # %%
+# --- Save checkpoint (run once after training — never retrain again) ---
+from pathlib import Path
+
+_ckpt_dir = (
+    Path(
+        os.path.dirname(os.path.abspath(__file__))
+        if "__file__" in dir()
+        else os.getcwd()
+    )
+    / "checkpoints"
+)
+_ckpt_dir.mkdir(exist_ok=True)
+
+_sae_states = {}
+for _ckpt_name in trained_saes:
+    _sae_states[_ckpt_name] = [
+        [sae.state_dict() for sae, _ in seed_list]
+        for seed_list in trained_saes[_ckpt_name]
+    ]
+
+_base_states = {}
+for _ckpt_name, _ckpt_tm in base_models:
+    _base_states[_ckpt_name] = {
+        "ae_state": _ckpt_tm.ae.state_dict(),
+        "ae_class": type(_ckpt_tm.ae).__name__,
+    }
+
+torch.save(
+    {
+        "sae_states": _sae_states,
+        "base_states": _base_states,
+        "sweep_raw": sweep_raw,
+        "sweep_results": sweep_results,
+        "config": {
+            "N_FEATURES": N_FEATURES,
+            "D_HIDDEN": D_HIDDEN,
+            "N_DICT": N_DICT,
+            "L0_VALUES": L0_VALUES,
+            "N_SEEDS": N_SEEDS,
+            "SAE_STEPS": SAE_STEPS,
+            "SEED": SEED,
+            "firing_probs": firing_probs,
+            "BASE_L1_COEF": BASE_L1_COEF,
+            "DET_SAMPLES": DET_SAMPLES,
+        },
+    },
+    _ckpt_dir / "sae_sweep_checkpoint.pt",
+)
+print(f"Checkpoint saved → {_ckpt_dir / 'sae_sweep_checkpoint.pt'}")
+
+# %%
 # =============================================================================
 #  VISUALIZATION — run from here to re-plot without retraining
 # =============================================================================
@@ -450,12 +501,12 @@ def _add_band(fig, x, y_mean, y_std, color, name, row=None, col=None):
 true_mean_l0 = sum(firing_probs)
 
 _MAIN_METRICS = [
-    ("f1", '<span style="font-style:italic;">F</span><sub>1</sub>-score'),
-    ("r2", '<span style="font-style:italic;">R</span><sup>2</sup>'),
+    ("f1", '<span style="font-style:italic;">F</span><sub>1</sub>'),
     ("mcc", "MCC"),
+    ("r2", '<span style="font-style:italic;">R</span><sup>2</sup>'),
 ]
 _L0_DASH = "15px 10px"
-_L0_COLOR = "#6B7280"
+_L0_COLOR = "#374151"
 _N_INTERVALS = 5  # both axes: 5 intervals → square grid cells
 
 
@@ -471,8 +522,10 @@ def _nice_dtick(y_max, n=_N_INTERVALS):
 fig_main = make_subplots(
     rows=1,
     cols=3,
-    horizontal_spacing=0.10,
+    horizontal_spacing=0.13,
 )
+
+_LEG_PAD = "&nbsp;" * 20  # trailing whitespace for legend spacing
 
 _y_dticks = []
 for ci, (mk, ylabel) in enumerate(_MAIN_METRICS, start=1):
@@ -490,10 +543,10 @@ for ci, (mk, ylabel) in enumerate(_MAIN_METRICS, start=1):
                 x=x_s.tolist(),
                 y=y_s.tolist(),
                 mode="lines+markers",
-                name=name,
+                name=name + _LEG_PAD,
                 legendgroup=name,
                 showlegend=(ci == 1),
-                marker=dict(size=10, color=color, line=dict(width=1, color="white")),
+                marker=dict(size=10, color=color, line=dict(width=3, color="white")),
                 line=dict(color=color, width=2.5),
             ),
             row=1,
@@ -504,8 +557,8 @@ for ci, (mk, ylabel) in enumerate(_MAIN_METRICS, start=1):
     fig_main.add_vline(
         x=true_mean_l0,
         line_dash=_L0_DASH,
-        line_color=_L0_COLOR,
-        line_width=1.5,
+        line_color="#1F2937",
+        line_width=2.5,
         row=1,
         col=ci,
     )
@@ -522,7 +575,7 @@ fig_main.add_trace(
         x=[None],
         y=[None],
         mode="lines",
-        name="True <i>L</i><sup>0</sup>",
+        name="<i>L</i><sup>0</sup><sub>True</sub>",
         line=dict(color=_L0_COLOR, width=1.5, dash=_L0_DASH),
         showlegend=True,
     ),
@@ -532,32 +585,69 @@ fig_main.add_trace(
 
 fig_main.update_shapes(layer="below")
 
-# --- Dimensions for square grid cells ---
-# X: range [0, 25], dtick=5 → 5 intervals
-# Y: 5 intervals (forced via _nice_dtick)
-# → need each panel to be a perfect square in pixel space.
-# Solve: panel_px = plot_height; width chosen so 3 panels + spacing + margins fit.
-_plot_h = 640  # target plot-area height (px)
-_margin = dict(l=100, r=50, t=110, b=100)
-_hs = 0.10  # horizontal_spacing fraction
-# panel_px = _plot_h → total_width = (3*_plot_h + margin_l + margin_r) / (1 - 2*_hs)
-_fig_w = int((3 * _plot_h + _margin["l"] + _margin["r"]) / (1 - 2 * _hs))
+# --- Dimensions (square panels) ---
+_fs = 38  # axis titles
+_fs_tick = 30  # tick labels
+_fs_leg = _fs_tick  # legend font = tick font per user request
+
+_plot_h = 400  # panel side length in px
+_margin = dict(l=100, r=20, t=60, b=120)
+_hs = 0.13  # horizontal_spacing — must match make_subplots above
+
+# Square-panel formula: panel_width = (1-2*hs)/3 × plot_area_width == _plot_h
+_fig_w = int(3 * _plot_h / (1 - 2 * _hs)) + _margin["l"] + _margin["r"]
 _fig_h = _plot_h + _margin["t"] + _margin["b"]
 
 fig_main.update_layout(width=_fig_w, height=_fig_h, margin=_margin)
 style_fig(fig_main)
 
-# Per-panel axis overrides (after style_fig so dtick wins over nticks)
+# Lock margins + override font sizes
+fig_main.update_xaxes(
+    tickfont=dict(size=_fs_tick),
+    title_font=dict(size=_fs),
+    title_standoff=12,
+    automargin=False,
+)
+fig_main.update_yaxes(
+    tickfont=dict(size=_fs_tick),
+    title_font=dict(size=_fs),
+    title_standoff=0,
+    automargin=False,
+)
+
+# Data-driven x-range (shared across panels)
+_all_l0 = [v for res in sweep_results.values() for v in res["l0"]]
+_x_lo = max(0, min(_all_l0) - 1)
+_x_hi = max(_all_l0) + 1
+
+# Per-panel axis overrides
 for ci, (mk, ylabel) in enumerate(_MAIN_METRICS, start=1):
-    _dt = _y_dticks[ci - 1]
+    _all_y = [v for res in sweep_results.values() for v in res[mk]]
+    _all_std = [v for res in sweep_results.values() for v in res[f"{mk}_std"]]
+    _y_lo = max(0, min(yv - s for yv, s in zip(_all_y, _all_std)) - 0.05)
+    _y_hi = max(yv + s for yv, s in zip(_all_y, _all_std)) + 0.05
     fig_main.update_yaxes(
         title_text=ylabel,
-        range=[0, _N_INTERVALS * _dt],
-        dtick=_dt,
+        range=[_y_lo, _y_hi],
+        dtick=0.25,
+        tickangle=-90,
+        minor=dict(dtick=0.05, showgrid=True, gridcolor="#F0F0F0", gridwidth=1),
         row=1,
         col=ci,
     )
-    fig_main.update_xaxes(range=[0, 25], dtick=5, row=1, col=ci)
+    fig_main.update_xaxes(
+        range=[_x_lo, _x_hi],
+        dtick=5,
+        minor=dict(dtick=1, showgrid=True, gridcolor="#F0F0F0", gridwidth=1),
+        row=1,
+        col=ci,
+    )
+
+# First subplot (F1): extend upper bound to 0.8
+_f1_vals = [v for res in sweep_results.values() for v in res["f1"]]
+_f1_stds = [v for res in sweep_results.values() for v in res["f1_std"]]
+_f1_lo = max(0, min(yv - s for yv, s in zip(_f1_vals, _f1_stds)) - 0.05)
+fig_main.update_yaxes(range=[_f1_lo, 0.8], row=1, col=1)
 
 # x-axis title on middle panel only
 fig_main.update_xaxes(
@@ -566,23 +656,20 @@ fig_main.update_xaxes(
     col=2,
 )
 
-# Legend: full width across top, no box, equidistant entries
-# Each of 4 entries gets _fig_w*0.9/4 px → equal start-to-start spacing across 90% of width
+# Legend: font = tick size, equal-width entries for even spacing
 fig_main.update_layout(
     legend=dict(
         orientation="h",
         x=0.5,
         xanchor="center",
-        y=1.06,
+        y=1.02,
         yanchor="bottom",
         bgcolor="rgba(0,0,0,0)",
         borderwidth=0,
         bordercolor="rgba(0,0,0,0)",
-        font=dict(size=39),
+        font=dict(size=_fs_tick),
         itemsizing="constant",
         itemwidth=50,
-        entrywidthmode="pixels",
-        entrywidth=int(_fig_w * 0.9 / 4),
     ),
 )
 fig_main.show()
@@ -623,8 +710,8 @@ for _mk, _ml in _METRIC_PLOTS.items():
     _fig.add_vline(
         x=true_mean_l0,
         line_dash=_L0_DASH,
-        line_color=_L0_COLOR,
-        line_width=1.5,
+        line_color="#1F2937",
+        line_width=2.5,
     )
     _fig.update_shapes(layer="below")
 
