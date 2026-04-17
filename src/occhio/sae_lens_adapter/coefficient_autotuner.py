@@ -3,6 +3,7 @@
 Copied from https://github.com/decoderesearch/synth-sae-bench-experiments/blob/main/saes/components/coefficient_autotuner.py
 """
 
+import math
 from dataclasses import dataclass
 
 import torch
@@ -41,15 +42,17 @@ class CoefficientAutotunerConfig:
     convergence_gain: float = 0.01
 
 
-class CoefficientAutotuner(torch.nn.Module):
-    """
-    Autotuner that outputs a multiplier to achieve a target L0 sparsity.
+class CoefficientAutotuner:
+    """Autotuner that outputs a multiplier to achieve a target L0 sparsity.
 
     Uses an integral controller with EMA smoothing and gain scheduling. The
     controller reduces its gain when the error is decreasing (i.e., when the
     system is converging toward the target) to prevent overshoot. A tanh
     nonlinearity bounds the adjustment magnitude and provides smooth behavior
     near the setpoint.
+
+    All internal state is stored as plain Python floats to avoid unnecessary
+    GPU synchronization when called from a CUDA training loop.
 
     Algorithm:
         1. Smooth L0 measurements using exponential moving average (EMA)
@@ -58,15 +61,6 @@ class CoefficientAutotuner(torch.nn.Module):
         4. Apply gain scheduling: reduce gain when moving toward target
         5. Compute bounded adjustment: Ki * gain * tanh(|rel_error| * scale)
         6. Multiplicative update: multiplier *= (1 ± adjustment)
-
-    References:
-        - Integral control and PID controllers:
-          Åström, K.J. & Murray, R.M. (2008). "Feedback Systems: An Introduction
-          for Scientists and Engineers." Princeton University Press.
-          https://fbswiki.org/
-        - Gain scheduling:
-          Rugh, W.J. & Shamma, J.S. (2000). "Research on gain scheduling."
-          Automatica, 36(10), 1401-1425.
 
     Example usage:
         autotuner = CoefficientAutotuner(cfg)
@@ -77,62 +71,37 @@ class CoefficientAutotuner(torch.nn.Module):
             effective_coefficient = base_coefficient * multiplier
     """
 
-    _smoothed_l0: torch.Tensor
-    _multiplier: torch.Tensor
-    _initialized: torch.Tensor
-    _l0_rate: torch.Tensor
-    _prev_smoothed_l0: torch.Tensor
-
     def __init__(
         self,
         cfg: CoefficientAutotunerConfig,
         device: torch.device | str = "cpu",
     ):
-        """
-        Args:
-            cfg: Configuration for the autotuner.
-            device: Device to store tensors on.
-        """
-        super().__init__()
+        # device is accepted for API compatibility but unused — all state is
+        # plain Python floats to avoid GPU synchronization overhead.
         self.cfg = cfg
-
-        self.register_buffer(
-            "_smoothed_l0", torch.zeros(1, device=device, dtype=torch.float64)
-        )
-        self.register_buffer(
-            "_multiplier",
-            torch.ones(1, device=device, dtype=torch.float64),
-        )
-        self.register_buffer(
-            "_initialized", torch.zeros(1, device=device, dtype=torch.bool)
-        )
-        # Track rate of L0 change for gain scheduling
-        self.register_buffer(
-            "_l0_rate", torch.zeros(1, device=device, dtype=torch.float64)
-        )
-        self.register_buffer(
-            "_prev_smoothed_l0", torch.zeros(1, device=device, dtype=torch.float64)
-        )
+        self._smoothed_l0: float = 0.0
+        self._multiplier: float = 1.0
+        self._initialized: bool = False
+        self._l0_rate: float = 0.0
+        self._prev_smoothed_l0: float = 0.0
 
     @property
     def multiplier(self) -> float:
         """Current multiplier value."""
-        return self._multiplier.item()
+        return self._multiplier
 
     @property
     def smoothed_l0(self) -> float:
         """Current smoothed L0 estimate."""
-        return self._smoothed_l0.item()
+        return self._smoothed_l0
 
     @property
     def l0_rate(self) -> float:
         """Current smoothed rate of L0 change per step."""
-        return self._l0_rate.item()
+        return self._l0_rate
 
-    @torch.no_grad()
     def update(self, batch_l0: float | torch.Tensor, step: int) -> float:
-        """
-        Update the autotuner state and return the new multiplier.
+        """Update the autotuner state and return the new multiplier.
 
         Args:
             batch_l0: L0 sparsity from the current batch.
@@ -141,45 +110,42 @@ class CoefficientAutotuner(torch.nn.Module):
         Returns:
             The updated multiplier value.
         """
+        # Single GPU→CPU sync: extract the scalar measurement
         if isinstance(batch_l0, torch.Tensor):
             batch_l0 = batch_l0.item()
 
         # Update smoothed L0 estimate (EMA)
-        if not self._initialized.item():
-            self._smoothed_l0.fill_(batch_l0)
-            self._prev_smoothed_l0.fill_(batch_l0)
-            self._l0_rate.zero_()
-            self._initialized.fill_(True)
+        if not self._initialized:
+            self._smoothed_l0 = batch_l0
+            self._prev_smoothed_l0 = batch_l0
+            self._l0_rate = 0.0
+            self._initialized = True
         else:
-            # Store previous smoothed L0 for rate calculation
-            self._prev_smoothed_l0.copy_(self._smoothed_l0)
-
-            # EMA: α * old + (1 - α) * new
-            self._smoothed_l0.mul_(self.cfg.smoothing_factor).add_(
-                batch_l0, alpha=1 - self.cfg.smoothing_factor
+            self._prev_smoothed_l0 = self._smoothed_l0
+            self._smoothed_l0 = (
+                self.cfg.smoothing_factor * self._smoothed_l0
+                + (1.0 - self.cfg.smoothing_factor) * batch_l0
             )
-
-            # Update L0 rate (smoothed derivative)
-            instant_rate = self._smoothed_l0.item() - self._prev_smoothed_l0.item()
-            self._l0_rate.mul_(self.cfg.rate_smoothing_factor).add_(
-                instant_rate, alpha=1 - self.cfg.rate_smoothing_factor
+            instant_rate = self._smoothed_l0 - self._prev_smoothed_l0
+            self._l0_rate = (
+                self.cfg.rate_smoothing_factor * self._l0_rate
+                + (1.0 - self.cfg.rate_smoothing_factor) * instant_rate
             )
 
         # No adjustment before start_step
         if step < self.cfg.start_step:
-            return self.multiplier
+            return self._multiplier
 
         # Position error: positive means L0 is above target
-        error = self._smoothed_l0.item() - self.cfg.target_l0
+        error = self._smoothed_l0 - self.cfg.target_l0
 
         # Apply deadband - no adjustment if within tolerance
         if abs(error) <= self.cfg.deadband:
-            return self.multiplier
+            return self._multiplier
 
         # Determine if we're moving toward or away from target
         # Moving toward target: error and rate have opposite signs
-        # (error > 0 and rate < 0) or (error < 0 and rate > 0)
-        moving_toward_target = error * self._l0_rate.item() < 0
+        moving_toward_target = error * self._l0_rate < 0
 
         # Reduce gain when moving toward target to prevent overshoot
         gain = self.cfg.convergence_gain if moving_toward_target else 1.0
@@ -189,29 +155,28 @@ class CoefficientAutotuner(torch.nn.Module):
         adjustment = (
             self.cfg.integral_gain
             * gain
-            * torch.tanh(torch.tensor(abs(rel_error) * self.cfg.gain_scale)).item()
+            * math.tanh(abs(rel_error) * self.cfg.gain_scale)
         )
 
         # Multiplicative update
         if error > 0:
             # L0 too high, increase multiplier to make it more sparse
-            new_multiplier = self._multiplier.item() * (1 + adjustment)
+            new_multiplier = self._multiplier * (1.0 + adjustment)
         else:
             # L0 too low, decrease multiplier to make it less sparse
-            new_multiplier = self._multiplier.item() * (1 - adjustment)
+            new_multiplier = self._multiplier * (1.0 - adjustment)
 
         # Clamp to bounds
-        new_multiplier = max(
+        self._multiplier = max(
             self.cfg.min_multiplier, min(self.cfg.max_multiplier, new_multiplier)
         )
 
-        self._multiplier.fill_(new_multiplier)
-        return self.multiplier
+        return self._multiplier
 
     def reset(self) -> None:
         """Reset smoothed L0 state and multiplier back to 1.0."""
-        self._smoothed_l0.zero_()
-        self._multiplier.fill_(1.0)
-        self._initialized.fill_(False)
-        self._l0_rate.zero_()
-        self._prev_smoothed_l0.zero_()
+        self._smoothed_l0 = 0.0
+        self._multiplier = 1.0
+        self._initialized = False
+        self._l0_rate = 0.0
+        self._prev_smoothed_l0 = 0.0

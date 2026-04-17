@@ -14,12 +14,18 @@ from scipy.optimize import linear_sum_assignment
 
 from occhio.autoencoder import TiedLinearRelu, SynthAE
 from occhio.sae.sae import SAESimple
+from occhio.sae_lens_adapter.coefficient_autotuner import (
+    CoefficientAutotuner,
+    CoefficientAutotunerConfig,
+)
 from occhio.distributions import SparseUniform
 from occhio.toy_model import ToyModel
 
 # %%
 # --- Configuration ---
-DEVICE = "mps"
+DEVICE = "cuda" if torch.cuda.is_available() else "mps"
+print(f"Using device: {DEVICE}")
+
 SEED = 42
 N_FEATURES = 500
 D_HIDDEN = 64
@@ -30,8 +36,8 @@ BATCH_SIZE = 512
 EVAL_SAMPLES = 2**14
 
 # SAE sweep config
-L1_VALUES = [0.15, 0.2, 0.3, 0.4, 0.5, 0.7, 0.9]
 L0_VALUES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+BASE_L1_COEF = 0.3
 N_DICT = N_FEATURES // 2
 SAE_STEPS = 25_000
 N_SEEDS = 5
@@ -66,7 +72,7 @@ print("Training Trained AE...")
 gen1 = torch.Generator(DEVICE).manual_seed(SEED)
 ae_trained = TiedLinearRelu(N_FEATURES, D_HIDDEN, device=DEVICE, generator=gen1)
 tm_trained = ToyModel(distribution=dist, ae=ae_trained, device=DEVICE)
-tm_trained.fit(N_EPOCHS, batch_size=BATCH_SIZE, verbose=True)
+tm_trained.fit(N_EPOCHS, batch_size=BATCH_SIZE, verbose=True, sample_every=800)
 print("  Done.")
 
 # %%
@@ -77,7 +83,7 @@ ae_trained_normed = TiedLinearRelu(N_FEATURES, D_HIDDEN, device=DEVICE, generato
 tm_trained_normed = ToyModel(
     distribution=dist, ae=ae_trained_normed, device=DEVICE, hooks=[normalize_W]
 )
-tm_trained_normed.fit(N_EPOCHS, batch_size=BATCH_SIZE, verbose=True)
+tm_trained_normed.fit(N_EPOCHS, batch_size=BATCH_SIZE, verbose=True, sample_every=800)
 print("  Done.")
 
 # %%
@@ -94,7 +100,9 @@ ae_constructed = SynthAE(
     generator=gen3,
 )
 tm_constructed = ToyModel(distribution=dist, ae=ae_constructed, device=DEVICE)
-tm_constructed.fit(N_EPOCHS_SYNTH, batch_size=BATCH_SIZE, verbose=True)
+tm_constructed.fit(
+    N_EPOCHS_SYNTH, batch_size=BATCH_SIZE, verbose=True, sample_every=800
+)
 print("  Done.")
 
 
@@ -108,8 +116,64 @@ def make_data_fn(tm_ref, device):
     return data_fn
 
 
+def train_sae_with_l0_target(
+    sae: SAESimple,
+    data_fn,
+    target_l0: float,
+    n_steps: int = 25_000,
+    batch_size: int = 1024,
+    lr: float = 3e-4,
+    sample_every: int = 900,
+) -> list[float]:
+    """Train an SAE while autotuning l1_coef to hit a target L0."""
+    from torch.optim import AdamW
+
+    autotuner = CoefficientAutotuner(
+        CoefficientAutotunerConfig(target_l0=target_l0),
+    )
+    base_l1 = sae.l1_coef
+    optimizer = AdamW(sae.parameters(), lr=lr)
+    sae_device = next(sae.parameters()).device
+    loss_buffer = torch.empty(n_steps, device=sae_device)
+    raw_buffer = None
+
+    for step in range(n_steps):
+        buf_offset = step % sample_every
+        if buf_offset == 0:
+            steps_left = min(sample_every, n_steps - step)
+            total_samples = steps_left * batch_size
+            raw_buffer = data_fn(total_samples).detach()
+
+        start = buf_offset * batch_size
+        end = start + batch_size
+        x = raw_buffer[start:end]
+
+        optimizer.zero_grad()
+        x_hat, z = sae.forward(x)
+
+        # Single GPU→CPU sync per step: .item() inside autotuner.update()
+        batch_l0 = (z > 0).float().sum(dim=-1).mean()
+        multiplier = autotuner.update(batch_l0, step)
+        sae.l1_coef = base_l1 * multiplier
+
+        loss = sae.loss(x, x_hat, z)
+        loss.backward()
+        optimizer.step()
+        sae.constrain_weights()
+
+        loss_buffer[step] = loss.detach()
+        if (step + 1) % 5000 == 0:
+            print(
+                f"    step {step + 1}/{n_steps}  loss={loss.item():.4f}"
+                f"  L0={autotuner.smoothed_l0:.1f}  mult={multiplier:.3f}"
+                f"  l1={sae.l1_coef:.4f}"
+            )
+
+    return loss_buffer.cpu().tolist()
+
+
 # %%
-# --- L1 sweep with multi-seed averaging ---
+# --- L0 sweep with multi-seed averaging ---
 METRIC_KEYS = [
     "f1",
     "precision",
@@ -220,38 +284,58 @@ def eval_sae(sae, tm):
     }
 
 
-# Collect per-seed metrics: sweep_raw[name][l1_idx][seed] = {metric: value}
-sweep_raw: dict[str, list[list[dict]]] = {name: [] for name, _ in base_models}
+# --- Phase 1: Train all SAEs (GPU-bound) ---
+# Store trained SAEs for deferred evaluation
+trained_saes: dict[str, list[list[tuple[SAESimple, "ToyModel"]]]] = {
+    name: [] for name, _ in base_models
+}
 
-for li, l1_coef in enumerate(L1_VALUES):
+for li, target_l0 in enumerate(L0_VALUES):
     for name, tm in base_models:
         if li == 0:
-            sweep_raw[name] = []
-        sweep_raw[name].append([])
+            trained_saes[name] = []
+        trained_saes[name].append([])
 
         for seed_i in range(N_SEEDS):
-            print(f"  {name} L1={l1_coef} seed={seed_i}...", end=" ", flush=True)
+            print(f"  {name} target_L0={target_l0} seed={seed_i}...")
             sae = SAESimple(
                 n_latent=D_HIDDEN,
                 n_dict=N_DICT,
-                l1_coef=l1_coef,
+                l1_coef=BASE_L1_COEF,
                 device=DEVICE,
             ).to(DEVICE)
-            sae.train_sae(
+            train_sae_with_l0_target(
+                sae,
                 data_fn=make_data_fn(tm, DEVICE),
+                target_l0=target_l0,
                 n_steps=SAE_STEPS,
                 batch_size=SAE_BATCH,
                 lr=SAE_LR,
             )
+            trained_saes[name][li].append((sae, tm))
+            print(f"    trained (target_l0={target_l0})")
+
+# --- Phase 2: Evaluate all SAEs (CPU-bound due to linear_sum_assignment) ---
+print("\nEvaluating all trained SAEs...")
+sweep_raw: dict[str, list[list[dict]]] = {name: [] for name, _ in base_models}
+
+for name, _ in base_models:
+    sweep_raw[name] = []
+    for li, target_l0 in enumerate(L0_VALUES):
+        sweep_raw[name].append([])
+        for seed_i, (sae, tm) in enumerate(trained_saes[name][li]):
             metrics = eval_sae(sae, tm)
             sweep_raw[name][li].append(metrics)
-            print(f"F1={metrics['f1']:.4f}  L0={metrics['l0']:.1f}")
+            print(
+                f"  {name} target_L0={target_l0} seed={seed_i}"
+                f"  F1={metrics['f1']:.4f}  L0={metrics['l0']:.1f}"
+            )
 
 # %%
 # --- Aggregate across seeds (mean ± std) ---
 sweep_results: dict[str, dict] = {}
 for name, _ in base_models:
-    res = {"l1": list(L1_VALUES)}
+    res = {"target_l0": list(L0_VALUES)}
     for key in METRIC_KEYS:
         vals = np.array([[m[key] for m in seeds] for seeds in sweep_raw[name]])
         res[key] = vals.mean(axis=1).tolist()
@@ -260,9 +344,9 @@ for name, _ in base_models:
 
 for name in sweep_results:
     res = sweep_results[name]
-    for i, l1 in enumerate(res["l1"]):
+    for i, tl0 in enumerate(res["target_l0"]):
         print(
-            f"  {name:25s}  L1={l1:.2f}"
+            f"  {name:25s}  target_L0={tl0:2d}"
             f"  F1={res['f1'][i]:.4f}±{res['f1_std'][i]:.4f}"
             f"  L0={res['l0'][i]:.1f}±{res['l0_std'][i]:.1f}"
             f"  R²={res['r2'][i]:.4f}±{res['r2_std'][i]:.4f}"
@@ -575,9 +659,9 @@ fig_pr = make_subplots(
 
 for name, res in sweep_results.items():
     color = MODEL_COLORS[name]
-    l1_arr = np.array(res["l1"])
-    order = np.argsort(l1_arr)
-    l1_s = l1_arr[order]
+    tl0_arr = np.array(res["target_l0"])
+    order = np.argsort(tl0_arr)
+    tl0_s = tl0_arr[order]
 
     for ri, (metric, metric_std) in enumerate(
         [("precision", "precision_std"), ("recall", "recall_std")], start=1
@@ -585,10 +669,10 @@ for name, res in sweep_results.items():
         y_s = np.array(res[metric])[order]
         y_std_s = np.array(res[metric_std])[order]
 
-        _add_band(fig_pr, l1_s, y_s, y_std_s, color, name, row=ri, col=1)
+        _add_band(fig_pr, tl0_s, y_s, y_std_s, color, name, row=ri, col=1)
         fig_pr.add_trace(
             go.Scatter(
-                x=l1_s.tolist(),
+                x=tl0_s.tolist(),
                 y=y_s.tolist(),
                 mode="lines+markers",
                 name=name,
@@ -602,7 +686,11 @@ for name, res in sweep_results.items():
         )
 
 # Shared x-axis label on bottom only
-fig_pr.update_xaxes(title_text="SAE L1 Coefficient", row=2, col=1)
+fig_pr.update_xaxes(
+    title_text='Target <span style="font-family:Times New Roman; font-style:italic;">L</span><sup>0</sup>',
+    row=2,
+    col=1,
+)
 fig_pr.update_yaxes(title_text="Precision", row=1, col=1)
 fig_pr.update_yaxes(title_text="Recall", row=2, col=1)
 
@@ -621,14 +709,14 @@ fig_pr.show()
 # %%
 # --- Print summary table (decoder matching) ---
 print(
-    f"\n{'Model':25s}  {'L1':>6s}  {'F1':>15s}  {'Prec':>15s}  {'Recall':>15s}"
+    f"\n{'Model':25s}  {'tL0':>4s}  {'F1':>15s}  {'Prec':>15s}  {'Recall':>15s}"
     f"  {'L0':>12s}  {'R²':>15s}  {'MCC':>15s}"
 )
 print("-" * 140)
 for name, res in sweep_results.items():
-    for i, l1 in enumerate(res["l1"]):
+    for i, tl0 in enumerate(res["target_l0"]):
         print(
-            f"{name:25s}  {l1:6.2f}"
+            f"{name:25s}  {tl0:4d}"
             f"  {res['f1'][i]:6.4f}±{res['f1_std'][i]:.4f}"
             f"  {res['precision'][i]:6.4f}±{res['precision_std'][i]:.4f}"
             f"  {res['recall'][i]:6.4f}±{res['recall_std'][i]:.4f}"
@@ -640,14 +728,14 @@ for name, res in sweep_results.items():
 # %%
 # --- Print summary table (encoder matching) ---
 print(
-    f"\n{'Model':25s}  {'L1':>6s}  {'EncF1':>15s}  {'EncPrec':>15s}  {'EncRecall':>15s}"
+    f"\n{'Model':25s}  {'tL0':>4s}  {'EncF1':>15s}  {'EncPrec':>15s}  {'EncRecall':>15s}"
     f"  {'EncMCC':>15s}"
 )
 print("-" * 100)
 for name, res in sweep_results.items():
-    for i, l1 in enumerate(res["l1"]):
+    for i, tl0 in enumerate(res["target_l0"]):
         print(
-            f"{name:25s}  {l1:6.2f}"
+            f"{name:25s}  {tl0:4d}"
             f"  {res['enc_f1'][i]:6.4f}±{res['enc_f1_std'][i]:.4f}"
             f"  {res['enc_precision'][i]:6.4f}±{res['enc_precision_std'][i]:.4f}"
             f"  {res['enc_recall'][i]:6.4f}±{res['enc_recall_std'][i]:.4f}"
@@ -680,7 +768,10 @@ for _wtw_name, _wtw_tm in _wtw_models:
 
 # %%
 # --- Save figures as vector (PDF + SVG) ---
-_fig_dir = os.path.join(os.path.dirname(__file__), "figures")
+_fig_dir = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)) if "__file__" in dir() else os.getcwd(),
+    "figures",
+)
 os.makedirs(_fig_dir, exist_ok=True)
 
 fig_main.write_image(os.path.join(_fig_dir, "sae_main_metrics.pdf"), engine="kaleido")
