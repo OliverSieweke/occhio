@@ -85,5 +85,3 @@ def inspect(name: str) -> None:
 # %%
 for dist_name in DISTRIBUTIONS:
     inspect(dist_name)
-
-# %%
