@@ -45,12 +45,12 @@ def inspect(name: str) -> None:
     print(f"  shape: {list(samples.shape)}, dtype: {samples.dtype}")
     print(f"  NaN count (full dataset): {nan_total}")
     print(f"  nonzero rows (full dataset): {nonzero_rows_total}/{n_samples}")
-    # E[L0]: expected number of active features per sample (target ≈ 8.0)
-    e_l0 = active_per_row.mean().item()
+    # L^0_True: expected number of active features per sample (target ≈ 8.0)
+    l0_true = active_per_row.mean().item()
     zero_frac = 1.0 - nonzero_rows_total / n_samples
 
     print(
-        f"  E[L0] = {e_l0:.2f}  (target ≈ 8.0) | "
+        f"  L^0_True = {l0_true:.2f}  (target ≈ 8.0) | "
         f"median={active_per_row.median():.0f}, max={active_per_row.max():.0f}"
     )
     print(f"  zero rows: {zero_frac:.1%}")
