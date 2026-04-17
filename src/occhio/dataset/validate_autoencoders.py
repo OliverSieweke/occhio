@@ -17,8 +17,8 @@ from safetensors.torch import load_file
 
 from occhio.autoencoder import TiedLinearRelu
 
-DATASET_REPO = "kaushikreddyxyz/occhio-distributions"
-MODEL_REPO = "kaushikreddyxyz/occhio-models"
+DATASET_REPO = "kaushikreddyxyz/occhio-distributions"  # VALIDATE FROM A DATASET REPO
+MODEL_REPO = "kaushikreddyxyz/occhio-models"  # MODELS DOWNLOADED FROM THIS MODEL REPO
 N_HIDDEN = 200
 DEVICE = "mps"
 
