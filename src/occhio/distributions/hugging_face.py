@@ -45,7 +45,7 @@ class HuggingFaceDistribution(Distribution):
         repo_id: str,
         filename: str,
         revision: str | None = None,
-        repo_type: str = "model",
+        repo_type: str = "dataset",
         data_key: str = "samples",
         device: torch.device | str | None = None,
         generator: torch.Generator | None = None,
