@@ -41,6 +41,7 @@ N_FEATURES = cfg["N_FEATURES"]
 D_HIDDEN = cfg["D_HIDDEN"]
 N_DICT = cfg["N_DICT"]
 L0_VALUES = cfg["L0_VALUES"]
+
 N_SEEDS = cfg["N_SEEDS"]
 firing_probs = np.array(cfg["firing_probs"])
 DET_SAMPLES = cfg["DET_SAMPLES"]

@@ -24,12 +24,8 @@ from occhio.toy_model import ToyModel
 # %%
 # --- Configuration ---
 DEVICE = "cuda" if torch.cuda.is_available() else "mps"
-<<<<<<< HEAD
 print(f"Using device: {DEVICE}")
 
-=======
-print(f"{DEVICE=}")
->>>>>>> 810431d (xp2)
 SEED = 42
 N_FEATURES = 500
 D_HIDDEN = 64
@@ -40,13 +36,8 @@ BATCH_SIZE = 512
 EVAL_SAMPLES = 2**14
 
 # SAE sweep config
-<<<<<<< HEAD
 L0_VALUES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
 BASE_L1_COEF = 0.3
-=======
-L1_VALUES = [0.15, 0.2, 0.3, 0.4, 0.5, 0.7, 0.9]
-L0_VALUES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
->>>>>>> 810431d (xp2)
 N_DICT = N_FEATURES // 2
 SAE_STEPS = 75_000
 N_SEEDS = 5
@@ -432,6 +423,12 @@ MODEL_COLORS = {
     "Trained AE w/ Unit Norms": "#DC2626",
 }
 
+_LEGEND_NAMES = {
+    "Trained AE": "SAE(Trained AE)",
+    "Trained AE w/ Unit Norms": "SAE(Trained AE w/ Unit Norms)",
+    "Constructed AE": "SAE(Constructed AE)",
+}
+
 _AXIS = dict(
     showgrid=True,
     gridcolor="#E5E7EB",
@@ -534,11 +531,11 @@ fig_main = make_subplots(
     horizontal_spacing=0.13,
 )
 
-_LEG_PAD = "&nbsp;" * 20  # trailing whitespace for legend spacing
+_LEG_PAD = "&nbsp;" * 8  # trailing whitespace for legend spacing
 
 _y_dticks = []
 for ci, (mk, ylabel) in enumerate(_MAIN_METRICS, start=1):
-    for name, res in sweep_results.items():
+    for name, res in reversed(list(sweep_results.items())):
         color = MODEL_COLORS[name]
         x = np.array(res["l0"])
         y = np.array(res[mk])
@@ -552,7 +549,7 @@ for ci, (mk, ylabel) in enumerate(_MAIN_METRICS, start=1):
                 x=x_s.tolist(),
                 y=y_s.tolist(),
                 mode="lines+markers",
-                name=name + _LEG_PAD,
+                name=_LEGEND_NAMES[name] + _LEG_PAD,
                 legendgroup=name,
                 showlegend=(ci == 1),
                 marker=dict(size=10, color=color, line=dict(width=3, color="white")),
@@ -710,7 +707,7 @@ for _mk, _ml in _METRIC_PLOTS.items():
                 x=x_s.tolist(),
                 y=y_s.tolist(),
                 mode="lines+markers",
-                name=name,
+                name=_LEGEND_NAMES[name],
                 marker=dict(size=10, color=color, line=dict(width=1, color="white")),
                 line=dict(color=color, width=2.5),
             )
@@ -771,7 +768,7 @@ for name, res in sweep_results.items():
                 x=tl0_s.tolist(),
                 y=y_s.tolist(),
                 mode="lines+markers",
-                name=name,
+                name=_LEGEND_NAMES[name],
                 legendgroup=name,
                 showlegend=(ri == 2),
                 marker=dict(size=8, color=color, line=dict(width=1, color="white")),
