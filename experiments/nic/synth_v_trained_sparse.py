@@ -24,7 +24,7 @@ MODEL_COLORS = {
     "Trained AE": "#000c7a",
     "Constructed AE": "#fcba03",
     "Trained AE w/ Unit Norms": "#DC2626",
-    "Trained AE w/ Scalar Bias": "#297a58",
+    "Trained AE w/ Shared Bias": "#297a58",
 }
 _THRESH_COLORS = ["#3B82F6", "#F59E0B", "#EF4444"]
 
@@ -1569,34 +1569,33 @@ for col in range(1, 5):
 style_fig(fig)
 fig.show()
 
+
 # %%
 # =============================================================================
-# EXPORT: Static geometric properties figure (no slider) — vector-ready
+# EXPORT: Geometric properties — merged 2x2 layout
 # =============================================================================
-# Delete everything below this line when done exporting.
 
-import os
-
-_export_props = ["bias", "fn", "ti", "mpr", "fd"]
-_export_titles = [
-    "Learned Bias",
-    "Feature Norms",
-    "Total Interference",
-    "Mean Partner Rank",
-    "Feature Dimensionalities",
-]
-_n_export = len(_export_props)
 _x = np.arange(N_FEATURES)
 
-# Use the FINAL epoch snapshot for each animated series
-_final_trained = {p: geom_arrays[p][:, -1] for p in _export_props}
-_final_ablation = {p: geom_arrays_scalar_bias[p][:, -1] for p in _export_props}
-_final_constructed = {p: constructed_props[p] for p in _export_props}
+# Final-epoch snapshots per model
+_base_props = ["fn", "bias", "ti"]
+_finals = {
+    "Trained AE": {p: geom_arrays[p][:, -1] for p in _base_props},
+    "Trained AE w/ Shared Bias": {
+        p: geom_arrays_scalar_bias[p][:, -1] for p in _base_props
+    },
+    "Trained AE w/ Unit Norms": {
+        p: geom_arrays_unit_norm[p][:, -1] for p in _base_props
+    },
+    "Constructed AE": {p: constructed_props[p] for p in _base_props},
+}
+for _d in _finals.values():
+    _d["fn2b"] = _d["fn"] ** 2 + _d["bias"]
 
-# Variable-bandwidth Gaussian smooth (same as make_epoch_slider)
+# Variable-bandwidth Gaussian smooth
 _n_pts = len(_x)
 _xs_sm = np.arange(_n_pts, dtype=float)
-_sigmas_sm = 1.0 + (_n_pts / 4) * (_xs_sm / _n_pts)
+_sigmas_sm = 2.0 + (_n_pts / 3) * (_xs_sm / _n_pts)
 _diffs_sm = _xs_sm[:, None] - _xs_sm[None, :]
 _W_sm = np.exp(-0.5 * (_diffs_sm / _sigmas_sm[:, None]) ** 2)
 _W_sm /= _W_sm.sum(axis=1, keepdims=True)
@@ -1606,188 +1605,187 @@ def _sm(y):
     return _W_sm @ np.asarray(y)
 
 
-_ms = 3
-_opacity = 0.7
-_curve_opacity = 0.388
+_props = ["fn", "fn2b", "bias", "ti"]
 
-_series = [
-    ("Trained AE", _final_trained),
-    ("Trained AE w/ Scalar Bias", _final_ablation),
-    ("Constructed AE", _final_constructed),
+# HTML labels for Kaleido PDF/SVG export (MathJax not available)
+_ytitles_html = [
+    "Embedding Norm (‖<i>W<sub>i</sub></i>‖)",
+    "Reconstruction Norm (‖<i>W<sub>i</sub></i>‖² + <i>b<sub>i</sub></i>)",
+    "Bias (<i>b<sub>i</sub></i>)",
+    "Interference Degree (Σ<sub>i\u2009≠\u2009j</sub> <i>I</i><sub><i>ij</i></sub>)",
+]
+# MathJax labels for interactive HTML view
+_ytitles_tex = [
+    r"$\text{Embedding Norm } (\|W_i\|)$",
+    r"$\text{Reconstruction Norm } (\|W_i\|^2 + b_i)$",
+    r"$\text{Bias } (b_i)$",
+    r"$\text{Interference Degree } (\sum_{i \neq j} I_{ij})$",
+]
+_ytitles = _ytitles_html  # start with HTML for Kaleido export
+_positions = [(1, 1), (1, 2), (2, 1), (2, 2)]
+
+# Legend order (left-to-right) and trace z-order (bottom-to-top)
+_legend_order = {
+    "Trained AE": 0,
+    "Trained AE w/ Shared Bias": 1,
+    "Trained AE w/ Unit Norms": 2,
+    "Constructed AE": 3,
+}
+_zorder = [
+    "Constructed AE",
+    "Trained AE w/ Unit Norms",
+    "Trained AE w/ Shared Bias",
+    "Trained AE",
+]
+# For Embedding Norm: yellow (Constructed) should overlap red (Unit Norms)
+_zorder_fn = [
+    "Trained AE w/ Unit Norms",
+    "Constructed AE",
+    "Trained AE w/ Shared Bias",
+    "Trained AE",
 ]
 
-_sb_props = ["fn", "bias", "ti", "fn2b"]
-_sb_titles = [
-    "Feature Norms",
-    "Learned Bias",
-    "Total Interference",
-    "‖<i>W<sub>i</sub></i>‖² + <i>b<sub>i</sub></i>",
-]
-_n_sb = len(_sb_props)
+fig = make_subplots(rows=2, cols=2, horizontal_spacing=0.16, vertical_spacing=0.14)
 
-# Add ||W_i||^2 + b_i to each series
-for _, _data in _series:
-    _data["fn2b"] = _data["fn"] ** 2 + _data["bias"]
+# Fully-opaque legend-only traces (controls legend appearance + order)
+_nbsp = "\u00a0\u00a0\u00a0"  # 3 non-breaking spaces for legend item spacing
+for _name in _legend_order:
+    fig.add_trace(
+        go.Scatter(
+            x=[None],
+            y=[None],
+            name=_name + _nbsp,
+            legendgroup=_name,
+            legendrank=_legend_order[_name],
+            mode="markers",
+            marker=dict(size=10, color=MODEL_COLORS[_name]),
+        ),
+        row=1,
+        col=1,
+    )
 
-fig_export = make_subplots(rows=1, cols=_n_sb, subplot_titles=_sb_titles)
-
-for i, prop in enumerate(_sb_props):
-    for j, (name, data) in enumerate(_series):
-        color = MODEL_COLORS[name]
-        fig_export.add_trace(
+for _idx, (_prop, _ytitle) in enumerate(zip(_props, _ytitles)):
+    _r, _c = _positions[_idx]
+    _order = _zorder_fn if _prop == "fn" else _zorder
+    for _name in _order:
+        _data = _finals[_name]
+        fig.add_trace(
             go.Scatter(
                 x=_x,
-                y=data[prop],
-                name=name,
-                legendgroup=name,
-                marker=dict(size=_ms, opacity=_opacity, color=color),
+                y=_data[_prop],
+                name=_name,
+                legendgroup=_name,
                 mode="markers",
-                showlegend=(i == 0),
-            ),
-            row=1,
-            col=i + 1,
-        )
-        fig_export.add_trace(
-            go.Scatter(
-                x=_x,
-                y=_sm(data[prop]),
-                legendgroup=name,
-                mode="lines",
-                line=dict(width=2, color=color),
-                opacity=_curve_opacity,
+                marker=dict(size=3, opacity=0.4, color=MODEL_COLORS[_name]),
                 showlegend=False,
             ),
-            row=1,
-            col=i + 1,
+            row=_r,
+            col=_c,
         )
+        fig.add_trace(
+            go.Scatter(
+                x=_x,
+                y=_sm(_data[_prop]),
+                legendgroup=_name,
+                mode="lines",
+                line=dict(width=2.5, color=MODEL_COLORS[_name]),
+                opacity=0.4,
+                showlegend=False,
+            ),
+            row=_r,
+            col=_c,
+        )
+    fig.update_yaxes(title_text=_ytitle, row=_r, col=_c)
 
-# Subplot titles
-for ann in fig_export.layout.annotations:
-    ann.font = dict(size=29)
+_xlabel_html = "Feature Index (<i>f<sub>i</sub></i>)"
+_xlabel_tex = r"$\text{Feature Index } (f_i)$"
 
-# Axes: no per-subplot xlabel
-for i in range(_n_sb):
-    fig_export.update_xaxes(title_text=None, row=1, col=i + 1)
-
-# Shared x-axis label
-fig_export.add_annotation(
-    text="Feature Rank",
+# Centered x-axis label (HTML for Kaleido)
+fig.add_annotation(
+    text=_xlabel_html,
     xref="paper",
     yref="paper",
     x=0.5,
-    y=-0.23,
+    y=-0.12,
     showarrow=False,
-    font=dict(size=29),
+    font=dict(size=24, family="Times New Roman, Times, serif", color="black"),
 )
 
-fig_export.update_layout(
-    height=500,
-    width=max(600, 440 * _n_sb),
-    margin=dict(b=100),
-    showlegend=True,
+# Publication styling (matching sae_l1_sweep_sparse.py)
+_export_axis = dict(
+    showgrid=True,
+    gridcolor="#E5E7EB",
+    showline=True,
+    linecolor="black",
+    linewidth=1.5,
+    ticks="outside",
+    ticklen=8,
+    tickwidth=1.5,
+    tickcolor="black",
+    zeroline=False,
+    tickfont=dict(size=20, color="black"),
+    title_font=dict(size=24, color="black"),
+    mirror=True,
+)
+fig.update_xaxes(**_export_axis, nticks=8, range=[-10, 510], constrain="range")
+
+# Y-axes: default dtick=0.25 with minor gridlines at 0.05
+fig.update_yaxes(
+    **_export_axis,
+    dtick=0.25,
+    minor=dict(ticks="", showgrid=True, gridcolor="#F3F4F6", dtick=0.05),
+    tickangle=-90,
+    title_standoff=5,
 )
 
-style_fig(fig_export)
-fig_export.show()
+# Interference Degree (now row=2, col=2): dtick=5, minor gridlines at 1
+fig.update_yaxes(
+    dtick=5,
+    minor=dict(ticks="", showgrid=True, gridcolor="#F3F4F6", dtick=1),
+    row=2,
+    col=2,
+)
 
-# %%
-# --- Save as vector (PDF + SVG) ---
+fig.update_layout(
+    plot_bgcolor="white",
+    paper_bgcolor="white",
+    font=dict(family="Times New Roman, Times, serif", size=24, color="black"),
+    width=1200,
+    height=1000,
+    margin=dict(l=90, r=40, t=60, b=130),
+    legend=dict(
+        orientation="h",
+        yanchor="bottom",
+        y=1.02,
+        xanchor="center",
+        x=0.5,
+        bgcolor="rgba(0,0,0,0)",
+        borderwidth=0,
+        itemsizing="constant",
+        font=dict(size=20),
+    ),
+)
+
+# --- Save as vector (HTML labels for Kaleido) ---
 _fig_dir = os.path.join(os.path.dirname(__file__), "figures")
 os.makedirs(_fig_dir, exist_ok=True)
+fig.write_image(os.path.join(_fig_dir, "geom_merged.pdf"), engine="kaleido")
+fig.write_image(os.path.join(_fig_dir, "geom_merged.svg"), engine="kaleido")
+print(f"Saved to {_fig_dir}/geom_merged.{{pdf,svg}}")
 
-fig_export.write_image(os.path.join(_fig_dir, "geom_scalar_bias.pdf"), engine="kaleido")
-fig_export.write_image(os.path.join(_fig_dir, "geom_scalar_bias.svg"), engine="kaleido")
-print(f"Saved to {_fig_dir}/geom_scalar_bias.{{pdf,svg}}")
+# Swap to MathJax labels for interactive HTML view
+for _idx, (_prop, _ytitle_tex) in enumerate(zip(_props, _ytitles_tex)):
+    _r, _c = _positions[_idx]
+    fig.update_yaxes(title_text=_ytitle_tex, row=_r, col=_c)
+fig.layout.annotations[0].text = _xlabel_tex
 
-# %%
-# =============================================================================
-# EXPORT: Unit Norms ablation — same layout as scalar bias export
-# =============================================================================
+import plotly.io as pio
+import tempfile
+import webbrowser
 
-_final_unit_norm = {p: geom_arrays_unit_norm[p][:, -1] for p in _export_props}
-
-_series_un = [
-    ("Trained AE", _final_trained),
-    ("Trained AE w/ Unit Norms", _final_unit_norm),
-    ("Constructed AE", _final_constructed),
-]
-
-# Add ||W_i||^2 + b_i to each series
-for _, _data in _series_un:
-    _data["fn2b"] = _data["fn"] ** 2 + _data["bias"]
-
-_un_props = ["fn", "bias", "ti", "fn2b"]
-_un_titles = [
-    "Feature Norms",
-    "Learned Bias",
-    "Total Interference",
-    "‖<i>W<sub>i</sub></i>‖² + <i>b<sub>i</sub></i>",
-]
-_n_un = len(_un_props)
-
-fig_export_un = make_subplots(rows=1, cols=_n_un, subplot_titles=_un_titles)
-
-for i, prop in enumerate(_un_props):
-    for j, (name, data) in enumerate(_series_un):
-        color = MODEL_COLORS[name]
-        fig_export_un.add_trace(
-            go.Scatter(
-                x=_x,
-                y=data[prop],
-                name=name,
-                legendgroup=name,
-                mode="markers",
-                marker=dict(size=_ms, opacity=_opacity, color=color),
-                showlegend=(i == 0),
-            ),
-            row=1,
-            col=i + 1,
-        )
-        fig_export_un.add_trace(
-            go.Scatter(
-                x=_x,
-                y=_sm(data[prop]),
-                legendgroup=name,
-                mode="lines",
-                line=dict(width=2, color=color),
-                opacity=_curve_opacity,
-                showlegend=False,
-            ),
-            row=1,
-            col=i + 1,
-        )
-
-for ann in fig_export_un.layout.annotations:
-    ann.font = dict(size=29)
-for i in range(_n_un):
-    fig_export_un.update_xaxes(title_text=None, row=1, col=i + 1)
-fig_export_un.add_annotation(
-    text="Feature Rank",
-    xref="paper",
-    yref="paper",
-    x=0.5,
-    y=-0.23,
-    showarrow=False,
-    font=dict(size=29),
-)
-fig_export_un.update_layout(
-    height=500,
-    width=max(600, 440 * _n_un),
-    margin=dict(b=100),
-    showlegend=True,
-)
-
-style_fig(fig_export_un)
-fig_export_un.show()
-
-# %%
-# --- Save unit norms as vector ---
-fig_export_un.write_image(
-    os.path.join(_fig_dir, "geom_unit_norms.pdf"), engine="kaleido"
-)
-fig_export_un.write_image(
-    os.path.join(_fig_dir, "geom_unit_norms.svg"), engine="kaleido"
-)
-print(f"Saved to {_fig_dir}/geom_unit_norms.{{pdf,svg}}")
+_html = pio.to_html(fig, include_mathjax="cdn", full_html=True)  # type: ignore[arg-type]
+with tempfile.NamedTemporaryFile("w", suffix=".html", delete=False) as _f:
+    _f.write(_html)
+    webbrowser.open("file://" + _f.name)
 
 # %%
