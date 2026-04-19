@@ -403,6 +403,7 @@ print(f"  Final eval loss: {eval_losses_scalar_bias[-1]:.6f}")
 # %%
 # --- Constructed AE (bias only) ---
 print("Training Constructed AE...")
+
 gen3 = torch.Generator(DEVICE).manual_seed(SEED)
 ae_constructed = SynthAE(
     N_FEATURES,
@@ -430,6 +431,7 @@ pf_constructed = per_feature_constructed[-1]
 print(f"  Final eval loss: {loss_constructed:.6f}")
 
 # %% --- SAE training on both models (SAELens Standard SAE) ---
+
 N_DICT = N_FEATURES // 2
 SAE_BATCH = 1024
 SAE_LR = 3e-4
@@ -1045,7 +1047,8 @@ fig.show()
 _cos_match_data = {}
 for name in names:
     tm_ref = models_dict[name]
-    sae = tm_ref.saes[name].sae
+    sae = sae_results[name]["sae"]
+    tm_ref = sae_results[name]["tm"]
     with torch.no_grad():
         eye = torch.eye(N_FEATURES, device=DEVICE)
         sae_acts = sae.encode(tm_ref.ae.encode(eye)).cpu().numpy()

@@ -53,11 +53,24 @@ px.line(
 ).show()
 
 # %%
+import math
+import numpy as np
+
 W = tm.W.detach().cpu().numpy()  # (n_hidden, n_features)
 
 # Feature positions on the torus: (n_features, 2) angles
 angles = dist.feature_angles.cpu().numpy()  # (n_features, 2)
-grid_size = dist.grid_size
+
+# Pairwise geodesic distances on the flat torus
+diff = np.abs(angles[:, None, :] - angles[None, :, :])
+wrapped = np.minimum(diff, 2 * math.pi - diff)
+torus_dists = np.linalg.norm(wrapped, axis=-1)  # (n_features, n_features)
+
+# For each feature, pick K nearest neighbors on the torus to draw edges to
+K_NEIGHBORS = 4
+np.fill_diagonal(torus_dists, np.inf)
+neighbors = np.argsort(torus_dists, axis=-1)[:, :K_NEIGHBORS]
+edges = {tuple(sorted((i, j))) for i, row in enumerate(neighbors) for j in row}
 
 # %%
 # 3D scatter of feature embeddings, colored by torus position
@@ -81,26 +94,19 @@ fig.add_trace(
     )
 )
 
-# Connect features along the torus grid lines
-for row in range(grid_size):
-    for col in range(grid_size):
-        idx = row * grid_size + col
-        # Horizontal neighbor (same row, next col)
-        idx_h = row * grid_size + (col + 1) % grid_size
-        # Vertical neighbor (next row, same col)
-        idx_v = ((row + 1) % grid_size) * grid_size + col
-        for nb in [idx_h, idx_v]:
-            fig.add_trace(
-                go.Scatter3d(
-                    x=[W[0, idx], W[0, nb]],
-                    y=[W[1, idx], W[1, nb]],
-                    z=[W[2, idx], W[2, nb]],
-                    mode="lines",
-                    line=dict(width=1, color="gray"),
-                    showlegend=False,
-                    hoverinfo="skip",
-                )
-            )
+# Connect each feature to its K nearest neighbors on the torus
+for i, j in edges:
+    fig.add_trace(
+        go.Scatter3d(
+            x=[W[0, i], W[0, j]],
+            y=[W[1, i], W[1, j]],
+            z=[W[2, i], W[2, j]],
+            mode="lines",
+            line=dict(width=1, color="gray"),
+            showlegend=False,
+            hoverinfo="skip",
+        )
+    )
 
 fig.update_layout(
     title="Torus feature embeddings in hidden space",

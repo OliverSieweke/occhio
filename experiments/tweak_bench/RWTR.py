@@ -50,7 +50,7 @@ LAYOUT_DEFAULTS = dict(
 DEVICE = "mps"
 SEED = 42
 N_FEATURES = 1296
-D_HIDDEN = 100
+D_HIDDEN = 200
 N_EPOCHS = 20_000
 BATCH_SIZE = 512
 
@@ -59,7 +59,7 @@ BATCH_SIZE = 512
 
 
 dist = DAGRandomWalkToRoot(
-    n_features=N_FEATURES, p_edge=50 / N_FEATURES, beta=0.8, shrinking=True
+    n_features=N_FEATURES, p_edge=18 / N_FEATURES, beta=0.8, shrinking=True, n_firings=2
 )
 
 # Average L0
@@ -67,6 +67,27 @@ samples = dist.sample(100_000)
 mean_l0 = (samples > 0).float().sum(dim=-1).mean().item()
 std_l0 = (samples > 0).float().sum(dim=-1).std().item()
 print(f"Average L0: {mean_l0:.2f} +/- {std_l0:.2f}")
+
+# %%
+# --- Plot: Sorted feature firing probabilities ---
+firing_probs = (samples > 0).float().mean(dim=0).cpu().numpy()
+# firing_probs_sorted = np.sort(firing_probs)[::-1]
+
+fig_firing = go.Figure()
+fig_firing.add_trace(
+    go.Scatter(
+        x=np.arange(N_FEATURES),
+        y=firing_probs,
+        mode="lines",
+        name="Firing prob",
+    )
+)
+fig_firing.update_xaxes(title_text="Feature rank", **AXIS_STYLE)
+fig_firing.update_yaxes(title_text="P(active)", **AXIS_STYLE)
+fig_firing.update_layout(
+    title="Feature firing probabilities (sorted)", **LAYOUT_DEFAULTS
+)
+fig_firing.show()
 
 # %%
 # --- Train ---
@@ -81,14 +102,52 @@ losses, _ = tm.fit(N_EPOCHS, batch_size=BATCH_SIZE, verbose=True)
 px.line(losses)
 
 # %%
-# --- Plot: Feature Norms and Feature Dimensionalities ---
+# --- Autoencoder F1 (per-feature threshold sweep) ---
+with torch.no_grad():
+    ae_test_x = dist.sample(10_000).to(DEVICE)
+    ae_test_xhat = tm.ae.decode(tm.ae.encode(ae_test_x))
+
+    thresholds = torch.linspace(0, 0.5, 50, device=DEVICE)  # (T,)
+    gt_active_ae = ae_test_x > 0  # (N, F)
+
+    # (T, N, F): pred active per (threshold, sample, feature)
+    pred_active_t = ae_test_xhat.unsqueeze(0) > thresholds.view(-1, 1, 1)
+
+    tp_t = (gt_active_ae.unsqueeze(0) & pred_active_t).float().sum(dim=1)  # (T, F)
+    fp_t = (~gt_active_ae.unsqueeze(0) & pred_active_t).float().sum(dim=1)
+    fn_t = (gt_active_ae.unsqueeze(0) & ~pred_active_t).float().sum(dim=1)
+
+    prec_t = tp_t / (tp_t + fp_t + 1e-8)
+    rec_t = tp_t / (tp_t + fn_t + 1e-8)
+    f1_t = 2 * prec_t * rec_t / (prec_t + rec_t + 1e-8)  # (T, F)
+
+    # Best threshold per feature (argmax over T axis)
+    f1_per_feat, best_t_idx = f1_t.max(dim=0)  # (F,), (F,)
+    best_thresholds = thresholds[best_t_idx]  # (F,)
+    f1_macro = f1_per_feat.mean().item()
+
+    feat_idx = torch.arange(ae_test_x.shape[1], device=DEVICE)
+    prec_macro = prec_t[best_t_idx, feat_idx].mean().item()
+    rec_macro = rec_t[best_t_idx, feat_idx].mean().item()
+
+print(
+    f"[AE round-trip, per-feature thresholds] "
+    f"prec={prec_macro:.4f}  rec={rec_macro:.4f}  "
+    f"F1={f1_macro:.4f}"
+    f"\nthreshold stats: mean={best_thresholds.mean():.3f}  "
+    f"min={best_thresholds.min():.3f}  max={best_thresholds.max():.3f}"
+)
+
+# %%
+# --- Plot: Feature Norms, Dimensionalities, and Bias ---
 fn = tm.feature_norms.detach().cpu().numpy()
 fd = tm.feature_dimensionalities.detach().cpu().numpy()
+bias = tm.ae.get_parameter("b").detach().cpu().numpy()
 
 fig = make_subplots(
     rows=1,
-    cols=2,
-    subplot_titles=["Feature Norms", "Feature Dimensionalities"],
+    cols=3,
+    subplot_titles=["Feature Norms", "Feature Dimensionalities", "Bias"],
 )
 
 fig.add_trace(
@@ -106,17 +165,62 @@ fig.add_trace(
     row=1,
     col=2,
 )
+fig.add_trace(
+    go.Scatter(x=np.arange(N_FEATURES), y=bias, mode="lines", name="Bias"),
+    row=1,
+    col=3,
+)
 
 fig.update_xaxes(title_text="Feature index", row=1, col=1)
 fig.update_xaxes(title_text="Feature index", row=1, col=2)
+fig.update_xaxes(title_text="Feature index", row=1, col=3)
 fig.update_yaxes(title_text="‖w‖", row=1, col=1)
 fig.update_yaxes(title_text="Dimensionality", row=1, col=2)
+fig.update_yaxes(title_text="b", row=1, col=3)
 fig.update_layout(
     title=f"TiedLinearRelu — CorrelatedPairs (N={N_FEATURES}, D={D_HIDDEN})",
     height=400,
-    width=900,
+    width=1300,
 )
 fig.show()
+
+
+# %%
+# --- Feature-collapse check ---
+# Normalize columns of W and inspect the Gram matrix. Off-diagonal entries
+# near ±1 indicate two features that have collapsed onto the same direction.
+COLLAPSE_THRESH = 0.8
+with torch.no_grad():
+    W_n = tm.W_normalized_features  # (D_HIDDEN, N_FEATURES)
+    gram = (W_n.T @ W_n).cpu()
+    i_idx, j_idx = torch.triu_indices(N_FEATURES, N_FEATURES, offset=1)
+    pair_sims = gram[i_idx, j_idx]
+    max_abs, max_k = pair_sims.max(dim=0)
+    collapsed_mask = pair_sims >= COLLAPSE_THRESH
+
+n_collapsed = int(collapsed_mask.sum().item())
+print(
+    f"[collapse] max|cos|={max_abs.item():.4f} "
+    f"(f{int(i_idx[max_k])}–f{int(j_idx[max_k])} = {pair_sims[max_k].item():+.4f})  "
+    f"pairs ≥ {COLLAPSE_THRESH}: {n_collapsed}"
+)
+if n_collapsed > 0:
+    top_k = collapsed_mask.nonzero(as_tuple=True)[0][:20]
+    for k in top_k:
+        k = int(k)
+        print(f"  f{int(i_idx[k])}–f{int(j_idx[k])}: cos={pair_sims[k].item():+.4f}")
+
+fig_gram = px.histogram(
+    x=pair_sims.numpy(),
+    nbins=120,
+    labels={"x": "cos(w_i, w_j)"},
+    title=f"Pairwise cosine similarity of W columns (max(·)={max_abs.item():.3f})",
+)
+fig_gram.add_vline(x=COLLAPSE_THRESH, line_color="red", line_dash="dash")
+fig_gram.update_layout(**LAYOUT_DEFAULTS)
+fig_gram.update_xaxes(**AXIS_STYLE)
+fig_gram.update_yaxes(type="log", **AXIS_STYLE)
+fig_gram.show()
 
 
 # %%

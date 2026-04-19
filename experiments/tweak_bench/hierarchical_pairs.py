@@ -11,7 +11,7 @@ from plotly.subplots import make_subplots
 
 from occhio.autoencoder import TiedLinearRelu
 from occhio.distributions.correlated import HierarchicalPairs
-from occhio.toy_model import ToyModel
+from occhio.toy_model import SAEEntry, ToyModel
 
 # --- Paper-quality plot defaults ---
 FONT = dict(family="Times New Roman, serif", size=24, color="#333333")
@@ -49,16 +49,18 @@ LAYOUT_DEFAULTS = dict(
 DEVICE = "mps"
 SEED = 42
 N_FEATURES = 1296
-D_HIDDEN = 100
-N_EPOCHS = 25_000
+D_HIDDEN = 200
+N_EPOCHS = 50_000
 BATCH_SIZE = 512
 
 # %%
 # --- Distribution ---
 np.random.seed(8)
 
-high = 0.45
-low = 1.3 / N_FEATURES
+high = 0.6
+low = 2.39 / N_FEATURES
+# high = 0.5
+# low = 1.2 / N_FEATURES
 alpha = np.log(high / low) / np.log(N_FEATURES)
 print(f"{alpha=}")
 firing_probs = [high / (i + 1) ** alpha for i in range(N_FEATURES)]
@@ -84,6 +86,74 @@ losses, _ = tm.fit(N_EPOCHS, batch_size=BATCH_SIZE, verbose=True)
 # %%
 # --- Plot losses ---
 px.line(losses)
+
+# %%
+# --- Autoencoder F1 (does the AE round-trip preserve feature activity?) ---
+with torch.no_grad():
+    ae_test_x = dist.sample(100_000).to(DEVICE)
+    ae_test_xhat = tm.ae.decode(tm.ae.encode(ae_test_x))
+
+    gt_active_ae = ae_test_x > 0
+    thresholds = torch.linspace(0, 1, 101, device=DEVICE)
+
+    best_f1_micro_ae = -1.0
+    best_threshold = 0.0
+    n_feats = ae_test_x.shape[1]
+    best_prec_ae = torch.zeros(n_feats, device=DEVICE)
+    best_rec_ae = torch.zeros(n_feats, device=DEVICE)
+    best_f1_ae = torch.zeros(n_feats, device=DEVICE)
+    best_prec_micro_ae = best_rec_micro_ae = 0.0
+
+    for t in thresholds:
+        pred_active = ae_test_xhat > t
+
+        tp = (gt_active_ae & pred_active).float().sum(dim=0)
+        fp = (~gt_active_ae & pred_active).float().sum(dim=0)
+        fn = (gt_active_ae & ~pred_active).float().sum(dim=0)
+
+        prec = tp / (tp + fp + 1e-8)
+        rec = tp / (tp + fn + 1e-8)
+        f1 = 2 * prec * rec / (prec + rec + 1e-8)
+
+        tp_tot = tp.sum()
+        fp_tot = fp.sum()
+        fn_tot = fn.sum()
+        prec_micro = (tp_tot / (tp_tot + fp_tot + 1e-8)).item()
+        rec_micro = (tp_tot / (tp_tot + fn_tot + 1e-8)).item()
+        f1_micro = 2 * prec_micro * rec_micro / (prec_micro + rec_micro + 1e-8)
+
+        if f1_micro > best_f1_micro_ae:
+            best_f1_micro_ae = f1_micro
+            best_threshold = t.item()
+            best_prec_ae = prec
+            best_rec_ae = rec
+            best_f1_ae = f1
+            best_prec_micro_ae = prec_micro
+            best_rec_micro_ae = rec_micro
+
+    prec_ae = best_prec_ae
+    rec_ae = best_rec_ae
+    f1_ae = best_f1_ae
+    f1_micro_ae = best_f1_micro_ae
+
+print(
+    f"[AE round-trip] threshold={best_threshold:.2f}  "
+    f"prec={prec_ae.mean():.4f}  rec={rec_ae.mean():.4f}  "
+    f"F1(macro)={f1_ae.mean().item():.4f}  F1(micro)={f1_micro_ae:.4f}"
+)
+
+print(f1_ae[: N_FEATURES // 2].mean().item())
+# %%
+# --- Plot: Per-feature AE F1 score ---
+f1_ae_np = f1_ae.cpu().numpy()
+fig_ae_f1 = go.Figure()
+fig_ae_f1.add_trace(
+    go.Scatter(x=np.arange(N_FEATURES), y=f1_ae_np, mode="lines", name="F1")
+)
+fig_ae_f1.update_xaxes(title_text="Feature index", **AXIS_STYLE)
+fig_ae_f1.update_yaxes(title_text="F1 score", range=[0, 1.05], **AXIS_STYLE)
+fig_ae_f1.update_layout(title="Per-feature AE round-trip F1", **LAYOUT_DEFAULTS)
+fig_ae_f1.show()
 
 # %%
 # --- Plot: Feature Norms and Feature Dimensionalities ---
@@ -122,6 +192,44 @@ fig.update_layout(
     width=900,
 )
 fig.show()
+
+
+# %%
+# --- Feature-collapse check ---
+# Normalize columns of W and inspect the Gram matrix. Off-diagonal entries
+# near ±1 indicate two features that have collapsed onto the same direction.
+COLLAPSE_THRESH = 0.8
+with torch.no_grad():
+    W_n = tm.W_normalized_features  # (D_HIDDEN, N_FEATURES)
+    gram = (W_n.T @ W_n).cpu()
+    i_idx, j_idx = torch.triu_indices(N_FEATURES, N_FEATURES, offset=1)
+    pair_sims = gram[i_idx, j_idx]
+    max_abs, max_k = pair_sims.max(dim=0)
+    collapsed_mask = pair_sims >= COLLAPSE_THRESH
+
+n_collapsed = int(collapsed_mask.sum().item())
+print(
+    f"[collapse] max|cos|={max_abs.item():.4f} "
+    f"(f{int(i_idx[max_k])}–f{int(j_idx[max_k])} = {pair_sims[max_k].item():+.4f})  "
+    f"pairs ≥ {COLLAPSE_THRESH}: {n_collapsed}"
+)
+if n_collapsed > 0:
+    top_k = collapsed_mask.nonzero(as_tuple=True)[0][:20]
+    for k in top_k:
+        k = int(k)
+        print(f"  f{int(i_idx[k])}–f{int(j_idx[k])}: cos={pair_sims[k].item():+.4f}")
+
+fig_gram = px.histogram(
+    x=pair_sims.numpy(),
+    nbins=120,
+    labels={"x": "cos(w_i, w_j)"},
+    title=f"Pairwise cosine similarity of W columns (max(·)={max_abs.item():.3f})",
+)
+fig_gram.add_vline(x=COLLAPSE_THRESH, line_color="red", line_dash="dash")
+fig_gram.update_layout(**LAYOUT_DEFAULTS)
+fig_gram.update_xaxes(**AXIS_STYLE)
+fig_gram.update_yaxes(type="log", **AXIS_STYLE)
+fig_gram.show()
 
 
 # %%
@@ -181,16 +289,16 @@ from scipy.optimize import linear_sum_assignment
 from occhio.sae.sae import SAESimple
 
 N_DICT = N_FEATURES // 2
-SAE_STEPS = 15_000
+SAE_STEPS = 200_000
 SAE_BATCH = 1024
 SAE_LR = 3e-4
-SAE_L1 = 0.3
+SAE_L1 = 0.25
 
 sae_gen = torch.Generator().manual_seed(4)
 
-sae = SAESimple(n_latent=D_HIDDEN, n_dict=N_DICT, l1_coef=SAE_L1, device=DEVICE).to(
-    DEVICE
-)
+sae = SAESimple(
+    n_latent=D_HIDDEN, n_dict=N_DICT, l1_coef=SAE_L1, ortho_coef=0.1, device=DEVICE
+).to(DEVICE)
 
 
 def data_fn(n: int) -> torch.Tensor:
@@ -198,11 +306,74 @@ def data_fn(n: int) -> torch.Tensor:
     return tm.ae.encode(x)
 
 
-sae_losses = sae.train_sae(
-    data_fn=data_fn, n_steps=SAE_STEPS, batch_size=SAE_BATCH, lr=SAE_LR
+HOOK_BATCH = 10_000
+HOOK_FREQ = 1000
+
+
+def loss_hook(d):
+    sae = d["sae"]
+    sae.eval()
+    with torch.no_grad():
+        x = dist.sample(HOOK_BATCH).to(DEVICE)
+        h = tm.ae.encode(x)
+        x_hat, z = sae.forward(h)
+        val = sae.loss(h, x_hat, z).item()
+    sae.train()
+    return (d["step"], val)
+
+
+def f1_hook(d):
+    sae = d["sae"]
+    sae.eval()
+    with torch.no_grad():
+        x = dist.sample(HOOK_BATCH).to(DEVICE)
+        h = tm.ae.encode(x)
+        z = sae.encode(h)
+
+        D_h = tm.W.detach()
+        W_dec_t = sae.W_dec.detach().T
+        D_norm = D_h / D_h.norm(dim=0, keepdim=True).clamp(min=1e-8)
+        W_norm = W_dec_t / W_dec_t.norm(dim=0, keepdim=True).clamp(min=1e-8)
+        cos_sim = (D_norm.T @ W_norm).cpu().numpy()
+        feat_idx, dict_idx = linear_sum_assignment(-cos_sim)
+
+        gt = x[:, feat_idx] > 0
+        pred = z[:, dict_idx] > 0
+        tp = (gt & pred).float().sum(dim=0)
+        fp = (~gt & pred).float().sum(dim=0)
+        fn_ = (gt & ~pred).float().sum(dim=0)
+        prec = tp / (tp + fp + 1e-8)
+        rec = tp / (tp + fn_ + 1e-8)
+        val = (2 * prec * rec / (prec + rec + 1e-8)).mean().item()
+    sae.train()
+    return (d["step"], val)
+
+
+loss_history, f1_history = sae.train_sae(
+    data_fn=data_fn,
+    n_steps=SAE_STEPS,
+    batch_size=SAE_BATCH,
+    lr=SAE_LR,
+    hooks=[loss_hook, f1_hook],
+    hook_freq=HOOK_FREQ,
 )
 # %%
-px.line(sae_losses)
+loss_steps, loss_values = zip(*loss_history)
+f1_steps, f1_values = zip(*f1_history)
+fig_sae_curves = make_subplots(specs=[[{"secondary_y": True}]])
+fig_sae_curves.add_trace(
+    go.Scatter(x=loss_steps, y=loss_values, mode="lines+markers", name="loss"),
+    secondary_y=False,
+)
+fig_sae_curves.add_trace(
+    go.Scatter(x=f1_steps, y=f1_values, mode="lines+markers", name="F1"),
+    secondary_y=True,
+)
+fig_sae_curves.update_xaxes(title_text="training step", **AXIS_STYLE)
+fig_sae_curves.update_yaxes(title_text="loss", secondary_y=False, **AXIS_STYLE)
+fig_sae_curves.update_yaxes(title_text="F1", secondary_y=True, **AXIS_STYLE)
+fig_sae_curves.update_layout(title="SAE training curves", **LAYOUT_DEFAULTS)
+fig_sae_curves.show()
 
 # %%
 # --- SAE Metrics ---
@@ -214,6 +385,8 @@ with torch.no_grad():
 
     # L0
     l0 = (test_z > 0).float().sum(dim=-1).mean().item()
+    # Dead latents: never fired across the test batch
+    dead = int((~(test_z > 0).any(dim=0)).sum().item())
 
     # R² (explained variance)
     total_var = test_hidden.var(dim=0).sum().item()
@@ -258,7 +431,9 @@ with torch.no_grad():
     total_sum = sae_acts_matched.sum()
     purity = diag_sum / total_sum if total_sum > 0 else 0.0
 print(f"L1={SAE_L1}, batch={SAE_BATCH}, LR={SAE_LR}")
-print(f"L0={l0:.1f}  MCC={mcc:.4f}  F1={f1:.4f}  R²={r2:.4f}  Purity={purity:.4f}")
+print(
+    f"L0={l0:.1f}  MCC={mcc:.4f}  F1={f1:.4f}  R²={r2:.4f}  EP={purity:.4f}  DL={dead}"
+)
 
 # %%
 # --- Plot: SAE one-hot activations (MCC matched) ---
@@ -307,4 +482,459 @@ print(f"\n=== Fire f{PROBE_F0} + f{PROBE_F1} ===")
 print(f"  SAE latent d{da} (matched f{PROBE_F0}): {z_fab[0, da].item():.4f}")
 print(f"  SAE latent d{db} (matched f{PROBE_F1}): {z_fab[0, db].item():.4f}")
 
+# %%
+# --- Matryoshka SAE Training (via SAELens) ---
+from sae_lens import (
+    MatryoshkaBatchTopKTrainingSAE,
+    MatryoshkaBatchTopKTrainingSAEConfig,
+)
+
+# Nested cumulative widths; final width must equal d_sae.
+MATRYOSHKA_WIDTHS = [N_DICT // 2, N_DICT]
+MATRYOSHKA_K = 5
+MATRYOSHKA_TRAIN_SAMPLES = 4 * SAE_STEPS * SAE_BATCH
+
+print("widths:", MATRYOSHKA_WIDTHS)
+print("k:", MATRYOSHKA_K)
+print("samples", MATRYOSHKA_TRAIN_SAMPLES)
+
+# Build on CPU first: SAELens registers `topk_threshold` as float64, which MPS
+# rejects. We downcast that buffer to float32 before moving to the target device.
+matryoshka_cfg = MatryoshkaBatchTopKTrainingSAEConfig(
+    d_in=D_HIDDEN,
+    d_sae=N_DICT,
+    matryoshka_widths=MATRYOSHKA_WIDTHS,
+    k=MATRYOSHKA_K,
+    device="cpu",
+    use_matryoshka_aux_loss=False,
+)
+matryoshka_sae = MatryoshkaBatchTopKTrainingSAE(matryoshka_cfg)
+matryoshka_sae.topk_threshold = matryoshka_sae.topk_threshold.to(torch.float32)
+matryoshka_sae.to(DEVICE)
+
+# --- Snapshot callback: capture loss + F1 every ~2000 steps ---
+SNAPSHOT_EVERY = 2000
+N_SNAPSHOTS = max(1, SAE_STEPS // SNAPSHOT_EVERY)
+matryoshka_history: list[dict] = []
+
+
+def matryoshka_snapshot(trainer):
+    """Compute recon loss, L0, MCC, F1, R² on a fresh batch at each snapshot."""
+    sae = trainer.sae
+    sae.eval()
+    with torch.no_grad():
+        x_snap = dist.sample(20_000).to(DEVICE)
+        h_snap = tm.ae.encode(x_snap)
+        z_snap = sae.encode(h_snap)
+        recon_snap = sae.decode(z_snap)
+
+        recon_loss = (h_snap - recon_snap).pow(2).sum(dim=-1).mean().item()
+        l0_snap = (z_snap > 0).float().sum(dim=-1).mean().item()
+        # Dead latents: never fired across the snapshot batch
+        dead_snap = int((~(z_snap > 0).any(dim=0)).sum().item())
+        total_var_snap = h_snap.var(dim=0).sum().item()
+        residual_var_snap = (h_snap - recon_snap).var(dim=0).sum().item()
+        r2_snap = 1 - residual_var_snap / total_var_snap
+
+        D_snap = tm.W.detach()
+        W_dec_t_snap = sae.W_dec.detach().T
+        D_norm_snap = D_snap / D_snap.norm(dim=0, keepdim=True).clamp(min=1e-8)
+        W_norm_snap = W_dec_t_snap / W_dec_t_snap.norm(dim=0, keepdim=True).clamp(
+            min=1e-8
+        )
+        cos_sim_snap = (D_norm_snap.T @ W_norm_snap).cpu().numpy()
+        feat_idx_snap, dict_idx_snap = linear_sum_assignment(-cos_sim_snap)
+        mcc_snap = float(cos_sim_snap[feat_idx_snap, dict_idx_snap].mean())
+
+        gt_snap = x_snap[:, feat_idx_snap] > 0
+        pred_snap = z_snap[:, dict_idx_snap] > 0
+        tp_snap = (gt_snap & pred_snap).float().sum(dim=0)
+        fp_snap = (~gt_snap & pred_snap).float().sum(dim=0)
+        fn_snap = (gt_snap & ~pred_snap).float().sum(dim=0)
+        prec_snap = tp_snap / (tp_snap + fp_snap + 1e-8)
+        rec_snap = tp_snap / (tp_snap + fn_snap + 1e-8)
+        f1_snap = (
+            (2 * prec_snap * rec_snap / (prec_snap + rec_snap + 1e-8)).mean().item()
+        )
+
+    matryoshka_history.append(
+        {
+            "step": trainer.n_training_steps,
+            "recon_loss": recon_loss,
+            "l0": l0_snap,
+            "r2": r2_snap,
+            "mcc": mcc_snap,
+            "f1": f1_snap,
+            "dead": dead_snap,
+        }
+    )
+    sae.train()
+    print(
+        f"  [snap step={trainer.n_training_steps}] "
+        f"loss={recon_loss:.4f} L0={l0_snap:.1f} "
+        f"MCC={mcc_snap:.3f} F1={f1_snap:.3f} R²={r2_snap:.3f} "
+        f"DL={dead_snap}"
+    )
+
+
+tm.train_saes(
+    [SAEEntry(sae=matryoshka_sae, type="Matryoshka", label="matryoshka")],
+    training_samples=MATRYOSHKA_TRAIN_SAMPLES,
+    batch_size=SAE_BATCH,
+    lr=SAE_LR,
+    n_snapshots=N_SNAPSHOTS,
+    snapshot_fn=matryoshka_snapshot,
+    verbose=False,
+)
+# %%
+tm.evaluate_saes(["matryoshka"], num_samples=30000, verbose=True)
+
+# --- Plot Matryoshka training curves (recon loss + F1/MCC/R² over time) ---
+hist_steps = [h["step"] for h in matryoshka_history]
+hist_loss = [h["recon_loss"] for h in matryoshka_history]
+hist_f1 = [h["f1"] for h in matryoshka_history]
+hist_mcc = [h["mcc"] for h in matryoshka_history]
+hist_r2 = [h["r2"] for h in matryoshka_history]
+
+fig_mh = make_subplots(specs=[[{"secondary_y": True}]])
+fig_mh.add_trace(
+    go.Scatter(x=hist_steps, y=hist_loss, mode="lines+markers", name="recon loss"),
+    secondary_y=False,
+)
+fig_mh.add_trace(
+    go.Scatter(x=hist_steps, y=hist_f1, mode="lines+markers", name="F1"),
+    secondary_y=True,
+)
+fig_mh.add_trace(
+    go.Scatter(x=hist_steps, y=hist_mcc, mode="lines+markers", name="MCC"),
+    secondary_y=True,
+)
+fig_mh.add_trace(
+    go.Scatter(x=hist_steps, y=hist_r2, mode="lines+markers", name="R²"),
+    secondary_y=True,
+)
+fig_mh.update_xaxes(title_text="training step", **AXIS_STYLE)
+fig_mh.update_yaxes(title_text="recon loss", secondary_y=False, **AXIS_STYLE)
+fig_mh.update_yaxes(title_text="F1 / MCC / R²", secondary_y=True, **AXIS_STYLE)
+fig_mh.update_layout(title="Matryoshka training curves", **LAYOUT_DEFAULTS)
+fig_mh.show()
+
+print(f"Matryoshka widths={MATRYOSHKA_WIDTHS}, k={MATRYOSHKA_K}")
+print(f"F1 = {tm.saes_f1_score['matryoshka']:.4f}")
+print(f"MCC = {tm.saes_mcc['matryoshka']:.4f}")
+print(f"L0 = {tm.saes_l0['matryoshka']:.2f}")
+print(f"R² = {tm.saes_explained_variance['matryoshka']:.4f}")
+
+# %%
+# --- Matryoshka SAE Metrics (via JumpReLU inference conversion) ---
+# SAELens converts BatchTopK / Matryoshka training SAEs into a JumpReLU SAE
+# for inference: the learned `topk_threshold` scalar is broadcast to a
+# per-feature `threshold` buffer, and gating becomes a stateless elementwise
+# JumpReLU. This removes BatchTopK's batch-size dependence entirely, so we
+# can encode arbitrary N_TEST in one shot without any chunking.
+import tempfile  # noqa: E402
+
+
+def to_jumprelu_inference_sae(training_sae, device):
+    """Round-trip a (Matryoshka)BatchTopK training SAE through disk to get
+    its JumpReLU inference form."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        training_sae.save_inference_model(tmpdir)
+        return SAE.load_from_disk(tmpdir, device=device)
+
+
+matryoshka_inf = to_jumprelu_inference_sae(matryoshka_sae, DEVICE)
+print(f"Matryoshka inference SAE arch: {matryoshka_inf.cfg.architecture()}")
+
+N_TEST = 100_000
+
+with torch.no_grad():
+    test_x_m = dist.sample(N_TEST).to(DEVICE)
+    test_hidden_m = tm.ae.encode(test_x_m)
+
+    # Single-shot encode/decode — JumpReLU is stateless w.r.t. batch size.
+    test_z_m = matryoshka_inf.encode(test_hidden_m)
+    test_recon_m = matryoshka_inf.decode(test_z_m)
+
+    # L0
+    l0_m = (test_z_m > 0).float().sum(dim=-1).mean().item()
+    # Dead latents: never fired across the test batch
+    dead_m = int((~(test_z_m > 0).any(dim=0)).sum().item())
+
+    # R² (explained variance)
+    total_var_m = test_hidden_m.var(dim=0).sum().item()
+    residual_var_m = (test_hidden_m - test_recon_m).var(dim=0).sum().item()
+    r2_m = 1 - residual_var_m / total_var_m
+
+    # MCC matching (cosine similarity, NO abs)
+    D_m = tm.W.detach()  # (D_HIDDEN, N_FEATURES)
+    W_dec_t_m = matryoshka_inf.W_dec.detach().T  # (D_HIDDEN, N_DICT)
+    D_norm_m = D_m / D_m.norm(dim=0, keepdim=True).clamp(min=1e-8)
+    W_norm_m = W_dec_t_m / W_dec_t_m.norm(dim=0, keepdim=True).clamp(min=1e-8)
+    cos_sim_m = (D_norm_m.T @ W_norm_m).cpu().numpy()  # (N_FEATURES, N_DICT)
+
+    feat_idx_m, dict_idx_m = linear_sum_assignment(-cos_sim_m)
+    mcc_m = float(cos_sim_m[feat_idx_m, dict_idx_m].mean())
+
+    # F1 (detection) — macro
+    gt_active_m = test_x_m[:, feat_idx_m] > 0
+    pred_active_m = test_z_m[:, dict_idx_m] > 0
+    tp_m = (gt_active_m & pred_active_m).float().sum(dim=0)
+    fp_m = (~gt_active_m & pred_active_m).float().sum(dim=0)
+    fn_m = (gt_active_m & ~pred_active_m).float().sum(dim=0)
+    prec_m = tp_m / (tp_m + fp_m + 1e-8)
+    rec_m = tp_m / (tp_m + fn_m + 1e-8)
+    f1_m = (2 * prec_m * rec_m / (prec_m + rec_m + 1e-8)).mean().item()
+
+    # F1 (detection) — micro (less sensitive to per-feature noise)
+    tp_tot = tp_m.sum()
+    fp_tot = fp_m.sum()
+    fn_tot = fn_m.sum()
+    prec_micro_m = (tp_tot / (tp_tot + fp_tot + 1e-8)).item()
+    rec_micro_m = (tp_tot / (tp_tot + fn_tot + 1e-8)).item()
+    f1_micro_m = 2 * prec_micro_m * rec_micro_m / (prec_micro_m + rec_micro_m + 1e-8)
+
+print(
+    f"[Matryoshka, JumpReLU inference] N_TEST={N_TEST} "
+    f"prec={prec_m.mean():.4f} rec={rec_m.mean():.4f}"
+)
+print(
+    f"L0={l0_m:.1f}  MCC={mcc_m:.4f}  F1(macro)={f1_m:.4f}  "
+    f"F1(micro)={f1_micro_m:.4f}  R²={r2_m:.4f}  DL={dead_m}"
+)
+
+# %%
+# --- Matryoshka Absorption Test ---
+fa_match_pos_m = int((feat_idx_m == PROBE_F0).nonzero()[0][0])
+fb_match_pos_m = int((feat_idx_m == PROBE_F1).nonzero()[0][0])
+da_m = dict_idx_m[fa_match_pos_m]
+db_m = dict_idx_m[fb_match_pos_m]
+
+print(f"[Matryoshka] f{PROBE_F0} → latent d{da_m}   |   f{PROBE_F1} → latent d{db_m}")
+
+with torch.no_grad():
+    x_fa_m = torch.zeros(1, N_FEATURES, device=DEVICE)
+    x_fa_m[0, PROBE_F0] = 1.0
+    z_fa_m = matryoshka_inf.encode(tm.ae.encode(x_fa_m))
+
+    x_fab_m = torch.zeros(1, N_FEATURES, device=DEVICE)
+    x_fab_m[0, PROBE_F0] = 1.0
+    x_fab_m[0, PROBE_F1] = 1.0
+    z_fab_m = matryoshka_inf.encode(tm.ae.encode(x_fab_m))
+
+print(f"\n=== Fire f{PROBE_F0} only ===")
+print(
+    f"  Matryoshka latent d{da_m} (matched f{PROBE_F0}): {z_fa_m[0, da_m].item():.4f}"
+)
+print(
+    f"  Matryoshka latent d{db_m} (matched f{PROBE_F1}): {z_fa_m[0, db_m].item():.4f}"
+)
+
+print(f"\n=== Fire f{PROBE_F0} + f{PROBE_F1} ===")
+print(
+    f"  Matryoshka latent d{da_m} (matched f{PROBE_F0}): {z_fab_m[0, da_m].item():.4f}"
+)
+print(
+    f"  Matryoshka latent d{db_m} (matched f{PROBE_F1}): {z_fab_m[0, db_m].item():.4f}"
+)
+
+# %%
+# --- BatchTopK SAE Training (via SAELens) ---
+from sae_lens import (
+    BatchTopKTrainingSAE,
+    BatchTopKTrainingSAEConfig,
+)
+
+BATCHTOPK_K = 3
+BATCHTOPK_TRAIN_SAMPLES = 4 * SAE_STEPS * SAE_BATCH
+print("k:", BATCHTOPK_K)
+print("samples", BATCHTOPK_TRAIN_SAMPLES)
+
+# Build on CPU first: SAELens registers `topk_threshold` as float64, which MPS
+# rejects. We downcast that buffer to float32 before moving to the target device.
+batchtopk_cfg = BatchTopKTrainingSAEConfig(
+    d_in=D_HIDDEN,
+    d_sae=N_DICT,
+    k=BATCHTOPK_K,
+    device="cpu",
+)
+batchtopk_sae = BatchTopKTrainingSAE(batchtopk_cfg)
+batchtopk_sae.topk_threshold = batchtopk_sae.topk_threshold.to(torch.float32)
+batchtopk_sae.to(DEVICE)
+
+# --- Snapshot callback: capture loss + F1 every ~SNAPSHOT_EVERY steps ---
+N_SNAPSHOTS_B = max(1, SAE_STEPS // SNAPSHOT_EVERY)
+batchtopk_history: list[dict] = []
+
+
+def batchtopk_snapshot(trainer):
+    """Compute recon loss, L0, MCC, F1, R² on a fresh batch at each snapshot."""
+    sae = trainer.sae
+    sae.eval()
+    with torch.no_grad():
+        x_snap = dist.sample(20_000).to(DEVICE)
+        h_snap = tm.ae.encode(x_snap)
+        z_snap = sae.encode(h_snap)
+        recon_snap = sae.decode(z_snap)
+
+        recon_loss = (h_snap - recon_snap).pow(2).sum(dim=-1).mean().item()
+        l0_snap = (z_snap > 0).float().sum(dim=-1).mean().item()
+        # Dead latents: never fired across the snapshot batch
+        dead_snap = int((~(z_snap > 0).any(dim=0)).sum().item())
+        total_var_snap = h_snap.var(dim=0).sum().item()
+        residual_var_snap = (h_snap - recon_snap).var(dim=0).sum().item()
+        r2_snap = 1 - residual_var_snap / total_var_snap
+
+        D_snap = tm.W.detach()
+        W_dec_t_snap = sae.W_dec.detach().T
+        D_norm_snap = D_snap / D_snap.norm(dim=0, keepdim=True).clamp(min=1e-8)
+        W_norm_snap = W_dec_t_snap / W_dec_t_snap.norm(dim=0, keepdim=True).clamp(
+            min=1e-8
+        )
+        cos_sim_snap = (D_norm_snap.T @ W_norm_snap).cpu().numpy()
+        feat_idx_snap, dict_idx_snap = linear_sum_assignment(-cos_sim_snap)
+        mcc_snap = float(cos_sim_snap[feat_idx_snap, dict_idx_snap].mean())
+
+        gt_snap = x_snap[:, feat_idx_snap] > 0
+        pred_snap = z_snap[:, dict_idx_snap] > 0
+        tp_snap = (gt_snap & pred_snap).float().sum(dim=0)
+        fp_snap = (~gt_snap & pred_snap).float().sum(dim=0)
+        fn_snap = (gt_snap & ~pred_snap).float().sum(dim=0)
+        prec_snap = tp_snap / (tp_snap + fp_snap + 1e-8)
+        rec_snap = tp_snap / (tp_snap + fn_snap + 1e-8)
+        f1_snap = (
+            (2 * prec_snap * rec_snap / (prec_snap + rec_snap + 1e-8)).mean().item()
+        )
+
+    batchtopk_history.append(
+        {
+            "step": trainer.n_training_steps,
+            "recon_loss": recon_loss,
+            "l0": l0_snap,
+            "r2": r2_snap,
+            "mcc": mcc_snap,
+            "f1": f1_snap,
+            "dead": dead_snap,
+        }
+    )
+    sae.train()
+    print(
+        f"  [snap step={trainer.n_training_steps}] "
+        f"loss={recon_loss:.4f} L0={l0_snap:.1f} "
+        f"MCC={mcc_snap:.3f} F1={f1_snap:.3f} R²={r2_snap:.3f} "
+        f"DL={dead_snap}"
+    )
+
+
+tm.train_saes(
+    [SAEEntry(sae=batchtopk_sae, type="BatchTopK", label="batchtopk")],
+    training_samples=BATCHTOPK_TRAIN_SAMPLES,
+    batch_size=SAE_BATCH,
+    lr=SAE_LR,
+    n_snapshots=N_SNAPSHOTS_B,
+    snapshot_fn=batchtopk_snapshot,
+    verbose=False,
+)
+
+# %%
+tm.evaluate_saes(["batchtopk"], num_samples=10_000, verbose=True)
+
+# %%
+# --- Plot BatchTopK training curves ---
+hist_steps_b = [h["step"] for h in batchtopk_history]
+hist_loss_b = [h["recon_loss"] for h in batchtopk_history]
+hist_f1_b = [h["f1"] for h in batchtopk_history]
+hist_mcc_b = [h["mcc"] for h in batchtopk_history]
+hist_r2_b = [h["r2"] for h in batchtopk_history]
+
+fig_bh = make_subplots(specs=[[{"secondary_y": True}]])
+fig_bh.add_trace(
+    go.Scatter(x=hist_steps_b, y=hist_loss_b, mode="lines+markers", name="recon loss"),
+    secondary_y=False,
+)
+fig_bh.add_trace(
+    go.Scatter(x=hist_steps_b, y=hist_f1_b, mode="lines+markers", name="F1"),
+    secondary_y=True,
+)
+fig_bh.add_trace(
+    go.Scatter(x=hist_steps_b, y=hist_mcc_b, mode="lines+markers", name="MCC"),
+    secondary_y=True,
+)
+fig_bh.add_trace(
+    go.Scatter(x=hist_steps_b, y=hist_r2_b, mode="lines+markers", name="R²"),
+    secondary_y=True,
+)
+fig_bh.update_xaxes(title_text="training step", **AXIS_STYLE)
+fig_bh.update_yaxes(title_text="recon loss", secondary_y=False, **AXIS_STYLE)
+fig_bh.update_yaxes(title_text="F1 / MCC / R²", secondary_y=True, **AXIS_STYLE)
+fig_bh.update_layout(title="BatchTopK training curves", **LAYOUT_DEFAULTS)
+fig_bh.show()
+
+print(f"BatchTopK k={BATCHTOPK_K}")
+print(f"F1 = {tm.saes_f1_score['batchtopk']:.4f}")
+print(f"MCC = {tm.saes_mcc['batchtopk']:.4f}")
+print(f"L0 = {tm.saes_l0['batchtopk']:.2f}")
+print(f"R² = {tm.saes_explained_variance['batchtopk']:.4f}")
+
+# %%
+# --- BatchTopK SAE Metrics (via JumpReLU inference conversion) ---
+batchtopk_inf = to_jumprelu_inference_sae(batchtopk_sae, DEVICE)
+print(f"BatchTopK inference SAE arch: {batchtopk_inf.cfg.architecture()}")
+
+N_TEST_B = 100_000
+
+with torch.no_grad():
+    test_x_b = dist.sample(N_TEST_B).to(DEVICE)
+    test_hidden_b = tm.ae.encode(test_x_b)
+
+    # Single-shot encode/decode — JumpReLU is stateless w.r.t. batch size.
+    test_z_b = batchtopk_inf.encode(test_hidden_b)
+    test_recon_b = batchtopk_inf.decode(test_z_b)
+
+    # L0
+    l0_b = (test_z_b > 0).float().sum(dim=-1).mean().item()
+    # Dead latents: never fired across the test batch
+    dead_b = int((~(test_z_b > 0).any(dim=0)).sum().item())
+
+    # R² (explained variance)
+    total_var_b = test_hidden_b.var(dim=0).sum().item()
+    residual_var_b = (test_hidden_b - test_recon_b).var(dim=0).sum().item()
+    r2_b = 1 - residual_var_b / total_var_b
+
+    # MCC matching (cosine similarity, NO abs)
+    D_b = tm.W.detach()  # (D_HIDDEN, N_FEATURES)
+    W_dec_t_b = batchtopk_inf.W_dec.detach().T  # (D_HIDDEN, N_DICT)
+    D_norm_b = D_b / D_b.norm(dim=0, keepdim=True).clamp(min=1e-8)
+    W_norm_b = W_dec_t_b / W_dec_t_b.norm(dim=0, keepdim=True).clamp(min=1e-8)
+    cos_sim_b = (D_norm_b.T @ W_norm_b).cpu().numpy()  # (N_FEATURES, N_DICT)
+
+    feat_idx_b, dict_idx_b = linear_sum_assignment(-cos_sim_b)
+    mcc_b = float(cos_sim_b[feat_idx_b, dict_idx_b].mean())
+
+    # F1 (detection) — macro
+    gt_active_b = test_x_b[:, feat_idx_b] > 0
+    pred_active_b = test_z_b[:, dict_idx_b] > 0
+    tp_b = (gt_active_b & pred_active_b).float().sum(dim=0)
+    fp_b = (~gt_active_b & pred_active_b).float().sum(dim=0)
+    fn_b = (gt_active_b & ~pred_active_b).float().sum(dim=0)
+    prec_b = tp_b / (tp_b + fp_b + 1e-8)
+    rec_b = tp_b / (tp_b + fn_b + 1e-8)
+    f1_b = (2 * prec_b * rec_b / (prec_b + rec_b + 1e-8)).mean().item()
+
+    # F1 (detection) — micro
+    tp_tot_b = tp_b.sum()
+    fp_tot_b = fp_b.sum()
+    fn_tot_b = fn_b.sum()
+    prec_micro_b = (tp_tot_b / (tp_tot_b + fp_tot_b + 1e-8)).item()
+    rec_micro_b = (tp_tot_b / (tp_tot_b + fn_tot_b + 1e-8)).item()
+    f1_micro_b = 2 * prec_micro_b * rec_micro_b / (prec_micro_b + rec_micro_b + 1e-8)
+
+print(
+    f"[BatchTopK, JumpReLU inference] N_TEST={N_TEST_B} "
+    f"prec={prec_b.mean():.4f} rec={rec_b.mean():.4f}"
+)
+print(
+    f"L0={l0_b:.1f}  MCC={mcc_b:.4f}  F1(macro)={f1_b:.4f}  "
+    f"F1(micro)={f1_micro_b:.4f}  R²={r2_b:.4f}  DL={dead_b}"
+)
 # %%

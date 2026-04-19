@@ -9,7 +9,7 @@ from plotly.subplots import make_subplots
 
 from occhio.autoencoder import TiedLinearRelu
 from occhio.distributions.sparse import SparseUniform
-from occhio.toy_model import ToyModel
+from occhio.toy_model import SAEEntry, ToyModel
 
 # --- Paper-quality plot defaults ---
 FONT = dict(family="Times New Roman, serif", size=24, color="#333333")
@@ -47,14 +47,14 @@ LAYOUT_DEFAULTS = dict(
 DEVICE = "mps"
 SEED = 42
 N_FEATURES = 1296
-D_HIDDEN = 100
-N_EPOCHS = 20_000
+D_HIDDEN = 200
+N_EPOCHS = 50_000
 BATCH_SIZE = 512
 
 # %%
 # --- Distribution ---
-high = 0.3
-low = 1.28 / N_FEATURES
+high = 0.5
+low = 2.0 / N_FEATURES
 alpha = np.log(high / low) / np.log(N_FEATURES)
 print(f"{alpha=}")
 firing_probs = [high / (i + 1) ** alpha for i in range(N_FEATURES)]
@@ -70,10 +70,83 @@ print(f"Average L0: {mean_l0:.2f} +/- {std_l0:.2f}")
 # %%
 # --- Train ---
 gen = torch.Generator(DEVICE).manual_seed(SEED)
-ae = TiedLinearRelu(N_FEATURES, D_HIDDEN, device=DEVICE, generator=gen)
+ae = TiedLinearRelu(
+    N_FEATURES,
+    D_HIDDEN,
+    device=DEVICE,
+    generator=gen,
+)
 tm = ToyModel(distribution=dist, ae=ae, device=DEVICE)
 
 losses, _ = tm.fit(N_EPOCHS, batch_size=BATCH_SIZE, verbose=True)
+
+# %%
+# --- Plot: Per-feature reconstruction loss ---
+with torch.no_grad():
+    recon_x = dist.sample(100_000).to(DEVICE)
+    recon_xhat = tm.ae.decode(tm.ae.encode(recon_x))
+    per_feature_mse = (recon_xhat - recon_x).abs().mean(dim=0).cpu().numpy()
+
+fig_recon = go.Figure()
+fig_recon.add_trace(
+    go.Scatter(
+        x=np.arange(N_FEATURES),
+        y=per_feature_mse,
+        mode="lines",
+        name="MSE",
+    )
+)
+fig_recon.update_xaxes(title_text="Feature index", **AXIS_STYLE)
+fig_recon.update_yaxes(title_text="MSE", **AXIS_STYLE)
+fig_recon.update_layout(
+    title="Per-feature reconstruction loss",
+    **LAYOUT_DEFAULTS,
+)
+fig_recon.show()
+
+# %%
+# --- Autoencoder F1 (does the AE round-trip preserve feature activity?) ---
+with torch.no_grad():
+    ae_test_x = dist.sample(100_000).to(DEVICE)
+    ae_test_xhat = tm.ae.decode(tm.ae.encode(ae_test_x))
+
+    gt_active_ae = ae_test_x > 0
+    pred_active_ae = ae_test_xhat > 0
+
+    tp_ae = (gt_active_ae & pred_active_ae).float().sum(dim=0)
+    fp_ae = (~gt_active_ae & pred_active_ae).float().sum(dim=0)
+    fn_ae = (gt_active_ae & ~pred_active_ae).float().sum(dim=0)
+
+    prec_ae = tp_ae / (tp_ae + fp_ae + 1e-8)
+    rec_ae = tp_ae / (tp_ae + fn_ae + 1e-8)
+    f1_ae = 2 * prec_ae * rec_ae / (prec_ae + rec_ae + 1e-8)
+
+    tp_tot_ae = tp_ae.sum()
+    fp_tot_ae = fp_ae.sum()
+    fn_tot_ae = fn_ae.sum()
+    prec_micro_ae = (tp_tot_ae / (tp_tot_ae + fp_tot_ae + 1e-8)).item()
+    rec_micro_ae = (tp_tot_ae / (tp_tot_ae + fn_tot_ae + 1e-8)).item()
+    f1_micro_ae = (
+        2 * prec_micro_ae * rec_micro_ae / (prec_micro_ae + rec_micro_ae + 1e-8)
+    )
+
+print(
+    f"[AE round-trip] "
+    f"prec={prec_ae.mean():.4f}  rec={rec_ae.mean():.4f}  "
+    f"F1(macro)={f1_ae.mean().item():.4f}  F1(micro)={f1_micro_ae:.4f}"
+)
+
+# %%
+# --- Plot: Per-feature AE F1 score ---
+f1_ae_np = f1_ae.cpu().numpy()
+fig_ae_f1 = go.Figure()
+fig_ae_f1.add_trace(
+    go.Scatter(x=np.arange(N_FEATURES), y=f1_ae_np, mode="lines", name="F1")
+)
+fig_ae_f1.update_xaxes(title_text="Feature index", **AXIS_STYLE)
+fig_ae_f1.update_yaxes(title_text="F1 score", range=[0, 1.05], **AXIS_STYLE)
+fig_ae_f1.update_layout(title="Per-feature AE round-trip F1", **LAYOUT_DEFAULTS)
+fig_ae_f1.show()
 
 # %%
 # --- Plot: Feature Norms and Feature Dimensionalities ---
@@ -112,6 +185,43 @@ fig.update_layout(
     width=900,
 )
 fig.show()
+
+# %%
+# --- Feature-collapse check ---
+# Normalize columns of W and inspect the Gram matrix. Off-diagonal entries
+# near ±1 indicate two features that have collapsed onto the same direction.
+COLLAPSE_THRESH = 0.8
+with torch.no_grad():
+    W_n = tm.W_normalized_features  # (D_HIDDEN, N_FEATURES)
+    gram = (W_n.T @ W_n).cpu()
+    i_idx, j_idx = torch.triu_indices(N_FEATURES, N_FEATURES, offset=1)
+    pair_sims = gram[i_idx, j_idx]
+    max_abs, max_k = pair_sims.max(dim=0)
+    collapsed_mask = pair_sims >= COLLAPSE_THRESH
+
+n_collapsed = int(collapsed_mask.sum().item())
+print(
+    f"[collapse] max|cos|={max_abs.item():.4f} "
+    f"(f{int(i_idx[max_k])}–f{int(j_idx[max_k])} = {pair_sims[max_k].item():+.4f})  "
+    f"pairs ≥ {COLLAPSE_THRESH}: {n_collapsed}"
+)
+if n_collapsed > 0:
+    top_k = collapsed_mask.nonzero(as_tuple=True)[0][:20]
+    for k in top_k:
+        k = int(k)
+        print(f"  f{int(i_idx[k])}–f{int(j_idx[k])}: cos={pair_sims[k].item():+.4f}")
+
+fig_gram = px.histogram(
+    x=pair_sims.numpy(),
+    nbins=120,
+    labels={"x": "cos(w_i, w_j)"},
+    title=f"Pairwise cosine similarity of W columns (max(·)={max_abs.item():.3f})",
+)
+fig_gram.add_vline(x=COLLAPSE_THRESH, line_color="red", line_dash="dash")
+fig_gram.update_layout(**LAYOUT_DEFAULTS)
+fig_gram.update_xaxes(**AXIS_STYLE)
+fig_gram.update_yaxes(type="log", **AXIS_STYLE)
+fig_gram.show()
 
 # %%
 # --- Plot: Empirical correlation vs interference ---
@@ -177,9 +287,9 @@ SAE_L1 = 0.3
 
 sae_gen = torch.Generator().manual_seed(4)
 
-sae = SAESimple(n_latent=D_HIDDEN, n_dict=N_DICT, l1_coef=SAE_L1, device=DEVICE).to(
-    DEVICE
-)
+sae = SAESimple(
+    n_latent=D_HIDDEN, n_dict=N_DICT, l1_coef=SAE_L1, aux_k=True, device=DEVICE
+).to(DEVICE)
 
 
 def data_fn(n: int) -> torch.Tensor:
@@ -263,5 +373,84 @@ px.imshow(
     aspect="auto",
     color_continuous_scale="ylgnbu_r",
 ).show()
+
+# %%
+# --- Matryoshka SAE Training (via SAELens) ---
+from sae_lens import (
+    MatryoshkaBatchTopKTrainingSAE,
+    MatryoshkaBatchTopKTrainingSAEConfig,
+)
+
+# Nested cumulative widths; final width must equal d_sae.
+MATRYOSHKA_WIDTHS = [N_DICT // 8, N_DICT // 4, N_DICT // 2, N_DICT]
+MATRYOSHKA_K = max(1, int(round(mean_l0)))
+MATRYOSHKA_TRAIN_SAMPLES = SAE_STEPS * SAE_BATCH
+
+# Build on CPU first: SAELens registers `topk_threshold` as float64, which MPS
+# rejects. We downcast that buffer to float32 before moving to the target device.
+matryoshka_cfg = MatryoshkaBatchTopKTrainingSAEConfig(
+    d_in=D_HIDDEN,
+    d_sae=N_DICT,
+    matryoshka_widths=MATRYOSHKA_WIDTHS,
+    k=MATRYOSHKA_K,
+    device="cpu",
+)
+matryoshka_sae = MatryoshkaBatchTopKTrainingSAE(matryoshka_cfg)
+matryoshka_sae.topk_threshold = matryoshka_sae.topk_threshold.to(torch.float32)
+matryoshka_sae.to(DEVICE)
+
+tm.train_saes(
+    [SAEEntry(sae=matryoshka_sae, type="Matryoshka", label="matryoshka")],
+    training_samples=MATRYOSHKA_TRAIN_SAMPLES,
+    batch_size=SAE_BATCH,
+    lr=SAE_LR,
+    verbose=True,
+)
+tm.evaluate_saes(["matryoshka"], num_samples=50_000, verbose=True)
+
+print(f"Matryoshka widths={MATRYOSHKA_WIDTHS}, k={MATRYOSHKA_K}")
+print(f"F1 = {tm.saes_f1_score['matryoshka']:.4f}")
+print(f"MCC = {tm.saes_mcc['matryoshka']:.4f}")
+print(f"L0 = {tm.saes_l0['matryoshka']:.2f}")
+print(f"R² = {tm.saes_explained_variance['matryoshka']:.4f}")
+
+# %%
+# --- Matryoshka SAE Metrics (computed by hand, no abs in MCC) ---
+with torch.no_grad():
+    test_x_m = dist.sample(50_000).to(DEVICE)
+    test_hidden_m = tm.ae.encode(test_x_m)
+    test_z_m = matryoshka_sae.encode(test_hidden_m)
+    test_recon_m = matryoshka_sae.decode(test_z_m)
+
+    # L0
+    l0_m = (test_z_m > 0).float().sum(dim=-1).mean().item()
+
+    # R² (explained variance)
+    total_var_m = test_hidden_m.var(dim=0).sum().item()
+    residual_var_m = (test_hidden_m - test_recon_m).var(dim=0).sum().item()
+    r2_m = 1 - residual_var_m / total_var_m
+
+    # MCC matching (cosine similarity, NO abs)
+    D_m = tm.W.detach()  # (D_HIDDEN, N_FEATURES)
+    W_dec_t_m = matryoshka_sae.W_dec.detach().T  # (D_HIDDEN, N_DICT)
+    D_norm_m = D_m / D_m.norm(dim=0, keepdim=True).clamp(min=1e-8)
+    W_norm_m = W_dec_t_m / W_dec_t_m.norm(dim=0, keepdim=True).clamp(min=1e-8)
+    cos_sim_m = (D_norm_m.T @ W_norm_m).cpu().numpy()  # (N_FEATURES, N_DICT)
+
+    feat_idx_m, dict_idx_m = linear_sum_assignment(-cos_sim_m)
+    mcc_m = float(cos_sim_m[feat_idx_m, dict_idx_m].mean())
+
+    # F1 (detection)
+    gt_active_m = test_x_m[:, feat_idx_m] > 0
+    pred_active_m = test_z_m[:, dict_idx_m] > 0
+    tp_m = (gt_active_m & pred_active_m).float().sum(dim=0)
+    fp_m = (~gt_active_m & pred_active_m).float().sum(dim=0)
+    fn_m = (gt_active_m & ~pred_active_m).float().sum(dim=0)
+    prec_m = tp_m / (tp_m + fp_m + 1e-8)
+    rec_m = tp_m / (tp_m + fn_m + 1e-8)
+    f1_m = (2 * prec_m * rec_m / (prec_m + rec_m + 1e-8)).mean().item()
+
+print(f"[Matryoshka, by hand] prec={prec_m.mean():.4f}, reca={rec_m.mean():.4f}")
+print(f"L0={l0_m:.1f}  MCC={mcc_m:.4f}  F1={f1_m:.4f}  R²={r2_m:.4f}")
 
 # %%
