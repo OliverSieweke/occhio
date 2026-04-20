@@ -383,22 +383,22 @@ geometry_unit_norm = hook_results_unit_norm[2]
 print(f"  Final eval loss: {eval_losses_unit_norm[-1]:.6f}")
 
 # %%
-# --- Train Trained AE (scalar bias) ---
-print("Training TiedLinearRelu (scalar bias shared across features)...")
+# --- Train Trained AE (shared bias) ---
+print("Training TiedLinearRelu (shared bias across features)...")
 gen_sb = torch.Generator(DEVICE).manual_seed(SEED)
-ae_scalar_bias = TiedLinearRelu(N_FEATURES, D_HIDDEN, device=DEVICE, generator=gen_sb)
-ae_scalar_bias.b = torch.nn.Parameter(torch.zeros(1, device=DEVICE))
-tm_scalar_bias = ToyModel(distribution=dist, ae=ae_scalar_bias, device=DEVICE)
-_, hook_results_scalar_bias = tm_scalar_bias.fit(
+ae_shared_bias = TiedLinearRelu(N_FEATURES, D_HIDDEN, device=DEVICE, generator=gen_sb)
+ae_shared_bias.b = torch.nn.Parameter(torch.zeros(1, device=DEVICE))
+tm_shared_bias = ToyModel(distribution=dist, ae=ae_shared_bias, device=DEVICE)
+_, hook_results_shared_bias = tm_shared_bias.fit(
     30000,
     batch_size=BATCH_SIZE,
     hooks=[every(EVAL_FREQ, h) for h in [eval_hook, per_feature_hook, geometry_hook]],
     verbose=True,
 )
-eval_losses_scalar_bias = hook_results_scalar_bias[0]
-per_feature_scalar_bias = hook_results_scalar_bias[1]
-geometry_scalar_bias = hook_results_scalar_bias[2]
-print(f"  Final eval loss: {eval_losses_scalar_bias[-1]:.6f}")
+eval_losses_shared_bias = hook_results_shared_bias[0]
+per_feature_shared_bias = hook_results_shared_bias[1]
+geometry_shared_bias = hook_results_shared_bias[2]
+print(f"  Final eval loss: {eval_losses_shared_bias[-1]:.6f}")
 
 # %%
 # --- Constructed AE (bias only) ---
@@ -582,7 +582,7 @@ fig.show()
 models = [
     ("Trained AE", tm_trained),
     ("Trained AE w/ Unit Norms", tm_unit_norm),
-    ("Trained AE w/ Scalar Bias", tm_scalar_bias),
+    ("Trained AE w/ Shared Bias", tm_shared_bias),
     ("Constructed AE", tm_constructed),
 ]
 models_dict = dict(models)
@@ -817,18 +817,18 @@ make_epoch_slider(
 ).show()
 
 # %%
-# --- Plot: Geometric properties (scalar bias ablation) ---
-geom_arrays_scalar_bias = {}
+# --- Plot: Geometric properties (shared bias ablation) ---
+geom_arrays_shared_bias = {}
 for prop in _geom_props:
-    arr = np.array([g[prop] for g in geometry_scalar_bias]).T
-    geom_arrays_scalar_bias[prop] = arr[sort_idx]
+    arr = np.array([g[prop] for g in geometry_shared_bias]).T
+    geom_arrays_shared_bias[prop] = arr[sort_idx]
 
 make_epoch_slider(
     epoch_arrays=geom_arrays,
     static_arrays=constructed_props,
     epochs=geom_epochs,
     titles=_geom_titles,
-    extra_animated=[("Trained AE w/ Scalar Bias", geom_arrays_scalar_bias)],
+    extra_animated=[("Trained AE w/ Shared Bias", geom_arrays_shared_bias)],
 ).show()
 
 # %%
@@ -850,7 +850,7 @@ _intf_zoom = 10
 _intf_models = [
     ("Trained AE", geometry_trained[-1]["group_mat"]),
     ("Trained AE w/ Unit Norms", geometry_unit_norm[-1]["group_mat"]),
-    ("Trained AE w/ Scalar Bias", geometry_scalar_bias[-1]["group_mat"]),
+    ("Trained AE w/ Shared Bias", geometry_shared_bias[-1]["group_mat"]),
     ("Constructed AE", geometry_constructed[-1]["group_mat"]),
 ]
 _intf_n = len(_intf_models)
@@ -1585,7 +1585,7 @@ _base_props = ["fn", "bias", "ti"]
 _finals = {
     "Trained AE": {p: geom_arrays[p][:, -1] for p in _base_props},
     "Trained AE w/ Shared Bias": {
-        p: geom_arrays_scalar_bias[p][:, -1] for p in _base_props
+        p: geom_arrays_shared_bias[p][:, -1] for p in _base_props
     },
     "Trained AE w/ Unit Norms": {
         p: geom_arrays_unit_norm[p][:, -1] for p in _base_props
@@ -1700,8 +1700,8 @@ for _idx, (_prop, _ytitle) in enumerate(zip(_props, _ytitles)):
         )
     fig.update_yaxes(title_text=_ytitle, row=_r, col=_c)
 
-_xlabel_html = "Feature Index (<i>f<sub>i</sub></i>)"
-_xlabel_tex = r"$\text{Feature Index } (f_i)$"
+_xlabel_html = "Feature Index (<i>i</i>)"
+_xlabel_tex = r"$\text{Feature Index } (i)$"
 
 # Centered x-axis label (HTML for Kaleido)
 fig.add_annotation(
