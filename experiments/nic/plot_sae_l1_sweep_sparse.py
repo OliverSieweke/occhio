@@ -398,6 +398,20 @@ fig_main = make_subplots(
 _LEG_PAD = "&nbsp;" * 8
 
 for ci, (mk, ylabel) in enumerate(_MAIN_METRICS, start=1):
+    # E[L0] vline as a trace (behind data, above gridlines)
+    fig_main.add_trace(
+        go.Scatter(
+            x=[true_mean_l0, true_mean_l0],
+            y=[-10, 10],
+            mode="lines",
+            line=dict(color="#9CA3AF", width=2.5),
+            showlegend=False,
+            hoverinfo="skip",
+        ),
+        row=1,
+        col=ci,
+    )
+
     for name, res in reversed(list(sweep_results.items())):
         color = MODEL_COLORS[name]
         x = np.array(res["l0"])
@@ -421,18 +435,6 @@ for ci, (mk, ylabel) in enumerate(_MAIN_METRICS, start=1):
             row=1,
             col=ci,
         )
-
-    # vline per panel
-    fig_main.add_vline(
-        x=true_mean_l0,
-        line_dash="solid",
-        line_color="#9CA3AF",
-        line_width=2.5,
-        row=1,
-        col=ci,
-    )
-
-fig_main.update_shapes(layer="above")
 
 # --- Dimensions (square panels) ---
 _fs = 38
