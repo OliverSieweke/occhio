@@ -464,8 +464,8 @@ fig_main.update_yaxes(
 
 # Data-driven x-range (shared across panels)
 _all_l0 = [v for res in sweep_results.values() for v in res["l0"]]
-_x_lo = max(0, min(_all_l0) - 1)
-_x_hi = max(_all_l0) + 1
+_x_lo = 0
+_x_hi = 11.8
 
 # Per-panel axis overrides
 for ci, (mk, ylabel) in enumerate(_MAIN_METRICS, start=1):
