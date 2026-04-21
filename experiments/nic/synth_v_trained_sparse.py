@@ -1613,16 +1613,16 @@ _props = ["fn", "fn2b", "bias", "ti"]
 # HTML labels for Kaleido PDF/SVG export (MathJax not available)
 _ytitles_html = [
     "Embedding Norm (‖<i>W<sub>i</sub></i>‖)",
-    "Reconstruction Norm (‖<i>W<sub>i</sub></i>‖² + <i>b<sub>i</sub></i>)",
+    "Reconstructed Value (‖<i>W<sub>i</sub></i>‖² + <i>b<sub>i</sub></i>)",
     "Bias (<i>b<sub>i</sub></i>)",
-    "Interference Degree (Σ<sub>i\u2009≠\u2009j</sub> <i>I</i><sub><i>ij</i></sub>)",
+    "Aggregate Interference (Σ<sub>i\u2009≠\u2009j</sub> <i>I</i><sub><i>ij</i></sub>)",
 ]
 # MathJax labels for interactive HTML view
 _ytitles_tex = [
     r"$\text{Embedding Norm } (\|W_i\|)$",
-    r"$\text{Reconstruction Norm } (\|W_i\|^2 + b_i)$",
+    r"$\text{Reconstructed Value } (\|W_i\|^2 + b_i)$",
     r"$\text{Bias } (b_i)$",
-    r"$\text{Interference Degree } (\sum_{i \neq j} I_{ij})$",
+    r"$\text{Aggregate Interference } (\sum_{i \neq j} I_{ij})$",
 ]
 _ytitles = _ytitles_html  # start with HTML for Kaleido export
 _positions = [(1, 1), (1, 2), (2, 1), (2, 2)]
