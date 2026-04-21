@@ -1,0 +1,435 @@
+{
+  "timestamp": "2026-04-19T20:07:38.495031+00:00",
+  "training_samples": 150000000,
+  "device": "cuda",
+  "training_duration_s": 75805.1,
+  "axes": {
+    "benchmark": [
+      "CORRELATED_PAIRS",
+      "HIERARCHICAL_PAIRS",
+      "DAG_RANDOM_WALK",
+      "POWER_LAW_DIGRAPH",
+      "SIMPLICIAL_COMPLEX",
+      "SPARSE_UNIFORM",
+      "SPHERICAL",
+      "TORUS"
+    ],
+    "seed": [
+      "0"
+    ]
+  },
+  "saes": {
+    "Matryoshka_0": {
+      "cfg": {
+        "d_in": 200,
+        "d_sae": 648,
+        "dtype": "float32",
+        "device": "cuda",
+        "apply_b_dec_to_input": true,
+        "normalize_activations": "none",
+        "reshape_activations": "none",
+        "metadata": {
+          "sae_lens_version": "6.38.0",
+          "sae_lens_training_version": "6.38.0"
+        },
+        "decoder_init_norm": 0.1,
+        "k": 2,
+        "use_sparse_activations": false,
+        "aux_loss_coefficient": 1.0,
+        "rescale_acts_by_decoder_norm": true,
+        "topk_threshold_lr": 0.01,
+        "matryoshka_widths": [
+          162,
+          324,
+          648
+        ],
+        "use_matryoshka_aux_loss": false,
+        "architecture": "matryoshka_batchtopk"
+      },
+      "type": "Matryoshka",
+      "params": {
+        "k": 2,
+        "widths": "3-level"
+      }
+    },
+    "Matryoshka_1": {
+      "cfg": {
+        "d_in": 200,
+        "d_sae": 648,
+        "dtype": "float32",
+        "device": "cuda",
+        "apply_b_dec_to_input": true,
+        "normalize_activations": "none",
+        "reshape_activations": "none",
+        "metadata": {
+          "sae_lens_version": "6.38.0",
+          "sae_lens_training_version": "6.38.0"
+        },
+        "decoder_init_norm": 0.1,
+        "k": 3,
+        "use_sparse_activations": false,
+        "aux_loss_coefficient": 1.0,
+        "rescale_acts_by_decoder_norm": true,
+        "topk_threshold_lr": 0.01,
+        "matryoshka_widths": [
+          162,
+          324,
+          648
+        ],
+        "use_matryoshka_aux_loss": false,
+        "architecture": "matryoshka_batchtopk"
+      },
+      "type": "Matryoshka",
+      "params": {
+        "k": 3,
+        "widths": "3-level"
+      }
+    },
+    "Matryoshka_2": {
+      "cfg": {
+        "d_in": 200,
+        "d_sae": 648,
+        "dtype": "float32",
+        "device": "cuda",
+        "apply_b_dec_to_input": true,
+        "normalize_activations": "none",
+        "reshape_activations": "none",
+        "metadata": {
+          "sae_lens_version": "6.38.0",
+          "sae_lens_training_version": "6.38.0"
+        },
+        "decoder_init_norm": 0.1,
+        "k": 4,
+        "use_sparse_activations": false,
+        "aux_loss_coefficient": 1.0,
+        "rescale_acts_by_decoder_norm": true,
+        "topk_threshold_lr": 0.01,
+        "matryoshka_widths": [
+          162,
+          324,
+          648
+        ],
+        "use_matryoshka_aux_loss": false,
+        "architecture": "matryoshka_batchtopk"
+      },
+      "type": "Matryoshka",
+      "params": {
+        "k": 4,
+        "widths": "3-level"
+      }
+    },
+    "Matryoshka_3": {
+      "cfg": {
+        "d_in": 200,
+        "d_sae": 648,
+        "dtype": "float32",
+        "device": "cuda",
+        "apply_b_dec_to_input": true,
+        "normalize_activations": "none",
+        "reshape_activations": "none",
+        "metadata": {
+          "sae_lens_version": "6.38.0",
+          "sae_lens_training_version": "6.38.0"
+        },
+        "decoder_init_norm": 0.1,
+        "k": 5,
+        "use_sparse_activations": false,
+        "aux_loss_coefficient": 1.0,
+        "rescale_acts_by_decoder_norm": true,
+        "topk_threshold_lr": 0.01,
+        "matryoshka_widths": [
+          162,
+          324,
+          648
+        ],
+        "use_matryoshka_aux_loss": false,
+        "architecture": "matryoshka_batchtopk"
+      },
+      "type": "Matryoshka",
+      "params": {
+        "k": 5,
+        "widths": "3-level"
+      }
+    },
+    "Matryoshka_4": {
+      "cfg": {
+        "d_in": 200,
+        "d_sae": 648,
+        "dtype": "float32",
+        "device": "cuda",
+        "apply_b_dec_to_input": true,
+        "normalize_activations": "none",
+        "reshape_activations": "none",
+        "metadata": {
+          "sae_lens_version": "6.38.0",
+          "sae_lens_training_version": "6.38.0"
+        },
+        "decoder_init_norm": 0.1,
+        "k": 6,
+        "use_sparse_activations": false,
+        "aux_loss_coefficient": 1.0,
+        "rescale_acts_by_decoder_norm": true,
+        "topk_threshold_lr": 0.01,
+        "matryoshka_widths": [
+          162,
+          324,
+          648
+        ],
+        "use_matryoshka_aux_loss": false,
+        "architecture": "matryoshka_batchtopk"
+      },
+      "type": "Matryoshka",
+      "params": {
+        "k": 6,
+        "widths": "3-level"
+      }
+    },
+    "Matryoshka_5": {
+      "cfg": {
+        "d_in": 200,
+        "d_sae": 648,
+        "dtype": "float32",
+        "device": "cuda",
+        "apply_b_dec_to_input": true,
+        "normalize_activations": "none",
+        "reshape_activations": "none",
+        "metadata": {
+          "sae_lens_version": "6.38.0",
+          "sae_lens_training_version": "6.38.0"
+        },
+        "decoder_init_norm": 0.1,
+        "k": 7,
+        "use_sparse_activations": false,
+        "aux_loss_coefficient": 1.0,
+        "rescale_acts_by_decoder_norm": true,
+        "topk_threshold_lr": 0.01,
+        "matryoshka_widths": [
+          162,
+          324,
+          648
+        ],
+        "use_matryoshka_aux_loss": false,
+        "architecture": "matryoshka_batchtopk"
+      },
+      "type": "Matryoshka",
+      "params": {
+        "k": 7,
+        "widths": "3-level"
+      }
+    },
+    "Matryoshka_6": {
+      "cfg": {
+        "d_in": 200,
+        "d_sae": 648,
+        "dtype": "float32",
+        "device": "cuda",
+        "apply_b_dec_to_input": true,
+        "normalize_activations": "none",
+        "reshape_activations": "none",
+        "metadata": {
+          "sae_lens_version": "6.38.0",
+          "sae_lens_training_version": "6.38.0"
+        },
+        "decoder_init_norm": 0.1,
+        "k": 8,
+        "use_sparse_activations": false,
+        "aux_loss_coefficient": 1.0,
+        "rescale_acts_by_decoder_norm": true,
+        "topk_threshold_lr": 0.01,
+        "matryoshka_widths": [
+          162,
+          324,
+          648
+        ],
+        "use_matryoshka_aux_loss": false,
+        "architecture": "matryoshka_batchtopk"
+      },
+      "type": "Matryoshka",
+      "params": {
+        "k": 8,
+        "widths": "3-level"
+      }
+    },
+    "Matryoshka_7": {
+      "cfg": {
+        "d_in": 200,
+        "d_sae": 648,
+        "dtype": "float32",
+        "device": "cuda",
+        "apply_b_dec_to_input": true,
+        "normalize_activations": "none",
+        "reshape_activations": "none",
+        "metadata": {
+          "sae_lens_version": "6.38.0",
+          "sae_lens_training_version": "6.38.0"
+        },
+        "decoder_init_norm": 0.1,
+        "k": 9,
+        "use_sparse_activations": false,
+        "aux_loss_coefficient": 1.0,
+        "rescale_acts_by_decoder_norm": true,
+        "topk_threshold_lr": 0.01,
+        "matryoshka_widths": [
+          162,
+          324,
+          648
+        ],
+        "use_matryoshka_aux_loss": false,
+        "architecture": "matryoshka_batchtopk"
+      },
+      "type": "Matryoshka",
+      "params": {
+        "k": 9,
+        "widths": "3-level"
+      }
+    },
+    "Matryoshka_8": {
+      "cfg": {
+        "d_in": 200,
+        "d_sae": 648,
+        "dtype": "float32",
+        "device": "cuda",
+        "apply_b_dec_to_input": true,
+        "normalize_activations": "none",
+        "reshape_activations": "none",
+        "metadata": {
+          "sae_lens_version": "6.38.0",
+          "sae_lens_training_version": "6.38.0"
+        },
+        "decoder_init_norm": 0.1,
+        "k": 10,
+        "use_sparse_activations": false,
+        "aux_loss_coefficient": 1.0,
+        "rescale_acts_by_decoder_norm": true,
+        "topk_threshold_lr": 0.01,
+        "matryoshka_widths": [
+          162,
+          324,
+          648
+        ],
+        "use_matryoshka_aux_loss": false,
+        "architecture": "matryoshka_batchtopk"
+      },
+      "type": "Matryoshka",
+      "params": {
+        "k": 10,
+        "widths": "3-level"
+      }
+    },
+    "Matryoshka_9": {
+      "cfg": {
+        "d_in": 200,
+        "d_sae": 648,
+        "dtype": "float32",
+        "device": "cuda",
+        "apply_b_dec_to_input": true,
+        "normalize_activations": "none",
+        "reshape_activations": "none",
+        "metadata": {
+          "sae_lens_version": "6.38.0",
+          "sae_lens_training_version": "6.38.0"
+        },
+        "decoder_init_norm": 0.1,
+        "k": 11,
+        "use_sparse_activations": false,
+        "aux_loss_coefficient": 1.0,
+        "rescale_acts_by_decoder_norm": true,
+        "topk_threshold_lr": 0.01,
+        "matryoshka_widths": [
+          162,
+          324,
+          648
+        ],
+        "use_matryoshka_aux_loss": false,
+        "architecture": "matryoshka_batchtopk"
+      },
+      "type": "Matryoshka",
+      "params": {
+        "k": 11,
+        "widths": "3-level"
+      }
+    }
+  },
+  "sae_param_sweeps": {
+    "Matryoshka_0": {
+      "k": [
+        2
+      ],
+      "widths": [
+        "3-level"
+      ]
+    },
+    "Matryoshka_1": {
+      "k": [
+        3
+      ],
+      "widths": [
+        "3-level"
+      ]
+    },
+    "Matryoshka_2": {
+      "k": [
+        4
+      ],
+      "widths": [
+        "3-level"
+      ]
+    },
+    "Matryoshka_3": {
+      "k": [
+        5
+      ],
+      "widths": [
+        "3-level"
+      ]
+    },
+    "Matryoshka_4": {
+      "k": [
+        6
+      ],
+      "widths": [
+        "3-level"
+      ]
+    },
+    "Matryoshka_5": {
+      "k": [
+        7
+      ],
+      "widths": [
+        "3-level"
+      ]
+    },
+    "Matryoshka_6": {
+      "k": [
+        8
+      ],
+      "widths": [
+        "3-level"
+      ]
+    },
+    "Matryoshka_7": {
+      "k": [
+        9
+      ],
+      "widths": [
+        "3-level"
+      ]
+    },
+    "Matryoshka_8": {
+      "k": [
+        10
+      ],
+      "widths": [
+        "3-level"
+      ]
+    },
+    "Matryoshka_9": {
+      "k": [
+        11
+      ],
+      "widths": [
+        "3-level"
+      ]
+    }
+  }
+}

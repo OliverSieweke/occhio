@@ -188,7 +188,7 @@ for bi, bmark in enumerate(BENCHMARK_ORDER):
             x=[true_l0, true_l0],
             y=[0, 1.05],
             mode="lines",
-            line=dict(color="#1F2937", width=2.0),
+            line=dict(color="#9CA3AF", width=2.0),
             showlegend=False,
             hoverinfo="skip",
         ),
@@ -296,7 +296,7 @@ fig.update_xaxes(
     title_standoff=6,
     automargin=False,
     dtick=2,
-    range=[_x_lo, _x_hi],
+    range=[1.3, 11.7],
     minor=dict(dtick=1, showgrid=True, gridcolor="#F0F0F0", gridwidth=1),
 )
 fig.update_yaxes(
@@ -305,7 +305,8 @@ fig.update_yaxes(
     title_standoff=5,
     automargin=False,
     dtick=0.25,
-    range=[0, 1],
+    range=[0.45, 1],
+    tickangle=-90,
     minor=dict(dtick=0.05, showgrid=True, gridcolor="#F0F0F0", gridwidth=1),
 )
 
@@ -316,7 +317,7 @@ fig.add_annotation(
     text='<span style="font-family: \'Times New Roman\', Times, serif; font-style: italic;">F<sub style="font-style: normal;">1</sub></span>',
     xref="paper",
     yref="paper",
-    x=-0.04,
+    x=-0.05,
     y=0.5,
     showarrow=False,
     textangle=-90,

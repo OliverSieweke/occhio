@@ -1,0 +1,315 @@
+{
+  "timestamp": "2026-04-20T03:07:05.764842+00:00",
+  "training_samples": 150000000,
+  "device": "cuda",
+  "training_duration_s": 100435.7,
+  "axes": {
+    "benchmark": [
+      "CORRELATED_PAIRS",
+      "HIERARCHICAL_PAIRS",
+      "DAG_RANDOM_WALK",
+      "POWER_LAW_DIGRAPH",
+      "SIMPLICIAL_COMPLEX",
+      "SPARSE_UNIFORM",
+      "SPHERICAL",
+      "TORUS"
+    ],
+    "seed": [
+      "0"
+    ]
+  },
+  "saes": {
+    "MatchingPursuit_0": {
+      "cfg": {
+        "d_in": 200,
+        "d_sae": 648,
+        "dtype": "float32",
+        "device": "cuda",
+        "apply_b_dec_to_input": true,
+        "normalize_activations": "none",
+        "reshape_activations": "none",
+        "metadata": {
+          "sae_lens_version": "6.38.0",
+          "sae_lens_training_version": "6.38.0"
+        },
+        "decoder_init_norm": 1,
+        "residual_threshold": 0.01,
+        "max_iterations": 2,
+        "stop_on_duplicate_support": true,
+        "architecture": "matching_pursuit"
+      },
+      "type": "MatchingPursuit",
+      "params": {
+        "max_iterations": 2
+      }
+    },
+    "MatchingPursuit_1": {
+      "cfg": {
+        "d_in": 200,
+        "d_sae": 648,
+        "dtype": "float32",
+        "device": "cuda",
+        "apply_b_dec_to_input": true,
+        "normalize_activations": "none",
+        "reshape_activations": "none",
+        "metadata": {
+          "sae_lens_version": "6.38.0",
+          "sae_lens_training_version": "6.38.0"
+        },
+        "decoder_init_norm": 1,
+        "residual_threshold": 0.01,
+        "max_iterations": 3,
+        "stop_on_duplicate_support": true,
+        "architecture": "matching_pursuit"
+      },
+      "type": "MatchingPursuit",
+      "params": {
+        "max_iterations": 3
+      }
+    },
+    "MatchingPursuit_2": {
+      "cfg": {
+        "d_in": 200,
+        "d_sae": 648,
+        "dtype": "float32",
+        "device": "cuda",
+        "apply_b_dec_to_input": true,
+        "normalize_activations": "none",
+        "reshape_activations": "none",
+        "metadata": {
+          "sae_lens_version": "6.38.0",
+          "sae_lens_training_version": "6.38.0"
+        },
+        "decoder_init_norm": 1,
+        "residual_threshold": 0.01,
+        "max_iterations": 4,
+        "stop_on_duplicate_support": true,
+        "architecture": "matching_pursuit"
+      },
+      "type": "MatchingPursuit",
+      "params": {
+        "max_iterations": 4
+      }
+    },
+    "MatchingPursuit_3": {
+      "cfg": {
+        "d_in": 200,
+        "d_sae": 648,
+        "dtype": "float32",
+        "device": "cuda",
+        "apply_b_dec_to_input": true,
+        "normalize_activations": "none",
+        "reshape_activations": "none",
+        "metadata": {
+          "sae_lens_version": "6.38.0",
+          "sae_lens_training_version": "6.38.0"
+        },
+        "decoder_init_norm": 1,
+        "residual_threshold": 0.01,
+        "max_iterations": 5,
+        "stop_on_duplicate_support": true,
+        "architecture": "matching_pursuit"
+      },
+      "type": "MatchingPursuit",
+      "params": {
+        "max_iterations": 5
+      }
+    },
+    "MatchingPursuit_4": {
+      "cfg": {
+        "d_in": 200,
+        "d_sae": 648,
+        "dtype": "float32",
+        "device": "cuda",
+        "apply_b_dec_to_input": true,
+        "normalize_activations": "none",
+        "reshape_activations": "none",
+        "metadata": {
+          "sae_lens_version": "6.38.0",
+          "sae_lens_training_version": "6.38.0"
+        },
+        "decoder_init_norm": 1,
+        "residual_threshold": 0.01,
+        "max_iterations": 6,
+        "stop_on_duplicate_support": true,
+        "architecture": "matching_pursuit"
+      },
+      "type": "MatchingPursuit",
+      "params": {
+        "max_iterations": 6
+      }
+    },
+    "MatchingPursuit_5": {
+      "cfg": {
+        "d_in": 200,
+        "d_sae": 648,
+        "dtype": "float32",
+        "device": "cuda",
+        "apply_b_dec_to_input": true,
+        "normalize_activations": "none",
+        "reshape_activations": "none",
+        "metadata": {
+          "sae_lens_version": "6.38.0",
+          "sae_lens_training_version": "6.38.0"
+        },
+        "decoder_init_norm": 1,
+        "residual_threshold": 0.01,
+        "max_iterations": 7,
+        "stop_on_duplicate_support": true,
+        "architecture": "matching_pursuit"
+      },
+      "type": "MatchingPursuit",
+      "params": {
+        "max_iterations": 7
+      }
+    },
+    "MatchingPursuit_6": {
+      "cfg": {
+        "d_in": 200,
+        "d_sae": 648,
+        "dtype": "float32",
+        "device": "cuda",
+        "apply_b_dec_to_input": true,
+        "normalize_activations": "none",
+        "reshape_activations": "none",
+        "metadata": {
+          "sae_lens_version": "6.38.0",
+          "sae_lens_training_version": "6.38.0"
+        },
+        "decoder_init_norm": 1,
+        "residual_threshold": 0.01,
+        "max_iterations": 8,
+        "stop_on_duplicate_support": true,
+        "architecture": "matching_pursuit"
+      },
+      "type": "MatchingPursuit",
+      "params": {
+        "max_iterations": 8
+      }
+    },
+    "MatchingPursuit_7": {
+      "cfg": {
+        "d_in": 200,
+        "d_sae": 648,
+        "dtype": "float32",
+        "device": "cuda",
+        "apply_b_dec_to_input": true,
+        "normalize_activations": "none",
+        "reshape_activations": "none",
+        "metadata": {
+          "sae_lens_version": "6.38.0",
+          "sae_lens_training_version": "6.38.0"
+        },
+        "decoder_init_norm": 1,
+        "residual_threshold": 0.01,
+        "max_iterations": 9,
+        "stop_on_duplicate_support": true,
+        "architecture": "matching_pursuit"
+      },
+      "type": "MatchingPursuit",
+      "params": {
+        "max_iterations": 9
+      }
+    },
+    "MatchingPursuit_8": {
+      "cfg": {
+        "d_in": 200,
+        "d_sae": 648,
+        "dtype": "float32",
+        "device": "cuda",
+        "apply_b_dec_to_input": true,
+        "normalize_activations": "none",
+        "reshape_activations": "none",
+        "metadata": {
+          "sae_lens_version": "6.38.0",
+          "sae_lens_training_version": "6.38.0"
+        },
+        "decoder_init_norm": 1,
+        "residual_threshold": 0.01,
+        "max_iterations": 10,
+        "stop_on_duplicate_support": true,
+        "architecture": "matching_pursuit"
+      },
+      "type": "MatchingPursuit",
+      "params": {
+        "max_iterations": 10
+      }
+    },
+    "MatchingPursuit_9": {
+      "cfg": {
+        "d_in": 200,
+        "d_sae": 648,
+        "dtype": "float32",
+        "device": "cuda",
+        "apply_b_dec_to_input": true,
+        "normalize_activations": "none",
+        "reshape_activations": "none",
+        "metadata": {
+          "sae_lens_version": "6.38.0",
+          "sae_lens_training_version": "6.38.0"
+        },
+        "decoder_init_norm": 1,
+        "residual_threshold": 0.01,
+        "max_iterations": 11,
+        "stop_on_duplicate_support": true,
+        "architecture": "matching_pursuit"
+      },
+      "type": "MatchingPursuit",
+      "params": {
+        "max_iterations": 11
+      }
+    }
+  },
+  "sae_param_sweeps": {
+    "MatchingPursuit_0": {
+      "max_iterations": [
+        2
+      ]
+    },
+    "MatchingPursuit_1": {
+      "max_iterations": [
+        3
+      ]
+    },
+    "MatchingPursuit_2": {
+      "max_iterations": [
+        4
+      ]
+    },
+    "MatchingPursuit_3": {
+      "max_iterations": [
+        5
+      ]
+    },
+    "MatchingPursuit_4": {
+      "max_iterations": [
+        6
+      ]
+    },
+    "MatchingPursuit_5": {
+      "max_iterations": [
+        7
+      ]
+    },
+    "MatchingPursuit_6": {
+      "max_iterations": [
+        8
+      ]
+    },
+    "MatchingPursuit_7": {
+      "max_iterations": [
+        9
+      ]
+    },
+    "MatchingPursuit_8": {
+      "max_iterations": [
+        10
+      ]
+    },
+    "MatchingPursuit_9": {
+      "max_iterations": [
+        11
+      ]
+    }
+  }
+}
