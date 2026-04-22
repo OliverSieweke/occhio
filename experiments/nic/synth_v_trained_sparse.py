@@ -351,7 +351,7 @@ tm_trained = ToyModel(
     # hooks=[normalize_W],
 )
 _, hook_results_trained = tm_trained.fit(
-    30000,
+    50000,
     batch_size=BATCH_SIZE,
     hooks=[every(EVAL_FREQ, h) for h in [eval_hook, per_feature_hook, geometry_hook]],
     verbose=True,
@@ -372,7 +372,7 @@ tm_unit_norm = ToyModel(
     hooks=[normalize_W],
 )
 _, hook_results_unit_norm = tm_unit_norm.fit(
-    30000,
+    50000,
     batch_size=BATCH_SIZE,
     hooks=[every(EVAL_FREQ, h) for h in [eval_hook, per_feature_hook, geometry_hook]],
     verbose=True,
@@ -390,7 +390,7 @@ ae_shared_bias = TiedLinearRelu(N_FEATURES, D_HIDDEN, device=DEVICE, generator=g
 ae_shared_bias.b = torch.nn.Parameter(torch.zeros(1, device=DEVICE))
 tm_shared_bias = ToyModel(distribution=dist, ae=ae_shared_bias, device=DEVICE)
 _, hook_results_shared_bias = tm_shared_bias.fit(
-    30000,
+    50000,
     batch_size=BATCH_SIZE,
     hooks=[every(EVAL_FREQ, h) for h in [eval_hook, per_feature_hook, geometry_hook]],
     verbose=True,
@@ -1608,24 +1608,24 @@ def _sm(y):
     return _W_sm @ np.asarray(y)
 
 
-_props = ["fn", "fn2b", "bias", "ti"]
+_props = ["fn", "bias", "ti", "fn2b"]
 
 # HTML labels for Kaleido PDF/SVG export (MathJax not available)
 _ytitles_html = [
-    "Embedding Norm (‖<i>W<sub>i</sub></i>‖)",
-    "Reconstruction Norm (‖<i>W<sub>i</sub></i>‖² + <i>b<sub>i</sub></i>)",
-    "Bias (<i>b<sub>i</sub></i>)",
-    "Interference Degree (Σ<sub>i\u2009≠\u2009j</sub> <i>I</i><sub><i>ij</i></sub>)",
+    "Embedding Norm",
+    "Bias",
+    "Sum of Interferences",
+    "‖<i>W<sub>i</sub></i>‖² + <i>b<sub>i</sub></i>",
 ]
 # MathJax labels for interactive HTML view
 _ytitles_tex = [
     r"$\text{Embedding Norm } (\|W_i\|)$",
-    r"$\text{Reconstruction Norm } (\|W_i\|^2 + b_i)$",
     r"$\text{Bias } (b_i)$",
     r"$\text{Interference Degree } (\sum_{i \neq j} I_{ij})$",
+    r"$\text{Reconstruction Norm } \|W_i\|^2 + b_i$",
 ]
 _ytitles = _ytitles_html  # start with HTML for Kaleido export
-_positions = [(1, 1), (1, 2), (2, 1), (2, 2)]
+_positions = [(1, 1), (1, 2), (1, 3), (1, 4)]
 
 # Legend order (left-to-right) and trace z-order (bottom-to-top)
 _legend_order = {
@@ -1633,6 +1633,13 @@ _legend_order = {
     "Trained AE w/ Shared Bias": 1,
     "Trained AE w/ Unit Norms": 2,
     "Constructed AE": 3,
+}
+# Short display names shown in the legend (keys above remain as data-dict keys).
+_legend_display = {
+    "Trained AE": "Trained AE",
+    "Trained AE w/ Shared Bias": "Shared Bias AE",
+    "Trained AE w/ Unit Norms": "Unit Norm AE",
+    "Constructed AE": "Constructed AE",
 }
 _zorder = [
     "Constructed AE",
@@ -1648,7 +1655,7 @@ _zorder_fn = [
     "Trained AE",
 ]
 
-fig = make_subplots(rows=2, cols=2, horizontal_spacing=0.16, vertical_spacing=0.14)
+fig = make_subplots(rows=1, cols=4, horizontal_spacing=0.05)
 
 # Fully-opaque legend-only traces (controls legend appearance + order)
 _nbsp = "\u00a0\u00a0\u00a0"  # 3 non-breaking spaces for legend item spacing
@@ -1657,7 +1664,7 @@ for _name in _legend_order:
         go.Scatter(
             x=[None],
             y=[None],
-            name=_name + _nbsp,
+            name=_legend_display[_name] + _nbsp,
             legendgroup=_name,
             legendrank=_legend_order[_name],
             mode="markers",
@@ -1679,7 +1686,7 @@ for _idx, (_prop, _ytitle) in enumerate(zip(_props, _ytitles)):
                 name=_name,
                 legendgroup=_name,
                 mode="markers",
-                marker=dict(size=3, opacity=0.4, color=MODEL_COLORS[_name]),
+                marker=dict(size=3, opacity=0.8, color=MODEL_COLORS[_name]),
                 showlegend=False,
             ),
             row=_r,
@@ -1692,7 +1699,7 @@ for _idx, (_prop, _ytitle) in enumerate(zip(_props, _ytitles)):
                 legendgroup=_name,
                 mode="lines",
                 line=dict(width=2.5, color=MODEL_COLORS[_name]),
-                opacity=0.4,
+                opacity=0.6,
                 showlegend=False,
             ),
             row=_r,
@@ -1709,9 +1716,9 @@ fig.add_annotation(
     xref="paper",
     yref="paper",
     x=0.5,
-    y=-0.12,
+    y=-0.25,
     showarrow=False,
-    font=dict(size=24, family="Times New Roman, Times, serif", color="black"),
+    font=dict(size=28, family="Times New Roman, Times, serif", color="black"),
 )
 
 # Publication styling (matching sae_l1_sweep_sparse.py)
@@ -1726,8 +1733,8 @@ _export_axis = dict(
     tickwidth=1.5,
     tickcolor="black",
     zeroline=False,
-    tickfont=dict(size=20, color="black"),
-    title_font=dict(size=24, color="black"),
+    tickfont=dict(size=23, color="black"),
+    title_font=dict(size=27, color="black"),
     mirror=True,
 )
 fig.update_xaxes(**_export_axis, nticks=8, range=[-10, 510], constrain="range")
@@ -1741,21 +1748,21 @@ fig.update_yaxes(
     title_standoff=5,
 )
 
-# Interference Degree (now row=2, col=2): dtick=5, minor gridlines at 1
+# Interference Degree (now row=1, col=3): dtick=5, minor gridlines at 1
 fig.update_yaxes(
     dtick=5,
     minor=dict(ticks="", showgrid=True, gridcolor="#F3F4F6", dtick=1),
-    row=2,
-    col=2,
+    row=1,
+    col=3,
 )
 
 fig.update_layout(
     plot_bgcolor="white",
     paper_bgcolor="white",
-    font=dict(family="Times New Roman, Times, serif", size=24, color="black"),
-    width=1200,
-    height=1000,
-    margin=dict(l=90, r=40, t=60, b=130),
+    font=dict(family="Times New Roman, Times, serif", size=30, color="black"),
+    width=1900,
+    height=600,
+    margin=dict(l=90, r=40, t=60, b=170),
     legend=dict(
         orientation="h",
         yanchor="bottom",
@@ -1765,7 +1772,7 @@ fig.update_layout(
         bgcolor="rgba(0,0,0,0)",
         borderwidth=0,
         itemsizing="constant",
-        font=dict(size=20),
+        font=dict(size=28),
     ),
 )
 
@@ -1773,7 +1780,7 @@ fig.update_layout(
 _fig_dir = os.path.join(os.path.dirname(__file__), "figures")
 os.makedirs(_fig_dir, exist_ok=True)
 fig.write_image(os.path.join(_fig_dir, "geom_merged.pdf"), engine="kaleido")
-fig.write_image(os.path.join(_fig_dir, "geom_merged.svg"), engine="kaleido")
+# fig.write_image(os.path.join(_fig_dir, "geom_merged.svg"), engine="kaleido")
 print(f"Saved to {_fig_dir}/geom_merged.{{pdf,svg}}")
 
 # Swap to MathJax labels for interactive HTML view
@@ -1782,13 +1789,13 @@ for _idx, (_prop, _ytitle_tex) in enumerate(zip(_props, _ytitles_tex)):
     fig.update_yaxes(title_text=_ytitle_tex, row=_r, col=_c)
 fig.layout.annotations[0].text = _xlabel_tex
 
-import plotly.io as pio
-import tempfile
-import webbrowser
+# import plotly.io as pio
+# import tempfile
+# import webbrowser
 
-_html = pio.to_html(fig, include_mathjax="cdn", full_html=True)  # type: ignore[arg-type]
-with tempfile.NamedTemporaryFile("w", suffix=".html", delete=False) as _f:
-    _f.write(_html)
-    webbrowser.open("file://" + _f.name)
+# _html = pio.to_html(fig, include_mathjax="cdn", full_html=True)  # type: ignore[arg-type]
+# with tempfile.NamedTemporaryFile("w", suffix=".html", delete=False) as _f:
+#     _f.write(_html)
+#     webbrowser.open("file://" + _f.name)
 
 # %%

@@ -6,6 +6,8 @@ __pycache__/
 *.pkl
 *.DS_Store
 *.png
+*.pdf
+*.svg
 src/occhio/trash_experiment/
 phase_change.ipynb 
 test.ipynb
