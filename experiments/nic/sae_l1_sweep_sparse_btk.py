@@ -1,25 +1,27 @@
 # %%
-"""SAE L1 sweep: Trained AE vs Trained AE (unit norm) vs Constructed AE.
+"""BatchTopK SAE sweep: Trained AE vs Trained AE (unit norm) vs Constructed AE.
 
-Trains three base models, then sweeps SAE L1 coefficients on each.
+Trains three base models, then sweeps BatchTopK k values on each.
 Plots F1 score vs mean L0 sparsity for all runs.
 """
 
 import os
+import tempfile
 import torch
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from scipy.optimize import linear_sum_assignment
 
-from occhio.autoencoder import TiedLinearRelu, SynthAE
-from occhio.sae.sae import SAESimple
-from occhio.sae_lens_adapter.coefficient_autotuner import (
-    CoefficientAutotuner,
-    CoefficientAutotunerConfig,
+from sae_lens import (
+    SAE,
+    BatchTopKTrainingSAE,
+    BatchTopKTrainingSAEConfig,
 )
+
+from occhio.autoencoder import TiedLinearRelu, SynthAE
 from occhio.distributions import SparseUniform
-from occhio.toy_model import ToyModel
+from occhio.toy_model import SAEEntry, ToyModel
 
 # %%
 # --- Configuration ---
@@ -35,15 +37,15 @@ N_EPOCHS_SYNTH = 15_000
 BATCH_SIZE = 512
 EVAL_SAMPLES = 2**14
 
-# SAE sweep config
-L0_VALUES = [3, 4]
-BASE_L1_COEF = 0.3
+# SAE sweep config — BatchTopK: k directly controls L0, no L1 coef / autotuner needed.
+K_VALUES = [3, 4]
 N_DICT = N_FEATURES // 2
-SAE_STEPS = 60_000
+SAE_STEPS = 75_000
 N_SEEDS = 5
 SAE_BATCH = 1024
 SAE_LR = 3e-4
 DET_SAMPLES = 50_000
+BATCHTOPK_TRAIN_SAMPLES = SAE_STEPS * SAE_BATCH
 
 high = 0.3
 low = 1.28 / N_FEATURES
@@ -116,60 +118,32 @@ def make_data_fn(tm_ref, device):
     return data_fn
 
 
-def train_sae_with_l0_target(
-    sae: SAESimple,
-    data_fn,
-    target_l0: float,
-    n_steps: int = 25_000,
-    batch_size: int = 1024,
-    lr: float = 3e-4,
-    sample_every: int = 900,
-) -> list[float]:
-    """Train an SAE while autotuning l1_coef to hit a target L0."""
-    from torch.optim import AdamW
+def build_batchtopk_sae(k: int, device: str) -> BatchTopKTrainingSAE:
+    """Build a BatchTopK training SAE.
 
-    autotuner = CoefficientAutotuner(
-        CoefficientAutotunerConfig(target_l0=target_l0),
+    SAELens registers `topk_threshold` as float64 which MPS rejects — we build
+    on CPU, downcast the buffer, then move to the target device.
+    """
+    cfg = BatchTopKTrainingSAEConfig(
+        d_in=D_HIDDEN,
+        d_sae=N_DICT,
+        k=k,
+        device="cpu",
     )
-    base_l1 = sae.l1_coef
-    optimizer = AdamW(sae.parameters(), lr=lr)
-    sae_device = next(sae.parameters()).device
-    loss_buffer = torch.empty(n_steps, device=sae_device)
-    raw_buffer = None
+    sae = BatchTopKTrainingSAE(cfg)
+    sae.topk_threshold = sae.topk_threshold.to(torch.float32)
+    sae.to(device)
+    return sae
 
-    for step in range(n_steps):
-        buf_offset = step % sample_every
-        if buf_offset == 0:
-            steps_left = min(sample_every, n_steps - step)
-            total_samples = steps_left * batch_size
-            raw_buffer = data_fn(total_samples).detach()
 
-        start = buf_offset * batch_size
-        end = start + batch_size
-        x = raw_buffer[start:end]
+def to_jumprelu_inference_sae(training_sae, device: str) -> SAE:
+    """Round-trip a BatchTopK training SAE through disk to get JumpReLU inference form.
 
-        optimizer.zero_grad()
-        x_hat, z = sae.forward(x)
-
-        # Single GPU→CPU sync per step: .item() inside autotuner.update()
-        batch_l0 = (z > 0).float().sum(dim=-1).mean()
-        multiplier = autotuner.update(batch_l0, step)
-        sae.l1_coef = base_l1 * multiplier
-
-        loss = sae.loss(x, x_hat, z)
-        loss.backward()
-        optimizer.step()
-        sae.constrain_weights()
-
-        loss_buffer[step] = loss.detach()
-        if (step + 1) % 5000 == 0:
-            print(
-                f"    step {step + 1}/{n_steps}  loss={loss.item():.4f}"
-                f"  L0={autotuner.smoothed_l0:.1f}  mult={multiplier:.3f}"
-                f"  l1={sae.l1_coef:.4f}"
-            )
-
-    return loss_buffer.cpu().tolist()
+    JumpReLU is stateless w.r.t. batch size, which makes eval batch-independent.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        training_sae.save_inference_model(tmpdir)
+        return SAE.load_from_disk(tmpdir, device=device)
 
 
 # %%
@@ -284,36 +258,35 @@ def eval_sae(sae, tm):
     }
 
 
-# --- Phase 1: Train all SAEs (GPU-bound) ---
-# Store trained SAEs for deferred evaluation
-trained_saes: dict[str, list[list[tuple[SAESimple, "ToyModel"]]]] = {
+# --- Phase 1: Train all BatchTopK SAEs (GPU-bound) ---
+# Store trained SAEs (JumpReLU inference form) for deferred evaluation.
+# BatchTopK depends on batch structure at eval time; converting to JumpReLU
+# makes evaluation stateless w.r.t. batch size.
+trained_saes: dict[str, list[list[tuple[SAE, "ToyModel"]]]] = {
     name: [] for name, _ in base_models
 }
 
-for li, target_l0 in enumerate(L0_VALUES):
+for li, k in enumerate(K_VALUES):
     for name, tm in base_models:
         if li == 0:
             trained_saes[name] = []
         trained_saes[name].append([])
 
         for seed_i in range(N_SEEDS):
-            print(f"  {name} target_L0={target_l0} seed={seed_i}...")
-            sae = SAESimple(
-                n_latent=D_HIDDEN,
-                n_dict=N_DICT,
-                l1_coef=BASE_L1_COEF,
-                device=DEVICE,
-            ).to(DEVICE)
-            train_sae_with_l0_target(
-                sae,
-                data_fn=make_data_fn(tm, DEVICE),
-                target_l0=target_l0,
-                n_steps=SAE_STEPS,
+            print(f"  {name} k={k} seed={seed_i}...")
+            torch.manual_seed(SEED + seed_i)
+            sae = build_batchtopk_sae(k=k, device=DEVICE)
+            label = f"btk_k{k}_s{seed_i}"
+            tm.train_saes(
+                [SAEEntry(sae=sae, type="BatchTopK", label=label)],
+                training_samples=BATCHTOPK_TRAIN_SAMPLES,
                 batch_size=SAE_BATCH,
                 lr=SAE_LR,
+                verbose=False,
             )
-            trained_saes[name][li].append((sae, tm))
-            print(f"    trained (target_l0={target_l0})")
+            sae_inf = to_jumprelu_inference_sae(sae, DEVICE)
+            trained_saes[name][li].append((sae_inf, tm))
+            print(f"    trained (k={k})")
 
 # --- Phase 2: Evaluate all SAEs (CPU-bound due to linear_sum_assignment) ---
 print("\nEvaluating all trained SAEs...")
@@ -321,13 +294,13 @@ sweep_raw: dict[str, list[list[dict]]] = {name: [] for name, _ in base_models}
 
 for name, _ in base_models:
     sweep_raw[name] = []
-    for li, target_l0 in enumerate(L0_VALUES):
+    for li, k in enumerate(K_VALUES):
         sweep_raw[name].append([])
         for seed_i, (sae, tm) in enumerate(trained_saes[name][li]):
             metrics = eval_sae(sae, tm)
             sweep_raw[name][li].append(metrics)
             print(
-                f"  {name} target_L0={target_l0} seed={seed_i}"
+                f"  {name} k={k} seed={seed_i}"
                 f"  F1={metrics['f1']:.4f}  L0={metrics['l0']:.1f}"
             )
 
@@ -335,7 +308,7 @@ for name, _ in base_models:
 # --- Aggregate across seeds (mean ± std) ---
 sweep_results: dict[str, dict] = {}
 for name, _ in base_models:
-    res = {"target_l0": list(L0_VALUES)}
+    res = {"target_l0": list(K_VALUES)}
     for key in METRIC_KEYS:
         vals = np.array([[m[key] for m in seeds] for seeds in sweep_raw[name]])
         res[key] = vals.mean(axis=1).tolist()
@@ -346,7 +319,7 @@ for name in sweep_results:
     res = sweep_results[name]
     for i, tl0 in enumerate(res["target_l0"]):
         print(
-            f"  {name:25s}  target_L0={tl0:2d}"
+            f"  {name:25s}  k={tl0:2d}"
             f"  F1={res['f1'][i]:.4f}±{res['f1_std'][i]:.4f}"
             f"  L0={res['l0'][i]:.1f}±{res['l0_std'][i]:.1f}"
             f"  R²={res['r2'][i]:.4f}±{res['r2_std'][i]:.4f}"
@@ -390,12 +363,11 @@ torch.save(
             "N_FEATURES": N_FEATURES,
             "D_HIDDEN": D_HIDDEN,
             "N_DICT": N_DICT,
-            "L0_VALUES": L0_VALUES,
+            "K_VALUES": K_VALUES,
             "N_SEEDS": N_SEEDS,
             "SAE_STEPS": SAE_STEPS,
             "SEED": SEED,
             "firing_probs": firing_probs,
-            "BASE_L1_COEF": BASE_L1_COEF,
             "DET_SAMPLES": DET_SAMPLES,
         },
     },
@@ -409,7 +381,9 @@ print(f"Checkpoint saved → {_ckpt_dir / 'sae_sweep_checkpoint.pt'}")
 # =============================================================================
 
 # --- Hardcoded sweep results (run training cells above to regenerate) ---
-sweep_results = {
+# NOTE: values below are stale (from ReLU SAE runs). Run the training cells
+# above to regenerate `sweep_results` for BatchTopK before plotting.
+_STALE_SWEEP_RESULTS = {
     "Trained AE": {
         "target_l0": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
         "l0": [1.0, 2.0, 3.0, 4.0, 5.0, 5.99, 6.98, 8.02, 9.0, 10.02, 11.08, 11.99],
@@ -684,9 +658,9 @@ MODEL_COLORS = {
 }
 
 _LEGEND_NAMES = {
-    "Trained AE": "ReLU SAE(Trained AE)",
-    "Trained AE w/ Unit Norms": "ReLU SAE(Trained AE w/ Unit Norms)",
-    "Constructed AE": "ReLU SAE(Constructed AE)",
+    "Trained AE": "BatchTopK SAE(Trained AE)",
+    "Trained AE w/ Unit Norms": "BatchTopK SAE(Trained AE w/ Unit Norms)",
+    "Constructed AE": "BatchTopK SAE(Constructed AE)",
 }
 
 _AXIS = dict(

@@ -79,7 +79,7 @@ dist = SimplicialComplexDistribution(
     n_vertices=n_features,
     faces=faces,
     p_active=p_active,
-    sampling_mode="sparse",
+    sampling_mode="single",
     generator=gen,
     device=DEVICE,
 )
