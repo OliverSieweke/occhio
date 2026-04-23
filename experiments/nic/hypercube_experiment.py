@@ -16,7 +16,7 @@ gen.manual_seed(8)
 
 n_features = 49
 length_scale = 0.5
-cube_dim = 2
+cube_dim = 1
 n_hidden = 3
 
 dist = HypercubeDistribution(
@@ -35,7 +35,7 @@ tm = ToyModel(distribution=dist, ae=ae, device=DEVICE)
 print(dist.sample(1))
 
 # %%
-N_EPOCHS = 100_000
+N_EPOCHS = 50_000
 EVAL_SAMPLES = 2**14
 EVAL_FREQ = 500
 BATCH_SIZE = 2048
@@ -43,6 +43,8 @@ BATCH_SIZE = 2048
 
 def eval_hook(data):
     """Compute eval loss on a large fresh sample."""
+    if data["epoch"] % EVAL_FREQ != 0:
+        return None
     tm = data["tm"]
     x = tm.distribution.sample(EVAL_SAMPLES).to(tm.device)
     x_hat = tm.ae(x)[0]
@@ -51,20 +53,20 @@ def eval_hook(data):
 
 def per_feature_hook(data):
     """Per-feature reconstruction MSE on one-hot inputs."""
+    if data["epoch"] % EVAL_FREQ != 0:
+        return None
     tm = data["tm"]
     eye = torch.eye(n_features, device=tm.device)
     x_hat = tm.ae(eye)[0]
     return (eye - x_hat).pow(2).sum(dim=-1).cpu().numpy()
 
 
-_, hook_results = tm.fit(
-    N_EPOCHS, BATCH_SIZE, hooks=[eval_hook, per_feature_hook], hook_freq=EVAL_FREQ
-)
+_, hook_results = tm.fit(N_EPOCHS, BATCH_SIZE, hooks=[eval_hook, per_feature_hook])
 eval_losses = hook_results[0]
 per_feature_mse = hook_results[1]
 
 # %%
-eval_epochs = list(range(0, N_EPOCHS, EVAL_FREQ)) + [N_EPOCHS - 1]
+eval_epochs = list(range(0, N_EPOCHS, EVAL_FREQ))
 px.line(
     x=eval_epochs, y=eval_losses, labels={"x": "Epoch", "y": "Loss"}, title="Eval loss"
 ).show()

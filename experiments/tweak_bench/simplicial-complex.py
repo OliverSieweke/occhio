@@ -222,7 +222,7 @@ fig_gram = px.histogram(
 fig_gram.add_vline(x=COLLAPSE_THRESH, line_color="red", line_dash="dash")
 fig_gram.update_layout(**LAYOUT_DEFAULTS)
 fig_gram.update_xaxes(**AXIS_STYLE)
-fig_gram.update_yaxes(type="log", **AXIS_STYLE)
+fig_gram.update_yaxes(**AXIS_STYLE)
 fig_gram.show()
 
 

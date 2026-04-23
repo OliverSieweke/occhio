@@ -376,6 +376,26 @@ torch.save(
 print(f"Checkpoint saved → {_ckpt_dir / 'sae_sweep_checkpoint_btk.pt'}")
 
 # %%
+# --- Load checkpoint (skip training; jump straight to plotting) ---
+from pathlib import Path
+
+_ckpt_dir = (
+    Path(
+        os.path.dirname(os.path.abspath(__file__))
+        if "__file__" in dir()
+        else os.getcwd()
+    )
+    / "checkpoints"
+)
+_ckpt_path = _ckpt_dir / "sae_sweep_checkpoint_btk.pt"
+_ckpt = torch.load(_ckpt_path, map_location="cpu", weights_only=False)
+
+sweep_raw = _ckpt["sweep_raw"]
+sweep_results = _ckpt["sweep_results"]
+firing_probs = _ckpt["config"]["firing_probs"]
+print(f"Checkpoint loaded ← {_ckpt_path}")
+
+# %%
 # =============================================================================
 #  VISUALIZATION — run from here to re-plot without retraining
 # =============================================================================
@@ -769,6 +789,21 @@ _LEG_PAD = "&nbsp;" * 8  # trailing whitespace for legend spacing
 
 _y_dticks = []
 for ci, (mk, ylabel) in enumerate(_MAIN_METRICS, start=1):
+    # vline drawn first so it sits behind data traces but above the grid.
+    # Huge y-range gets clipped to the panel extent by update_yaxes below.
+    fig_main.add_trace(
+        go.Scatter(
+            x=[true_mean_l0, true_mean_l0],
+            y=[-1e6, 1e6],
+            mode="lines",
+            line=dict(color="#9CA3AF", width=2.5),
+            showlegend=False,
+            hoverinfo="skip",
+        ),
+        row=1,
+        col=ci,
+    )
+
     for name, res in reversed(list(sweep_results.items())):
         color = MODEL_COLORS[name]
         x = np.array(res["l0"])
@@ -793,24 +828,11 @@ for ci, (mk, ylabel) in enumerate(_MAIN_METRICS, start=1):
             col=ci,
         )
 
-    # vline per panel (no annotation — label is in legend)
-    fig_main.add_vline(
-        x=true_mean_l0,
-        line_dash=_L0_DASH,
-        line_color="#1F2937",
-        line_width=2.5,
-        row=1,
-        col=ci,
-    )
-
     # compute nice y dtick for exactly 5 intervals
     _all_y = [v for res in sweep_results.values() for v in res[mk]]
     _all_std = [v for res in sweep_results.values() for v in res[f"{mk}_std"]]
     _y_raw_max = max(yv + s for yv, s in zip(_all_y, _all_std)) * 1.05
     _y_dticks.append(_nice_dtick(_y_raw_max))
-
-
-fig_main.update_shapes(layer="below")
 
 # --- Dimensions (square panels) ---
 _fs = 38  # axis titles
@@ -900,6 +922,15 @@ fig_main.update_layout(
     ),
 )
 fig_main.show()
+
+_fig_dir = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)) if "__file__" in dir() else os.getcwd(),
+    "figures",
+)
+os.makedirs(_fig_dir, exist_ok=True)
+fig_main.write_image(
+    os.path.join(_fig_dir, "sae_main_metrics_btk.pdf"), engine="kaleido"
+)
 
 # %%
 # --- Plot: Other metrics vs L0 ---
@@ -1088,10 +1119,6 @@ _fig_dir = os.path.join(
 )
 os.makedirs(_fig_dir, exist_ok=True)
 
-fig_main.write_image(
-    os.path.join(_fig_dir, "sae_main_metrics_btk.pdf"), engine="kaleido"
-)
-# fig_main.write_image(os.path.join(_fig_dir, "sae_main_metrics.svg"), engine="kaleido")
 fig_pr.write_image(
     os.path.join(_fig_dir, "sae_prec_vs_recall_btk.pdf"), engine="kaleido"
 )

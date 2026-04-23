@@ -249,10 +249,10 @@ from scipy.optimize import linear_sum_assignment
 from occhio.sae.sae import SAESimple
 
 N_DICT = N_FEATURES // 2
-SAE_STEPS = 15_000
-SAE_BATCH = 1024
+SAE_STEPS = 35_000
+SAE_BATCH = 512
 SAE_LR = 3e-4
-SAE_L1 = 0.35
+SAE_L1 = 0.12
 
 sae_gen = torch.Generator().manual_seed(4)
 
@@ -341,6 +341,53 @@ px.imshow(
     title=f"SAE one-hot activations (MCC matched, purity={purity:.3f})",
     aspect="auto",
     color_continuous_scale="ylgnbu_r",
+).show()
+
+# %%
+# --- Plot: Feature activations from one-hot SAE dict firings (q75, MCC matched) ---
+with torch.no_grad():
+    # Per-dict 75% quantile conditional on being active (z > 0)
+    q75 = torch.zeros(N_DICT, device=DEVICE)
+    for d in range(N_DICT):
+        col = test_z[:, d]
+        active = col[col > 0]
+        if active.numel() > 0:
+            q75[d] = torch.quantile(active, 0.75)
+
+    # Each row = dict element d fired at magnitude q75[d]
+    sae_input = torch.diag(q75)  # (N_DICT, N_DICT)
+    feat_acts = (
+        tm.ae.decode(sae.decode(sae_input)).cpu().numpy()
+    )  # (N_DICT, N_FEATURES)
+
+# Reorder: rows = dict elements (matched first), cols = features (matched first)
+row_order_rev = list(dict_idx) + unmatched_dicts
+col_order_rev = list(feat_idx) + unmatched_feats
+feat_acts_matched = feat_acts[np.ix_(row_order_rev, col_order_rev)]
+
+row_labels_rev = [f"d{d}" for d in row_order_rev]
+col_labels_rev = [f"f{f}" for f in col_order_rev]
+
+n_matched_rev = len(feat_idx)
+diag_sum_rev = sum(feat_acts_matched[i, i] for i in range(n_matched_rev))
+total_sum_rev = float(np.abs(feat_acts_matched).sum())
+purity_rev = diag_sum_rev / total_sum_rev if total_sum_rev > 0 else 0.0
+
+vmax = float(np.abs(feat_acts_matched).max())
+px.imshow(
+    feat_acts_matched,
+    labels=dict(x="Feature (MCC matched)", y="SAE dict element (MCC matched)"),
+    x=col_labels_rev,
+    y=row_labels_rev,
+    title=(
+        f"Feature activations from one-hot SAE dict firings "
+        f"(q75, MCC matched, purity={purity_rev:.3f})"
+    ),
+    aspect="auto",
+    color_continuous_scale="RdBu_r",
+    color_continuous_midpoint=0,
+    zmin=-vmax,
+    zmax=vmax,
 ).show()
 
 # %%
