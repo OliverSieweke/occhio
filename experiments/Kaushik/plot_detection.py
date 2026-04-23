@@ -32,7 +32,7 @@ from _plot_style import (
 df = load_data()
 
 METRICS = [
-    ("f1", "F<sub>1</sub>"),
+    ("f1", '<span style="font-style:italic;">F</span><sub>1</sub>'),
     ("precision", "Precision"),
     ("recall", "Recall"),
 ]
@@ -166,6 +166,13 @@ fig.update_yaxes(
     range=[0, 1],
     minor=dict(dtick=0.05, showgrid=True, gridcolor="#F0F0F0", gridwidth=1),
 )
+
+# Per-metric y-ranges
+_Y_RANGES = [[0.3, 1], [0.3, 1], [0.18, 1]]  # F1, Precision, Recall
+for _, row_off in _GROUPS:
+    for mi, yrange in enumerate(_Y_RANGES):
+        for ci in range(1, N_COLS + 1):
+            fig.update_yaxes(range=yrange, row=row_off + mi + 1, col=ci)
 
 # Hide x-axis tick labels on all but bottom row of each block
 for _, row_off in _GROUPS:
