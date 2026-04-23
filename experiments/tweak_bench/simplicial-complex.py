@@ -51,7 +51,7 @@ DEVICE = "mps"
 SEED = 42
 N_FEATURES = 1296
 D_HIDDEN = 200
-N_EPOCHS = 20_000
+N_EPOCHS = 50_000
 BATCH_SIZE = 512
 
 # %%
@@ -439,5 +439,251 @@ px.imshow(
     aspect="auto",
     color_continuous_scale="ylgnbu_r",
 ).show()
+
+# %%
+# --- Splitting Quality ---
+# For each dict element d, collect the set of ground-truth features that make
+# it fire (via one-hot probes). d is "happy" if there exists a simplex face
+# that contains all of those features as a subset. The splitting quality is
+# the fraction of *live* dicts that are happy; dead latents are excluded from
+# the denominator.
+#
+# Reuses `sae_acts` (one-hot → dict activations) from the SAE Metrics cell.
+_face_sets = [frozenset(f) for f in faces]
+_face_size = FACE_DIM + 1
+_sae_acts_bool = sae_acts > 0  # (N_FEATURES, N_DICT)
+
+happy = 0
+unhappy = 0
+dead = 0
+for d in range(N_DICT):
+    firing_feats = frozenset(np.nonzero(_sae_acts_bool[:, d])[0].tolist())
+    if not firing_feats:
+        dead += 1
+        continue
+    # |firing_feats| > face_size can't fit in any simplex — short-circuit.
+    if len(firing_feats) > _face_size:
+        unhappy += 1
+        continue
+    if any(firing_feats.issubset(fs) for fs in _face_sets):
+        happy += 1
+    else:
+        unhappy += 1
+
+live = happy + unhappy
+splitting_quality = happy / live if live > 0 else 0.0
+print(
+    f"Splitting quality: {splitting_quality:.4f}  "
+    f"(happy={happy}, unhappy={unhappy}, dead={dead}, live={live}/{N_DICT})"
+)
+
+# %%
+# --- L1 Sweep: splitting quality vs L0 ---
+L1_SWEEP = [0.05, 0.08, 0.1, 0.15, 0.2]
+
+
+def compute_splitting_quality(
+    sae_model, face_sets, face_size: int
+) -> tuple[float, int, int, int]:
+    """Return (splitting_quality, happy, unhappy, dead) for a trained SAE."""
+    sae_model.eval()
+    with torch.no_grad():
+        eye_sq = torch.eye(N_FEATURES, device=DEVICE)
+        acts = sae_model.encode(tm.ae.encode(eye_sq)).cpu().numpy() > 0
+    h, u, dd = 0, 0, 0
+    for col in range(acts.shape[1]):
+        feats = frozenset(np.nonzero(acts[:, col])[0].tolist())
+        if not feats:
+            dd += 1
+            continue
+        if len(feats) > face_size:
+            u += 1
+            continue
+        if any(feats.issubset(fs) for fs in face_sets):
+            h += 1
+        else:
+            u += 1
+    live_ = h + u
+    return (h / live_ if live_ > 0 else 0.0), h, u, dd
+
+
+def compute_mean_l0(sae_model, n_samples: int = 20_000) -> float:
+    sae_model.eval()
+    with torch.no_grad():
+        x = dist.sample(n_samples).to(DEVICE)
+        z = sae_model.encode(tm.ae.encode(x))
+    return (z > 0).float().sum(dim=-1).mean().item()
+
+
+sweep_results = []
+for _l1 in L1_SWEEP:
+    print(f"\n=== Training SAE (L1={_l1}) ===")
+    _sae = SAESimple(n_latent=D_HIDDEN, n_dict=N_DICT, l1_coef=_l1, device=DEVICE).to(
+        DEVICE
+    )
+    _sae.train_sae(
+        data_fn=data_fn,
+        n_steps=SAE_STEPS,
+        batch_size=SAE_BATCH,
+        lr=SAE_LR,
+    )
+    _l0 = compute_mean_l0(_sae)
+    _sq, _h, _u, _dd = compute_splitting_quality(_sae, _face_sets, _face_size)
+    print(
+        f"  L1={_l1:.3f}  L0={_l0:.2f}  split-quality={_sq:.4f}  "
+        f"(happy={_h}, unhappy={_u}, dead={_dd})"
+    )
+    sweep_results.append(
+        {
+            "l1": _l1,
+            "l0": _l0,
+            "splitting_quality": _sq,
+            "happy": _h,
+            "unhappy": _u,
+            "dead": _dd,
+        }
+    )
+
+# %%
+# --- Plot: L0 vs Splitting Quality ---
+_l0s = [r["l0"] for r in sweep_results]
+_sqs = [r["splitting_quality"] for r in sweep_results]
+_labels = [f"L1={r['l1']}" for r in sweep_results]
+
+fig_sweep = go.Figure()
+fig_sweep.add_trace(
+    go.Scatter(
+        x=_l0s,
+        y=_sqs,
+        mode="lines+markers+text",
+        text=_labels,
+        textposition="top center",
+        marker=dict(size=12),
+        line=dict(width=2),
+        name="sweep",
+    )
+)
+fig_sweep.update_xaxes(title_text="Mean L0", **AXIS_STYLE)
+fig_sweep.update_yaxes(title_text="Splitting Quality", range=[0, 1.05], **AXIS_STYLE)
+fig_sweep.update_layout(title="Splitting Quality vs L0 (L1 sweep)", **LAYOUT_DEFAULTS)
+fig_sweep.show()
+
+# %%
+# --- BatchTopK Sweep: splitting quality vs L0 ---
+import tempfile  # noqa: E402
+from sae_lens import (  # noqa: E402
+    BatchTopKTrainingSAE,
+    BatchTopKTrainingSAEConfig,
+)
+from occhio.toy_model import SAEEntry  # noqa: E402
+
+K_SWEEP = [2, 4, 6, 8, 10]
+BATCHTOPK_TRAIN_SAMPLES = 10000 * SAE_BATCH
+
+
+def build_batchtopk_sae(k: int, device: str) -> BatchTopKTrainingSAE:
+    """Build a BatchTopK training SAE.
+
+    SAELens registers `topk_threshold` as float64 which MPS rejects — we build
+    on CPU, downcast the buffer, then move to the target device.
+    """
+    cfg = BatchTopKTrainingSAEConfig(
+        d_in=D_HIDDEN,
+        d_sae=N_DICT,
+        k=k,
+        device="cpu",
+    )
+    sae_m = BatchTopKTrainingSAE(cfg)
+    sae_m.topk_threshold = sae_m.topk_threshold.to(torch.float32)
+    sae_m.to(device)
+    return sae_m
+
+
+def to_jumprelu_inference_sae(training_sae, device: str) -> SAE:
+    """Round-trip a BatchTopK training SAE through disk to get JumpReLU inference form.
+
+    JumpReLU is stateless w.r.t. batch size, which makes eval batch-independent.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        training_sae.save_inference_model(tmpdir)
+        return SAE.load_from_disk(tmpdir, device=device)
+
+
+btk_sweep_results = []
+for _k in K_SWEEP:
+    print(f"\n=== Training BatchTopK (k={_k}) ===")
+    _btk = build_batchtopk_sae(_k, DEVICE)
+    tm.train_saes(
+        [SAEEntry(sae=_btk, type="BatchTopK", label=f"btk_k{_k}")],
+        training_samples=BATCHTOPK_TRAIN_SAMPLES,
+        batch_size=SAE_BATCH,
+        lr=SAE_LR,
+        verbose=False,
+    )
+    _btk_inf = to_jumprelu_inference_sae(_btk, DEVICE)
+    _l0 = compute_mean_l0(_btk_inf)
+    _sq, _h, _u, _dd = compute_splitting_quality(_btk_inf, _face_sets, _face_size)
+    print(
+        f"  k={_k}  L0={_l0:.2f}  split-quality={_sq:.4f}  "
+        f"(happy={_h}, unhappy={_u}, dead={_dd})"
+    )
+    btk_sweep_results.append(
+        {
+            "k": _k,
+            "l0": _l0,
+            "splitting_quality": _sq,
+            "happy": _h,
+            "unhappy": _u,
+            "dead": _dd,
+        }
+    )
+
+# %%
+# --- Plot: L0 vs Splitting Quality (ReLU L1-sweep + BatchTopK k-sweep) ---
+fig_sweep_combined = go.Figure()
+
+fig_sweep_combined.add_trace(
+    go.Scatter(
+        x=[r["l0"] for r in sweep_results],
+        y=[r["splitting_quality"] for r in sweep_results],
+        mode="lines+markers+text",
+        # text=[f"L1={r['l1']}" for r in sweep_results],
+        textposition="top center",
+        marker=dict(size=12),
+        line=dict(width=2),
+        name="ReLU SAE (L1 sweep)",
+    )
+)
+fig_sweep_combined.add_trace(
+    go.Scatter(
+        x=[r["l0"] for r in btk_sweep_results],
+        y=[r["splitting_quality"] for r in btk_sweep_results],
+        mode="lines+markers+text",
+        text=[f"k={r['k']}" for r in btk_sweep_results],
+        textposition="bottom center",
+        marker=dict(size=12),
+        line=dict(width=2),
+        name="BatchTopK SAE (k sweep)",
+    )
+)
+
+fig_sweep_combined.update_xaxes(title_text="Mean L0", **AXIS_STYLE)
+fig_sweep_combined.update_yaxes(
+    title_text="Splitting Quality", range=[0, 1.05], **AXIS_STYLE
+)
+fig_sweep_combined.update_layout(title="Splitting Quality vs L0", **LAYOUT_DEFAULTS)
+# Overlay legend inside the plot area (top-right).
+fig_sweep_combined.update_layout(
+    legend=dict(
+        x=0.98,
+        y=0.98,
+        xanchor="right",
+        yanchor="top",
+        bgcolor="rgba(255,255,255,0.85)",
+        bordercolor="#cccccc",
+        borderwidth=1,
+    )
+)
+fig_sweep_combined.show()
 
 # %%

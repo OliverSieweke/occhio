@@ -812,7 +812,7 @@ for ci, (mk, ylabel) in enumerate(_MAIN_METRICS, start=1):
                 name=_LEGEND_NAMES[name] + _LEG_PAD,
                 legendgroup=name,
                 showlegend=(ci == 1),
-                marker=dict(size=10, color=color, line=dict(width=3, color="white")),
+                marker=dict(size=12, color=color, line=dict(width=3, color="white")),
                 line=dict(color=color, width=2.5),
             ),
             row=1,
@@ -877,12 +877,12 @@ _x_hi = max(_all_l0) + 1
 for ci, (mk, ylabel) in enumerate(_MAIN_METRICS, start=1):
     _all_y = [v for res in sweep_results.values() for v in res[mk]]
     _all_std = [v for res in sweep_results.values() for v in res[f"{mk}_std"]]
-    _y_lo = max(0, min(yv - s for yv, s in zip(_all_y, _all_std)) - 0.05)
-    _y_hi = max(yv + s for yv, s in zip(_all_y, _all_std)) + 0.05
+    _y_lo = max(0, min(yv - s for yv, s in zip(_all_y, _all_std))) - 0.02
+    _y_hi = max(yv + s for yv, s in zip(_all_y, _all_std)) + 0.02
     fig_main.update_yaxes(
         title_text=ylabel,
         range=[_y_lo, _y_hi],
-        dtick=0.25,
+        dtick=0.1 if ci < 3 else 0.2,
         tickangle=-90,
         minor=dict(dtick=0.05, showgrid=True, gridcolor="#F0F0F0", gridwidth=1),
         row=1,
@@ -890,17 +890,17 @@ for ci, (mk, ylabel) in enumerate(_MAIN_METRICS, start=1):
     )
     fig_main.update_xaxes(
         range=[_x_lo, _x_hi],
-        dtick=5,
+        dtick=2,
         minor=dict(dtick=1, showgrid=True, gridcolor="#F0F0F0", gridwidth=1),
         row=1,
         col=ci,
     )
 
 # First subplot (F1): extend upper bound to 0.8
-_f1_vals = [v for res in sweep_results.values() for v in res["f1"]]
-_f1_stds = [v for res in sweep_results.values() for v in res["f1_std"]]
-_f1_lo = max(0, min(yv - s for yv, s in zip(_f1_vals, _f1_stds)) - 0.05)
-fig_main.update_yaxes(range=[_f1_lo, 0.8], row=1, col=1)
+# _f1_vals = [v for res in sweep_results.values() for v in res["f1"]]
+# _f1_stds = [v for res in sweep_results.values() for v in res["f1_std"]]
+# _f1_lo = max(0, min(yv - s for yv, s in zip(_f1_vals, _f1_stds)) - 0.05)
+# fig_main.update_yaxes(range=[_f1_lo, 0.8], row=1, col=1)
 
 # x-axis title on middle panel only
 fig_main.update_xaxes(
@@ -1115,12 +1115,12 @@ _fig_dir = os.path.join(
 os.makedirs(_fig_dir, exist_ok=True)
 
 fig_main.write_image(os.path.join(_fig_dir, "sae_main_metrics.pdf"), engine="kaleido")
-fig_main.write_image(os.path.join(_fig_dir, "sae_main_metrics.svg"), engine="kaleido")
-fig_pr.write_image(os.path.join(_fig_dir, "sae_prec_vs_recall.pdf"), engine="kaleido")
-fig_pr.write_image(os.path.join(_fig_dir, "sae_prec_vs_recall.svg"), engine="kaleido")
-for _mk, _mfig in metric_figs.items():
-    _mfig.write_image(os.path.join(_fig_dir, f"sae_{_mk}_vs_l0.pdf"), engine="kaleido")
-    _mfig.write_image(os.path.join(_fig_dir, f"sae_{_mk}_vs_l0.svg"), engine="kaleido")
+# fig_main.write_image(os.path.join(_fig_dir, "sae_main_metrics.svg"), engine="kaleido")
+# fig_pr.write_image(os.path.join(_fig_dir, "sae_prec_vs_recall.pdf"), engine="kaleido")
+# fig_pr.write_image(os.path.join(_fig_dir, "sae_prec_vs_recall.svg"), engine="kaleido")
+# for _mk, _mfig in metric_figs.items():
+#     _mfig.write_image(os.path.join(_fig_dir, f"sae_{_mk}_vs_l0.pdf"), engine="kaleido")
+#     _mfig.write_image(os.path.join(_fig_dir, f"sae_{_mk}_vs_l0.svg"), engine="kaleido")
 print(f"Saved to {_fig_dir}/")
 
 # %%
