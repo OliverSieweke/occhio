@@ -34,9 +34,11 @@ from _plot_style import (
 # --- Load data ---
 df = load_data()
 
-# Aggregate: mean over seeds per (benchmark, sae_type, l0_target)
+# Aggregate: mean over seeds per (benchmark, sae_type, sae)
+# Use "sae" column (e.g. Standard_0, BatchTopK_3) as the sweep-point key
+# because l0_target / k are NaN for some SAE types.
 agg = (
-    df.groupby(["benchmark", "sae_type", "l0_target"])
+    df.groupby(["benchmark", "sae_type", "sae"])
     .agg(
         sae_l0=("sae_l0", "mean"),
         f1_score=("f1", "mean"),

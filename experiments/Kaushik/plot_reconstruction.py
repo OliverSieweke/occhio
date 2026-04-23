@@ -35,7 +35,7 @@ METRICS = [
 METRIC_COLS = [m[0] for m in METRICS]
 
 agg = (
-    df.groupby(["benchmark", "sae_type", "l0_target"])
+    df.groupby(["benchmark", "sae_type", "sae"])
     .agg(
         sae_l0=("sae_l0", "mean"),
         true_l0=("true_l0", "mean"),
