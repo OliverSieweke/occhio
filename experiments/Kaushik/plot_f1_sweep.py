@@ -17,7 +17,7 @@ import pathlib as _pathlib
 
 def _find_data_dir() -> str:
     def _valid(p: _pathlib.Path) -> bool:
-        return (p / "hidden_200_l8_standard").exists()
+        return (p / "hidden_200_l8_standard_no_autotune_v2").exists()
 
     # 1. Script's own directory (works when __file__ points to the right place)
     if "__file__" in dir():
@@ -33,7 +33,7 @@ def _find_data_dir() -> str:
                 return str(_c)
 
     raise RuntimeError(
-        "Cannot locate data directory containing hidden_200_l8_standard/. "
+        "Cannot locate data directory containing hidden_200_l8_standard_no_autotune_v2/. "
         "Set _DATA_DIR manually."
     )
 
@@ -41,7 +41,7 @@ def _find_data_dir() -> str:
 _DATA_DIR = _find_data_dir()
 
 DATASETS = {
-    "Standard": "hidden_200_l8_standard",
+    "Standard": "hidden_200_l8_standard_no_autotune_v2",
     "BatchTopK": "hidden_200_l8_batch",
     "Matryoshka": "hidden_200_l8_matryoshka",
     "MatchingPursuit": "hidden_200_l8_mp",
