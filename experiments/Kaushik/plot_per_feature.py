@@ -46,7 +46,7 @@ _PANELS = [(mk, ml, l0) for l0 in L0_TARGETS for mk, ml in METRICS]
 N_DATA_COLS = len(_PANELS)  # 4
 N_COLS = 5  # 2 + spacer + 2
 
-_hs = 0.04
+_hs = 0.055
 _PANEL = 280
 _margin = dict(l=70, r=15, t=45, b=140)
 
@@ -139,20 +139,37 @@ fig.update_yaxes(
     minor=dict(dtick=0.05, showgrid=True, gridcolor="#F0F0F0", gridwidth=1),
 )
 
-# Y-axis metric labels on all data panels (ticks visible on all — same scale)
-_YAX_TITLE_SIZE = FS_AXIS
+# Y-axis metric labels:
+# F₁ panels (cols 1, 4): use built-in title_text — space to the left (margin/spacer)
+# MCC panels (cols 2, 5): use a paper annotation positioned in the gap to the RIGHT
+#   of the MCC panel's tick labels, avoiding collision with the F₁ plot area to the left.
 for ci, (_, label, _) in enumerate(_PANELS):
-    fig.update_yaxes(
-        title_text=label,
-        title_standoff=3,
-        title_font=dict(
-            size=_YAX_TITLE_SIZE,
-            family="Times New Roman, Times, serif",
-            color="black",
-        ),
-        row=1,
-        col=_data_col(ci),
-    )
+    col = _data_col(ci)
+    if ci in (0, 2):  # F₁ panels — built-in title works fine
+        fig.update_yaxes(
+            title_text=label,
+            title_standoff=3,
+            title_font=dict(
+                size=FS_AXIS,
+                family="Times New Roman, Times, serif",
+                color="black",
+            ),
+            row=1,
+            col=col,
+        )
+    else:  # MCC panels — use built-in title, hide tick labels
+        fig.update_yaxes(
+            showticklabels=False,
+            title_text=label,
+            title_standoff=3,
+            title_font=dict(
+                size=FS_AXIS,
+                family="Times New Roman, Times, serif",
+                color="black",
+            ),
+            row=1,
+            col=col,
+        )
 
 # x-axis label
 fig.add_annotation(
