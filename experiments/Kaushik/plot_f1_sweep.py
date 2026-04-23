@@ -164,7 +164,7 @@ fig.update_xaxes(
 )
 fig.update_yaxes(
     dtick=0.25,
-    range=[0.45, 1],
+    range=[0.30, 1],
     minor=dict(dtick=0.05, showgrid=True, gridcolor="#F0F0F0", gridwidth=1),
 )
 
