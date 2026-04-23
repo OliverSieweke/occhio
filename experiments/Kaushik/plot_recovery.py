@@ -168,7 +168,11 @@ fig.update_yaxes(
 )
 
 # Per-metric y-ranges and ticks
-_Y_RANGES = [[0.45, 1], [0, 0.18], [0.44, 1]]  # MCC, Dead Latents (frac), Uniqueness
+_Y_RANGES = [
+    [0.45, 1],
+    [-0.025, 0.18],
+    [0.44, 1.1],
+]  # MCC, Dead Latents (frac), Uniqueness
 _Y_DTICKS = [0.25, 0.05, 0.25]
 _Y_MINOR = [0.05, 0.01, 0.05]
 for _, row_off in _GROUPS:
