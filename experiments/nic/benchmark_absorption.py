@@ -29,10 +29,10 @@ print(df.head())
 # %%
 # --- Style (matches synth_v_trained_sparse.py) ---
 ARCH_COLORS = {
-    "ReLU": "#000c7a",
-    "BatchTopK": "#DC2626",
-    "Matryoshka": "#297a58",
-    "MP-SAE": "#fcba03",
+    "ReLU": "#fcba03",
+    "BatchTopK": "#000c7a",
+    "Matryoshka": "#DC2626",
+    "MP-SAE": "#297a58",
 }
 
 _AXIS = dict(
@@ -62,7 +62,7 @@ fig.add_trace(
         x=[8, 8],
         y=[0, 1],
         mode="lines",
-        line=dict(color="#9CA3AF", width=2.5, dash="15px,10px"),
+        line=dict(color="#9CA3AF", width=2.5),
         showlegend=False,
         hoverinfo="skip",
     )
