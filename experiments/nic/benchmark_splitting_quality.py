@@ -98,7 +98,6 @@ fig.update_yaxes(
     range=[-4, 0],
     tickvals=[1e-4, 1e-3, 1e-2, 1e-1, 1],
     ticktext=["0", "0.001", "0.01", "0.1", "1"],
-    minor=dict(ticks="", showgrid=True, gridcolor="#F3F4F6"),
 )
 
 fig.update_layout(
