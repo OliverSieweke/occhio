@@ -32,7 +32,7 @@ class EvaluationResult:
 
     grid: ModelGrid
     df: pd.DataFrame
-    losses_df: pd.DataFrame | None = None
+    snapshots_df: pd.DataFrame | None = None
 
 
 def evaluate(
@@ -42,8 +42,8 @@ def evaluate(
     device: str | None = None,
     verbose: bool = False,
     export_dir: str | Path | None = None,
-    n_loss_snapshots: int | None = None,
-    n_seeds: int | None = None,
+    n_snapshots: int | None = None,
+    seeds: list[int] | None = None,
     ae_type: str = "huggingface",
     ae_kwargs: dict | None = None,
 ) -> EvaluationResult:
@@ -62,10 +62,11 @@ def evaluate(
         verbose: Whether to show progress bars.
         export_dir: If set, export results to this directory. The directory must not
             already exist and be non-empty.
-        n_loss_snapshots: If set, record the overall loss at this many evenly-spaced
-            snapshots per SAE and include in the export. None (default) disables loss tracking.
-        n_seeds: If set, sweep over this many seeds (0..n_seeds-1). None (default) runs
-            a single model with no seed axis.
+        n_snapshots: If set, record the loss and evaluation metrics at this many
+            evenly-spaced snapshots per SAE and include in the export. None (default)
+            disables snapshotting.
+        seeds: List of random seeds to sweep over. None (default) runs a single model
+            with no seed axis.
         ae_type: Which autoencoder to use: "huggingface" (default) or "synth".
         ae_kwargs: Extra keyword arguments forwarded to the SynthAE constructor when
             ae_type="synth". Use this to specify n_hidden and other SynthAE parameters.
@@ -91,14 +92,16 @@ def evaluate(
         )
 
     axes = [Axis("benchmark", benchmark_list)]
-    if n_seeds is not None:
-        axes.append(Axis("seed", list(range(n_seeds))))
+    if seeds is not None:
+        axes.append(Axis("seed", seeds))
 
     grid = ModelGrid(
         lambda params: toy_model_from_benchmark(
             params["benchmark"].value,
             device=device,
-            generator=torch.Generator(device=device),
+            generator=torch.Generator(device=device).manual_seed(params["seed"])
+            if "seed" in params
+            else torch.Generator(device=device),
             ae_type=ae_type,
             ae_kwargs=ae_kwargs,
         ),
@@ -116,7 +119,7 @@ def evaluate(
                 benchmark_saes,
                 training_samples=training_samples,
                 verbose=verbose,
-                n_loss_snapshots=n_loss_snapshots,
+                n_snapshots=n_snapshots,
             )
             per_benchmark_durations[benchmark.name] = time.monotonic() - t0
     elif is_shared_saes(saes):
@@ -124,7 +127,7 @@ def evaluate(
             saes,
             training_samples=training_samples,
             verbose=verbose,
-            n_loss_snapshots=n_loss_snapshots,
+            n_snapshots=n_snapshots,
         )
 
     training_duration = time.monotonic() - training_start
@@ -133,7 +136,7 @@ def evaluate(
 
     df = grid.sae_results_to_dataframe()
 
-    losses_df = _build_losses_dataframe(grid) if n_loss_snapshots is not None else None
+    snapshots_df = _build_snapshots_dataframe(grid) if n_snapshots is not None else None
 
     if export_dir is not None:
         _export_results(
@@ -143,16 +146,16 @@ def evaluate(
             training_samples=training_samples,
             device=device,
             per_benchmark=is_per_benchmark_saes(saes),
-            losses_df=losses_df,
+            snapshots_df=snapshots_df,
             training_duration=training_duration,
             per_benchmark_durations=per_benchmark_durations,
         )
 
-    return EvaluationResult(grid=grid, df=df, losses_df=losses_df)
+    return EvaluationResult(grid=grid, df=df, snapshots_df=snapshots_df)
 
 
-def _build_losses_dataframe(grid: ModelGrid) -> pd.DataFrame | None:
-    """Build a tidy DataFrame of SAE training losses from a grid."""
+def _build_snapshots_dataframe(grid: ModelGrid) -> pd.DataFrame | None:
+    """Build a tidy DataFrame of SAE training snapshots (loss + metrics) from a grid."""
     rows = []
     for idx in np.ndindex(*grid.shape):
         model = grid.models[idx]
@@ -165,14 +168,50 @@ def _build_losses_dataframe(grid: ModelGrid) -> pd.DataFrame | None:
                 else str(value)
             )
         for label, record in model.saes.items():
+            if record.losses is None and record.metrics_snapshots is None:
+                continue
+
+            row_base: dict[str, Any] = {**axis_values, "sae": label}
+            if record.sae_type is not None:
+                row_base["sae_type"] = record.sae_type
+            if record.params:
+                row_base.update(record.params)
+
+            # Build a dict keyed by step for both losses and metrics
+            steps: set[int] = set()
+            loss_by_step: dict[int, float] = {}
+            metrics_by_step: dict[int, Any] = {}
+
             if record.losses is not None:
-                row_base: dict[str, Any] = {**axis_values, "sae": label}
-                if record.sae_type is not None:
-                    row_base["sae_type"] = record.sae_type
-                if record.params:
-                    row_base.update(record.params)
                 for step, loss in record.losses:
-                    rows.append({**row_base, "step": step, "loss": loss})
+                    steps.add(step)
+                    loss_by_step[step] = loss
+
+            if record.metrics_snapshots is not None:
+                for step, eval_result in record.metrics_snapshots:
+                    steps.add(step)
+                    metrics_by_step[step] = eval_result
+
+            for step in sorted(steps):
+                row: dict[str, Any] = {**row_base, "step": step}
+                if step in loss_by_step:
+                    row["loss"] = loss_by_step[step]
+                if step in metrics_by_step:
+                    eval_result = metrics_by_step[step]
+                    # Extract classification metrics
+                    row["f1_score"] = eval_result.classification.f1_score
+                    row["precision"] = eval_result.classification.precision
+                    row["recall"] = eval_result.classification.recall
+                    row["accuracy"] = eval_result.classification.accuracy
+                    row["mcc"] = eval_result.mcc
+                    # Extract other metrics
+                    row["explained_variance"] = eval_result.explained_variance
+                    row["sae_l0"] = eval_result.sae_l0
+                    row["true_l0"] = eval_result.true_l0
+                    row["dead_latents"] = eval_result.dead_latents
+                    row["shrinkage"] = eval_result.shrinkage
+                    row["uniqueness"] = eval_result.uniqueness
+                rows.append(row)
     return pd.DataFrame(rows) if rows else None
 
 
@@ -183,7 +222,7 @@ def _export_results(
     training_samples: int,
     device: str | None,
     per_benchmark: bool,
-    losses_df: pd.DataFrame | None = None,
+    snapshots_df: pd.DataFrame | None = None,
     training_duration: float | None = None,
     per_benchmark_durations: dict[str, float] | None = None,
 ) -> None:
@@ -199,9 +238,9 @@ def _export_results(
     df.to_parquet(export_dir / "results.parquet")
     df.reset_index().to_csv(export_dir / "results.csv", index=False)
 
-    if losses_df is not None:
-        losses_df.to_parquet(export_dir / "losses.parquet")
-        losses_df.to_csv(export_dir / "losses.csv", index=False)
+    if snapshots_df is not None:
+        snapshots_df.to_parquet(export_dir / "snapshots.parquet")
+        snapshots_df.to_csv(export_dir / "snapshots.csv", index=False)
 
     nested = {
         benchmark: {

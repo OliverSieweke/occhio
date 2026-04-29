@@ -85,6 +85,7 @@ class SAERecord:
     params: dict[str, Any] | None = None
     results: SyntheticDataEvalResult | None = None
     losses: list[tuple[int, float]] | None = None
+    metrics_snapshots: list[tuple[int, SyntheticDataEvalResult]] | None = None
 
 
 class ToyModel:
@@ -360,12 +361,10 @@ class ToyModel:
         lr: float = 0.0003,
         lr_warm_up_steps: int = 0,
         lr_decay_steps: int = 0,
-        n_snapshots: int = 0,
-        snapshot_fn: Callable[[Any], None] | None = None,
         autocast_sae: bool = False,
         autocast_data: bool = False,
         verbose: bool = False,
-        n_loss_snapshots: int | None = None,
+        n_snapshots: int | None = None,
     ) -> None:
         """Train SAE(s) on this model's hidden activations using SAE Lens.
 
@@ -377,14 +376,12 @@ class ToyModel:
             lr: Learning rate (sae_lens param, default: 0.0003).
             lr_warm_up_steps: Number of warmup steps (sae_lens param, default: 0).
             lr_decay_steps: Number of decay steps (sae_lens param, default: 0).
-            n_snapshots: Number of training snapshots (sae_lens param, default: 0).
-            snapshot_fn: Optional callback for snapshots (sae_lens param).
             autocast_sae: Use autocast for SAE (sae_lens param, default: False).
             autocast_data: Use autocast for data (sae_lens param, default: False).
             verbose: Whether to show progress bars. Defaults to False.
-            n_loss_snapshots: If set, record the overall loss at this many
-                evenly-spaced snapshots and store in SAERecord.losses. None (default)
-                disables loss tracking.
+            n_snapshots: If set, record the loss and evaluation metrics at this
+                many evenly-spaced snapshots. Stored in SAERecord.losses and
+                SAERecord.metrics_snapshots. None (default) disables snapshotting.
 
         Returns:
             None
@@ -407,10 +404,13 @@ class ToyModel:
                     stacklevel=2,
                 )
 
-            if n_loss_snapshots is not None:
+            if n_snapshots is not None:
                 captured_losses: list[tuple[int, float]] = []
+                captured_metrics: list[tuple[int, SyntheticDataEvalResult]] = []
 
-                def _loss_snapshot_fn(trainer: SAETrainer) -> None:
+                def _snapshot_fn(trainer: SAETrainer) -> None:
+                    step = trainer.n_training_steps
+                    # Capture loss
                     batch = next(trainer.data_provider).to(trainer.sae.device)
                     with torch.no_grad():
                         output = trainer.sae.training_forward_pass(
@@ -418,20 +418,38 @@ class ToyModel:
                                 sae_in=batch,
                                 dead_neuron_mask=trainer.dead_neurons,
                                 coefficients=trainer.get_coefficients(),
-                                n_training_steps=trainer.n_training_steps,
+                                n_training_steps=step,
                                 is_logging_step=False,
                             )
                         )
-                    captured_losses.append(
-                        (trainer.n_training_steps, output.loss.item())
-                    )
+                    captured_losses.append((step, output.loss.item()))
 
-                effective_n_snapshots = n_loss_snapshots
-                effective_snapshot_fn = _loss_snapshot_fn
+                    # Capture evaluation metrics
+                    # Convert training SAE to inference mode temporarily
+                    state_dict = trainer.sae.state_dict()
+                    trainer.sae.process_state_dict_for_saving_inference(state_dict)
+                    cfg_dict = trainer.sae.cfg.get_inference_sae_cfg_dict()
+                    cfg_dict["device"] = str(self.device)
+                    inference_sae = SAE.from_dict(cfg_dict)
+                    inference_sae.load_state_dict(state_dict)
+
+                    eval_result = eval_sae_on_synthetic_data(
+                        sae=inference_sae,
+                        feature_dict=FeatureDictionaryWrapper(self.ae),
+                        activations_generator=ActivationGeneratorWrapper(
+                            self.distribution
+                        ),
+                        num_samples=10_000,
+                    )
+                    captured_metrics.append((step, eval_result))
+
+                effective_n_snapshots = n_snapshots
+                effective_snapshot_fn = _snapshot_fn
             else:
                 captured_losses = None
-                effective_n_snapshots = n_snapshots
-                effective_snapshot_fn = snapshot_fn
+                captured_metrics = None
+                effective_n_snapshots = 0
+                effective_snapshot_fn = None
 
             with (
                 suppress_tqdm()
@@ -456,6 +474,7 @@ class ToyModel:
                     sae_type=sae_type,
                     params=params,
                     losses=captured_losses,
+                    metrics_snapshots=captured_metrics,
                 )
                 self.distribution.clear_buffer()
 

@@ -839,12 +839,10 @@ class ModelGrid:
         lr: float = 0.0003,
         lr_warm_up_steps: int = 0,
         lr_decay_steps: int = 0,
-        n_snapshots: int = 0,
-        snapshot_fn: Callable[[Any], None] | None = None,
         autocast_sae: bool = False,
         autocast_data: bool = False,
         verbose: bool = False,
-        n_loss_snapshots: int | None = None,
+        n_snapshots: int | None = None,
     ) -> None:
         """Train SAE(s) on each ToyModel in the grid.
 
@@ -856,14 +854,12 @@ class ModelGrid:
             lr: Learning rate (sae_lens param, default: 0.0003).
             lr_warm_up_steps: Number of warmup steps (sae_lens param, default: 0).
             lr_decay_steps: Number of decay steps (sae_lens param, default: 0).
-            n_snapshots: Number of training snapshots (sae_lens param, default: 0).
-            snapshot_fn: Optional callback for snapshots (sae_lens param).
             autocast_sae: Use autocast for SAE (sae_lens param, default: False).
             autocast_data: Use autocast for data (sae_lens param, default: False).
             verbose: Whether to show progress bars. Defaults to False.
-            n_loss_snapshots: If set, record the overall loss at this many
-                evenly-spaced snapshots and store in each SAERecord.losses. None
-                (default) disables loss tracking.
+            n_snapshots: If set, record the loss and evaluation metrics at this
+                many evenly-spaced snapshots. Stored in each SAERecord.losses and
+                SAERecord.metrics_snapshots. None (default) disables snapshotting.
         """
         flattened_models: NDArray[np.object_] = self.models.ravel()
 
@@ -877,12 +873,10 @@ class ModelGrid:
                 lr=lr,
                 lr_warm_up_steps=lr_warm_up_steps,
                 lr_decay_steps=lr_decay_steps,
-                n_snapshots=n_snapshots,
-                snapshot_fn=snapshot_fn,
                 autocast_sae=autocast_sae,
                 autocast_data=autocast_data,
                 verbose=verbose,
-                n_loss_snapshots=n_loss_snapshots,
+                n_snapshots=n_snapshots,
             )
 
     def evaluate_saes(
