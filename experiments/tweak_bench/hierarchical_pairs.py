@@ -369,6 +369,17 @@ fig_sae_curves.add_trace(
     go.Scatter(x=f1_steps, y=f1_values, mode="lines+markers", name="F1"),
     secondary_y=True,
 )
+ae_f1_value = f1_ae.mean().item()
+fig_sae_curves.add_trace(
+    go.Scatter(
+        x=[f1_steps[0], f1_steps[-1]],
+        y=[ae_f1_value, ae_f1_value],
+        mode="lines",
+        name=f"AE F1 ({ae_f1_value:.3f})",
+        line=dict(dash="dash", color="gray"),
+    ),
+    secondary_y=True,
+)
 fig_sae_curves.update_xaxes(title_text="training step", **AXIS_STYLE)
 fig_sae_curves.update_yaxes(title_text="loss", secondary_y=False, **AXIS_STYLE)
 fig_sae_curves.update_yaxes(title_text="F1", secondary_y=True, **AXIS_STYLE)
