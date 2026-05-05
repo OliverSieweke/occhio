@@ -59,19 +59,6 @@ make -C docs clean
 
 Built docs will be in `docs/_build/html/`.
 
-## MCP Servers
-
-```bash
-# Install
-uv sync --extra mcp
-
-# Run server (for Claude Code, Cursor, etc.)
-uv run --extra mcp occhio-mcp
-
-# Test with MCP Inspector
-uv run --extra mcp fastmcp dev inspector src/occhio/mcp/server.py
-```
-
 ## Future directions
 
 - [ ] Plotting
@@ -79,6 +66,3 @@ uv run --extra mcp fastmcp dev inspector src/occhio/mcp/server.py
 - [ ] Benchmarking tools
 - [ ] Easy interference calculations
 
-## For AI Agents
-
-See `AGENTS.md` for specific AI agent instructions.

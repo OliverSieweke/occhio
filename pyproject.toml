@@ -63,12 +63,3 @@ docs = [
     "sphinx-notfound-page>=1.1.0",
     "sphinx-llm>=0.3.0",
 ]
-
-
-# Occhio MCP Server
-mcp = [
-    "fastmcp>=2.0",
-    "httpx>=0.27",
-]
-[project.scripts]
-occhio-mcp = "occhio.mcp.server:main"

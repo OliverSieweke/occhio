@@ -7,7 +7,7 @@ __pycache__/
 *.DS_Store
 *.png
 src/occhio/trash_experiment/
-phase_change.ipynb 
+phase_change.ipynb
 test.ipynb
 .pytest_cache/
 .vscode/
@@ -16,4 +16,28 @@ docs/_autosummary
 .ipynb_checkpoints/
 experiments/laws/law1/figures/
 experiments/benchmark/sweep-analysis/data/
+
+# Generated outputs
+.coverage
+*.pdf
+*.svg
+!docs/_static/logo.svg
+*.csv
+*.parquet
+experiments/**/figures/
+experiments/**/results.*
+experiments/**/run_info.json
+
+# AI/agent config
+.ai/
+.claude/
+.codex/
+.cursor/
+.windsurf/
+.junie/
+.clinerules
+aider.conf.yml
+AGENTS.md
+CLAUDE.md
+skills/
 

@@ -1,9 +1,0 @@
-{
-  "mcpServers": {
-    "occhio": {
-      "command": "uv",
-      "args": ["run", "--extra", "mcp", "--directory", "/Users/os/dev/professional/lasr/occhio", "python", "-m", "occhio.mcp.server"],
-      "type": "stdio"
-    }
-  }
-}
