@@ -56,8 +56,7 @@ def create_sparse_model(params):
 
 
 # %% Build a 1D grid over feature density (p_active)
-# Log-spaced values emphasize the sparse regime where superposition
-# transitions happen.
+# Log-spaced values give better resolution in the sparse regime.
 p_active_values = torch.logspace(-2, 0, 8)  # 0.01 to 1.0
 
 grid_1d = ModelGrid(
@@ -134,7 +133,7 @@ fig_1d.update_xaxes(type="log", title_text="p_active", row=1, col=2)
 fig_1d.update_yaxes(title_text="superposition (rho_mm)", row=1, col=1)
 fig_1d.update_yaxes(title_text="mean feature norm", row=1, col=2)
 fig_1d.update_layout(
-    title_text="1D Sweep: How Density Drives Superposition",
+    title_text="1D Sweep: Superposition and Feature Norms vs. Density",
     height=400,
     width=900,
     showlegend=False,
@@ -150,8 +149,8 @@ fig_1d.show()
 # HierarchicalPairs organizes features into parent-child pairs. The beta
 # parameter controls magnitude coupling: at beta=1 the child copies the
 # parent's value exactly; at beta=0 the child gets an independent draw
-# scaled by the parent. This creates rich correlation structure that
-# interacts with superposition in interesting ways.
+# scaled by the parent. This correlation structure interacts with
+# superposition and is worth exploring across parameter ranges.
 
 N_FEATURES_2D = 6  # must be even for HierarchicalPairs
 N_HIDDEN_2D = 3
@@ -207,11 +206,12 @@ for i in range(n_pa):
         mean_norm_map[i, j] = model.feature_norms.mean().item()
 
 # %% Phase diagram: Superposition across (p_active, beta)
-# This reveals where the model transitions between monosemantic
-# (low superposition) and polysemantic (high superposition) regimes,
-# and how correlation strength (beta) shifts the phase boundary.
-p_labels = [f"{v:.3f}" for v in p_active_axis.values.numpy()]
-b_labels = [f"{v:.2f}" for v in beta_axis.values.numpy()]
+# The heatmaps show how superposition and feature norms vary across
+# the (p_active, beta) grid. With 6 features packed into 3 hidden dims,
+# superposition stays high throughout, but its magnitude shifts with
+# both density and correlation strength.
+p_labels = [f"{v:.3f}" for v in p_active_axis.values]
+b_labels = [f"{v:.2f}" for v in beta_axis.values]
 
 fig_phase = make_subplots(
     rows=1,
@@ -277,10 +277,10 @@ print(f"Slice shape (beta=0): {slice_independent.shape}")
 print(f"Slice shape (beta=1): {slice_locked.shape}")
 
 # %% Compare parent-child angle dynamics across beta regimes
-# When beta=0 (independent magnitudes), the autoencoder can represent
-# parent and child features more independently. When beta=1 (locked
-# magnitudes), the parent-child pair is nearly redundant, so the model
-# may collapse them into a single direction.
+# When beta=0 (independent magnitudes), parent and child features behave
+# more independently. When beta=1 (locked magnitudes), parent-child
+# pairs carry redundant information, which modestly increases
+# superposition relative to the beta=0 baseline.
 fig_slice = go.Figure()
 
 for label, sub_grid, dash in [
@@ -294,7 +294,7 @@ for label, sub_grid, dash in [
 
     fig_slice.add_trace(
         go.Scatter(
-            x=p_active_axis.values.numpy(),
+            x=np.array([v.item() for v in p_active_axis.values]),
             y=sup_vals,
             mode="lines+markers",
             name=label,
