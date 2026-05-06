@@ -27,7 +27,7 @@ from torch.func import functional_call, stack_module_state
 from torch.optim import AdamW
 from tqdm.auto import tqdm
 
-from occhio.autoencoder import AutoEncoderBase
+from occhio.autoencoders import AutoEncoderBase
 from occhio.distributions.base import Distribution
 from occhio.toy_model import SAEEntry, ToyModel
 

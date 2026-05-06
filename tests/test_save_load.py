@@ -10,7 +10,7 @@ import pytest
 import torch
 from torch import Generator, Tensor
 
-from occhio.autoencoder import TiedLinearRelu
+from occhio.autoencoders import TiedLinearRelu
 from occhio.distributions.sparse import SparseUniform
 from occhio.model_grid import Axis, ModelGrid
 from occhio.toy_model import ToyModel

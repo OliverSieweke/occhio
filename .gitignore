@@ -14,8 +14,6 @@ test.ipynb
 docs/_build
 docs/_autosummary
 .ipynb_checkpoints/
-experiments/laws/law1/figures/
-experiments/benchmark/sweep-analysis/data/
 
 # Generated outputs
 .coverage
@@ -24,9 +22,6 @@ experiments/benchmark/sweep-analysis/data/
 !docs/_static/logo.svg
 *.csv
 *.parquet
-experiments/**/figures/
-experiments/**/results.*
-experiments/**/run_info.json
 
 # AI/agent config
 .ai/

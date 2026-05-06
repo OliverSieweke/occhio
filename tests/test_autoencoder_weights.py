@@ -8,7 +8,7 @@ import torch
 from safetensors.torch import save_file
 from torch import Generator
 
-from occhio.autoencoder import (
+from occhio.autoencoders import (
     ComputeAutoEncoder,
     MLPEncoder,
     TiedLinearRelu,

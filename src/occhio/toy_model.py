@@ -23,7 +23,7 @@ from torch import Tensor
 from torch.optim import AdamW, Optimizer
 from tqdm.auto import tqdm
 
-from .autoencoder import AutoEncoderBase
+from .autoencoders import AutoEncoderBase
 from .distributions import Distribution
 from .sae_lens_adapter.activation_generator import ActivationGeneratorWrapper
 from .sae_lens_adapter.feature_dictionary import FeatureDictionaryWrapper

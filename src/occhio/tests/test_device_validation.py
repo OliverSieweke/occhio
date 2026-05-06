@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from ..autoencoder import TiedLinearRelu, TiedLinear
+from ..autoencoders import TiedLinearRelu, TiedLinear
 from ..distributions.sparse import SparseUniform
 from ..toy_model import ToyModel, _same_device
 

@@ -7,7 +7,7 @@ import torch
 from huggingface_hub import HfApi, hf_hub_download
 from safetensors.torch import load_file
 
-from ..autoencoder import TiedLinearRelu
+from .autoencoder import TiedLinearRelu
 from ..benchmark.configs import OCCHIO_HF_MODELS_REPO
 
 
