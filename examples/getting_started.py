@@ -147,8 +147,9 @@ print(W.numpy().round(4))
 # is represented.  A norm near 1.0 means the feature is fully represented;
 # a norm near 0 means the network has effectively dropped it.
 #
-# With equal importances (the default), the network should try to
-# represent all features, but some may be weaker than others.
+# With equal importances (the default) and high sparsity, the network
+# can represent all features with near-unit norm by using antipodal
+# pairs (see the interference matrix below).
 
 # %%
 norms = model.feature_norms
@@ -202,6 +203,12 @@ print(f"Sum:  {dims.sum():.4f}  (hidden dims = {n_hidden})")
 # interferes with each other.  Diagonal entries are self-similarity
 # (always 1.0 for normalized features); off-diagonal entries reveal
 # which features the network has allowed to overlap.
+#
+# In this case you should see **antipodal pairs**: pairs of features
+# with cosine similarity near -1.0 (e.g. features 0 & 6, 2 & 5, etc.).
+# The network packs 8 features into 4 dimensions by placing each pair
+# at opposite ends of the same axis.  The ReLU in the decoder ensures
+# that only the correct feature is reconstructed for a given input.
 
 # %%
 interference = model.interferences
@@ -247,8 +254,9 @@ fig.show()
 # - **High sparsity** (p_active=0.01): features rarely co-occur, so the
 #   network freely overlaps them.  More features fit in fewer dims.
 # - **Low sparsity** (p_active=0.5): features often co-occur, so overlap
-#   causes reconstruction errors.  The network must keep features
-#   orthogonal, which limits how many it can represent.
+#   causes large reconstruction errors.  The network may shrink feature
+#   norms (effectively dropping some features) rather than finding
+#   orthogonal arrangements, especially when `n_features >> n_hidden`.
 #
 # Let's train both and compare.
 
@@ -279,10 +287,13 @@ for metric in ["final_loss", "superposition", "mean_norm", "mean_dimensionality"
     print(f"{metric:<30} {high:>15.4f} {low:>15.4f}")
 
 # %% [markdown]
-# With high sparsity the network achieves higher superposition -- features
-# spread out in all directions, sharing the 2D space.  With low sparsity
-# the network keeps features more orthogonal, which limits capacity but
-# reduces interference errors.
+# Both models show very high superposition (~1.0) because `n_features`
+# far exceeds `n_hidden` in both cases.  The real difference is in
+# **mean_norm**: the high-sparsity model keeps all features at full
+# strength (~1.0) while the low-sparsity model shrinks norms (~0.5),
+# effectively under-representing features it cannot reconstruct well.
+# The low-sparsity model also has much higher final loss, reflecting
+# the unavoidable interference when features frequently co-occur.
 
 # %%
 # -- Visualize both embeddings --
@@ -296,7 +307,7 @@ fig_high.show()
 
 fig_low = plot_embedding(results["Low sparsity (p=0.5)"]["model"])
 fig_low.update_layout(
-    title="Low Sparsity (p=0.5) -- features cluster near axes",
+    title="Low Sparsity (p=0.5) -- features shrink in norm",
     height=450,
     width=450,
 )
