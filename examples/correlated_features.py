@@ -152,11 +152,16 @@ fig.update_layout(
 fig.show()
 
 # %% [markdown]
-# **Interpretation:** When beta is high, the child's value closely tracks
-# the parent's, making them statistically near-identical from the
-# autoencoder's perspective. The network responds by aligning their
-# embedding directions -- why waste separate dimensions on signals that
-# always co-occur with similar magnitudes?
+# **Interpretation:** In principle, higher beta (tighter magnitude
+# coupling) should make parent-child pairs more statistically similar
+# and push their embeddings together. In practice, at this small scale
+# (8 features, 4 hidden dims) the effect is weak and noisy -- mean
+# cosine similarities stay below ~0.15 and the trend is not monotonic.
+# Individual pairs can even go negative due to optimization noise.
+#
+# The theoretical intuition is sound, but this bottleneck configuration
+# does not produce a clean monotonic signal. Larger models with more
+# features and hidden dimensions would likely show a clearer trend.
 
 # %%
 # -- Heatmaps at beta=0 and beta=1 for direct comparison -------------------
@@ -182,10 +187,11 @@ for beta_val in [0.0, 1.0]:
     fig.show()
 
 # %% [markdown]
-# In the `beta=1.0` heatmap, parent-child blocks along the diagonal
-# should show strong positive cosine similarity -- the network has merged
-# each pair into nearly the same direction. At `beta=0.0`, pairs are more
-# independent and the structure is weaker.
+# Compare the two heatmaps: at `beta=1.0` there may be slightly more
+# visible parent-child structure along the diagonal, but the differences
+# are subtle. The cosine similarities are small in both cases because
+# the 8-feature, 4-hidden-dim bottleneck forces heavy superposition,
+# and the low `p_active=0.05` means most features are rarely active.
 
 # %% [markdown]
 # ---
@@ -305,14 +311,17 @@ if unconnected:
     print(f"  Unconnected:          {np.mean(unconnected):.4f}  (n={len(unconnected)})")
 
 # %% [markdown]
-# **Interpretation:** If the DAG has enough connectivity, causally linked
-# features co-occur more frequently and the autoencoder gives them
-# overlapping directions (higher cosine similarity). This is the network
-# encoding statistical structure -- it does not "know" the DAG, but the
-# co-occurrence patterns induced by the DAG leave a geometric fingerprint.
+# **Interpretation:** At this scale (8 features, 4 hidden dims), there is
+# no clear separation between connected and unconnected pairs -- the mean
+# |cosine similarity| values are comparable, and unconnected pairs can
+# even score higher than connected ones. The bottleneck forces heavy
+# superposition regardless of causal structure, washing out the signal.
 #
-# Note: with only 8 features, results will vary by seed. The signal
-# becomes clearer with more features and denser graphs.
+# The theoretical intuition -- that co-occurring features should develop
+# more interference -- is reasonable, but this small model does not
+# reliably recover the DAG structure. A larger model (more features,
+# more hidden dimensions, and a denser graph) would be needed to test
+# whether the geometric fingerprint becomes detectable.
 
 # %% [markdown]
 # ---
@@ -412,28 +421,28 @@ mean_anti = np.mean([cos_anti[2 * p, 2 * p + 1].item() for p in range(n_pairs)])
 print(f"\n{'Mean':<8} {mean_corr:>+12.4f} {mean_anti:>+16.4f}")
 
 # %% [markdown]
-# **Interpretation:** Correlated features tend toward positive cosine
-# similarity -- the autoencoder benefits from aligning features that
-# co-occur, since their combined signal reinforces along a shared
-# direction.
+# **Interpretation:** The correlated pairs show small but consistently
+# positive cosine similarities (around +0.03), while the anticorrelated
+# pairs are more variable -- some pairs land near zero, but occasionally
+# one pair will collapse to -1.0 (perfectly opposite directions). This
+# happens when the optimizer finds it efficient to encode a mutually
+# exclusive pair as opposite ends of a single hidden dimension.
 #
-# Anticorrelated (mutually exclusive) features tend toward negative
-# cosine similarity or orthogonality. Since they never co-occur, the
-# network can safely place them in opposite directions. This is efficient:
-# a single hidden dimension can encode "which one of the pair fired" via
-# the sign of the activation.
+# The sign difference (positive for correlated, negative or zero for
+# anticorrelated) is directionally correct, but the magnitudes for
+# correlated pairs are very small. The ReLU activation and low
+# `p_active` limit how strongly the autoencoder can express positive
+# alignment. The anticorrelated signal is clearer when it appears,
+# but is not consistent across all pairs at this scale.
 
 # %% [markdown]
 # ---
 # ## Part 4: Pulling it together -- interference vs data correlation
 #
-# Across all three distribution types, a pattern emerges: the
-# autoencoder's interference structure (W^T W) mirrors the statistical
-# correlation structure of the data.
-#
-# Let's make this explicit by plotting the relationship between
-# empirical feature correlation and learned cosine similarity across
-# all feature pairs.
+# The individual experiments above showed weak and noisy signals. Let's
+# see whether aggregating across distribution types reveals a pattern
+# by plotting empirical feature correlation against learned cosine
+# similarity for all feature pairs.
 
 # %%
 # -- Scatter: empirical correlation vs learned cosine similarity -----------
@@ -505,13 +514,21 @@ fig.update_layout(
 fig.show()
 
 # %% [markdown]
-# **Takeaway:** There is a clear relationship between input correlation
-# and representation geometry. Positively correlated features get aligned
-# (positive cosine similarity), negatively correlated features get
-# opposed, and independent features stay relatively orthogonal. The
-# autoencoder does not receive the correlation structure as an explicit
-# signal -- it emerges from the MSE loss minimization alone.
+# **Takeaway:** At this small scale (8 features, 4 hidden dims), the
+# relationship between data correlation and learned cosine similarity is
+# noisy. Most feature pairs cluster near zero on both axes -- the
+# bottleneck forces heavy superposition that overwhelms the correlation
+# signal. The anticorrelated pairs occasionally show a strong negative
+# cosine similarity, but this is not consistent.
 #
-# This has implications for interpretability: when we observe structure
-# in an autoencoder's weight matrix, it may be reflecting statistical
-# dependencies in the data, not just individual feature importance.
+# The scatter plot may show a rough positive trend, but the effect is
+# weak and dominated by a few outlier pairs. The autoencoder does not
+# reliably mirror correlation structure at this scale.
+#
+# **Honest assessment:** The theoretical story -- that MSE-optimal
+# representations should reflect data correlations -- is plausible, but
+# this 8-feature toy experiment does not convincingly demonstrate it.
+# The model is too small and the features too sparse for the geometric
+# fingerprint to emerge cleanly. A proper demonstration would need
+# more features (32+), more hidden dimensions, and careful control
+# of the superposition ratio.
