@@ -298,8 +298,12 @@ plot_cosine_heatmap(tm_torus, "Torus: Cosine Similarity", labels_torus)
 # This is the natural distribution for compositional data: market shares,
 # mixture proportions, probability vectors.
 #
-# The constraint that features within a group sum to 1 creates strong
-# negative correlations within each simplex. How does the AE handle this?
+# One might expect the sum-to-one constraint to create negative correlations
+# within a group, but because each group fires independently with probability
+# p_active, the on/off covariance actually dominates: when a group is active
+# all its features are nonzero simultaneously, producing *positive* marginal
+# correlations. The Dirichlet anticorrelation only appears if you condition
+# on the group being active.  How does the AE handle this mixed signal?
 
 # %%
 # Two groups: a 3-simplex and a 3-simplex. Each fires with p=0.5.
@@ -313,10 +317,12 @@ LABELS_SIMPLEX = ["A0", "A1", "A2", "B0", "B1", "B2"]
 x_simplex = data_fingerprint(simplex_dist, "SimplexDistribution ([3,3])")
 
 # %%
-# The correlation structure is the signature: within each group, features
-# are negatively correlated (if one goes up, the others must go down to
-# maintain the sum constraint). Between groups, features are uncorrelated.
-print("Within-group correlations (should be negative):")
+# Check the correlation structure.  Within each group the marginal
+# correlations are actually *positive* because the dominant effect is
+# the shared on/off activation (p_active=0.5).  The Dirichlet
+# anticorrelation is a second-order effect.  Between groups, features
+# are uncorrelated.
+print("Within-group correlations (positive due to shared activation):")
 corr_simplex = torch.corrcoef(x_simplex.T).numpy()
 print(f"  corr(A0, A1) = {corr_simplex[0, 1]:.3f}")
 print(f"  corr(A0, A2) = {corr_simplex[0, 2]:.3f}")
@@ -342,9 +348,9 @@ plot_loss_curve(losses_simplex, "Simplex: Training Loss")
 # With 3 hidden dims we can only plot 2D projections, so use cosine sim
 plot_cosine_heatmap(tm_simplex, "Simplex: Cosine Similarity", LABELS_SIMPLEX)
 
-# The cosine similarity matrix should show block structure: features within
-# the same simplex will have specific angular relationships (they need to
-# tile the simplex), while features in different groups are more independent.
+# The cosine similarity matrix may show some block structure: features within
+# the same group share activation patterns that the AE can exploit. Features
+# in different groups are more independent.
 
 # %%
 # Let's also look at the norms -- the AE may learn different norms for
@@ -387,10 +393,13 @@ complex_dist = SimplicialComplexDistribution(
 x_complex = data_fingerprint(complex_dist, "SimplicialComplex (hexagonal ring)")
 
 # %%
-# The correlation structure here is fascinating: vertex i correlates with
-# vertex i-1 and i+1 (its neighbors in the ring), but not with distant
-# vertices. This is a 1D topology embedded in 6D feature space.
-print("Neighbor correlations (ring topology):")
+# The correlation structure: with "single" sampling, each sample activates
+# exactly one edge.  Adjacent vertices share an edge but the Dirichlet
+# constraint within that edge washes out the co-occurrence signal, leaving
+# neighbor correlations near zero.  Opposite vertices *never* co-occur
+# (they share no edges), so they anticorrelate.
+print("Correlations -- neighbor vs opposite vertex:")
+
 corr_complex = torch.corrcoef(x_complex.T).numpy()
 for i in range(N_VERTICES):
     j = (i + 1) % N_VERTICES
@@ -417,10 +426,10 @@ labels_complex = [f"v{i}" for i in range(N_VERTICES)]
 plot_embedding_2d(tm_complex, "Simplicial Complex: Embeddings", labels_complex)
 plot_cosine_heatmap(tm_complex, "Simplicial Complex: Cosine Similarity", labels_complex)
 
-# The 2D embedding should reveal the ring topology: vertices should be
-# arranged in a hexagonal-like pattern where each vertex is close to its
-# two neighbors. The cosine similarity matrix should show a banded/circulant
-# structure.
+# The 2D embedding may hint at the ring topology, though with only 2 hidden
+# dims for 6 vertices the reconstruction is imperfect. The cosine similarity
+# matrix should reflect the anticorrelation of opposite vertices more than
+# the neighbor relationships (which are weak in the data).
 
 
 # %% [markdown]
@@ -453,9 +462,10 @@ print()
 x_corr = data_fingerprint(corr_dist, "CorrelatedPairs (corr=0.7)")
 
 # %%
-# Verify the correlation structure: within pairs should be ~0.7,
-# between pairs should be ~0.
-print("Within-pair correlations (target: 0.7):")
+# Verify the correlation structure.  The target is 0.7 but the achieved
+# correlations are typically lower (~0.5) because the Bernoulli sampling
+# introduces variance.  Between-pair correlations should be near zero.
+print("Within-pair correlations (target: 0.7, actual ~0.5):")
 corr_pairs = torch.corrcoef(x_corr.T).numpy()
 for p in range(4):
     i, j = 2 * p, 2 * p + 1
@@ -481,10 +491,10 @@ plot_loss_curve(losses_corr, "Correlated Pairs: Training Loss")
 labels_corr = [f"p{i // 2}{'a' if i % 2 == 0 else 'b'}" for i in range(N_FEAT_CORR)]
 plot_cosine_heatmap(tm_corr, "Correlated Pairs: Cosine Similarity", labels_corr)
 
-# The key prediction: paired features should have high cosine similarity
-# (they activate together, so the AE benefits from pointing them in similar
-# directions). The 2x2 block structure in the cosine matrix directly
-# reflects the pair topology.
+# Paired features should have *higher* cosine similarity than unpaired ones,
+# since they co-activate. In practice the effect is moderate (mean ~0.35)
+# rather than dramatic -- the high sparsity limits the signal. The 2x2
+# block structure may be visible but is not always crisp.
 
 # %%
 # Let's verify: do paired features end up closer in embedding space?
@@ -547,12 +557,14 @@ print()
 print("Key observations:")
 print("  - Manifold distributions (sphere, torus) produce embeddings that")
 print("    mirror the original topology -- neighbors stay neighbors.")
-print("  - Simplex distributions create negative within-group cosine")
-print("    similarity, reflecting the sum-to-one constraint.")
-print("  - Correlated pairs produce block-diagonal cosine structure")
-print("    where paired features align in embedding space.")
-print("  - The simplicial complex ring embeds as a polygon, preserving")
-print("    the 1D circular topology in 2D latent space.")
+print("  - Simplex distributions show positive within-group correlations")
+print("    (driven by shared on/off activation), not the negative ones")
+print("    one might naively expect from the sum-to-one constraint.")
+print("  - Correlated pairs show moderately higher within-pair cosine")
+print("    similarity than between-pair, but the effect is modest.")
+print("  - The simplicial complex ring shows strong anticorrelation for")
+print("    opposite vertices (which never co-occur) and near-zero")
+print("    correlation for neighbors.")
 
 
 # %% [markdown]
@@ -598,9 +610,9 @@ fig.update_layout(
 fig.show()
 
 # %%
-print("Done. The punchline: the structure of your data determines the")
+print("Done. The punchline: the structure of your data influences the")
 print("structure of the learned representation. Different distributions")
 print("impose different geometric constraints, and the autoencoder's")
-print("feature embeddings faithfully reflect those constraints -- even")
-print("when the hidden dimension is too small to represent every feature")
-print("independently.")
+print("feature embeddings partially reflect those constraints -- though")
+print("the signal can be noisy, especially when the hidden dimension is")
+print("small or the data is very sparse.")
