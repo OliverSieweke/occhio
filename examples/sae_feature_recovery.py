@@ -167,7 +167,8 @@ fig.show()
 # over L1 values reveals a fundamental tradeoff:
 # - **Too little L1**: latents fire on multiple features (low precision)
 # - **Too much L1**: latents shrink to zero, features are lost (low recall)
-# - **Sweet spot**: each latent cleanly tracks one feature
+# - **Sweet spot**: best balance of precision and recall (look for
+#   peak F1 and MCC)
 #
 # We train fresh SAEs at each L1 value on the same autoencoder.
 
@@ -287,14 +288,16 @@ fig.update_layout(
 fig.show()
 
 # %% [markdown]
-# ## 5. Distribution Comparison: Is Feature Recovery Harder with Correlated Features?
+# ## 5. Distribution Comparison: How Does Correlation Affect Feature Recovery?
 #
 # SAEs assume features are independent and sparse. What happens when
 # ground-truth features are correlated? HierarchicalPairs creates
 # parent-child feature pairs where the child only fires when the parent
-# does. This violates the independence assumption and should make
-# recovery harder.
+# does.
 #
+# The effect on SAE recovery is not obvious a priori: correlation
+# violates the independence assumption, but it also reduces the
+# effective number of independent directions the SAE must find.
 # We train fresh autoencoders on both distributions, then train SAEs
 # on each and compare.
 
@@ -461,8 +464,9 @@ fig.show()
 # 3. **Evaluate** with `model.evaluate_saes()` to get F1, precision,
 #    recall, MCC, explained variance, and more
 # 4. **Sweep the L1 coefficient** to find the precision-recall sweet spot
-# 5. **Compare distributions** -- correlated features (HierarchicalPairs)
-#    are harder for SAEs to decompose than independent ones (SparseUniform)
+# 5. **Compare distributions** -- feature correlation (HierarchicalPairs)
+#    changes SAE recovery dynamics compared to independent features
+#    (SparseUniform); results may vary depending on L1 and sparsity
 # 6. **Monitor training** with `n_loss_snapshots` for convergence checks
 #
 # Key API pattern:
