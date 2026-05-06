@@ -8,8 +8,8 @@
 #
 # This example systematically maps the conditions under which superposition
 # emerges. We sweep sparsity (p_active), bottleneck ratio (n_hidden/n_features),
-# and build a 2D phase diagram replicating the central result from Anthropic's
-# "Toy Models of Superposition" paper.
+# and build a 2D phase diagram inspired by Anthropic's "Toy Models of
+# Superposition" paper.
 #
 # All experiments use occhio's ToyModel with TiedLinearRelu autoencoders and
 # SparseUniform distributions.
@@ -38,8 +38,8 @@ LR = 1e-3
 # Part 1: Sparsity Sweep
 # ============================================================================
 # Fix the bottleneck (10 features into 5 hidden dims) and vary how often
-# each feature is active. The central question: how sparse must features be
-# before the network decides to superpose them?
+# each feature is active. The question: does sparsity affect the degree
+# of superposition at this bottleneck ratio?
 
 # %% Sparsity sweep — setup
 
@@ -182,18 +182,24 @@ fig.update_layout(
 fig.show()
 
 # %% [markdown]
-# **What we expect to observe:**
+# **What we observe:**
 #
-# As p_active decreases (features become sparser), superposition increases.
-# This is because sparse features are rarely active simultaneously, so the
-# interference from packing them non-orthogonally is tolerable — the network
-# accepts some reconstruction error on the rare occasions two superposed
-# features co-activate, in exchange for representing more features overall.
+# With 10 features and 5 hidden dimensions (a 2:1 ratio), the model learns
+# 5 antipodal pairs at **all** sparsity levels — superposition (rho_mm) stays
+# pinned at 1.0 and mean dimensionality at 0.5 throughout the sweep. The
+# model always chooses full superposition because the bottleneck is severe
+# enough that packing features into antipodal pairs is optimal regardless of
+# how often they co-activate.
 #
-# Feature norms should remain near 1.0 for represented features (the model
-# "keeps" them) and drop toward 0 for features it abandons. In the dense
-# regime, the model can only faithfully represent n_hidden features. In the
-# sparse regime, it represents all n_features via superposition.
+# What **does** change with sparsity is loss: the reconstruction error grows
+# steadily as p_active increases, because co-activation becomes more frequent
+# and the antipodal encoding causes more interference. Feature norms stay
+# near 1.0 everywhere — the model represents all 10 features via superposition
+# rather than dropping any, even in the dense regime.
+#
+# To see a genuine sparsity-driven phase transition in rho_mm, a milder
+# bottleneck (e.g., n_hidden=8 for 10 features) would be needed so the model
+# has a real choice between orthogonal and superposed representations.
 
 # ============================================================================
 # Part 2: Bottleneck Ratio Sweep
@@ -335,16 +341,22 @@ fig.update_layout(
 fig.show()
 
 # %% [markdown]
-# **What we expect to observe:**
+# **What we observe:**
 #
-# Superposition should "turn off" as n_hidden approaches n_features. When
-# there is enough room for every feature to have its own dimension, the model
-# has no incentive to superpose — each feature gets a near-orthogonal
-# direction and dimensionality approaches 1.0.
+# Superposition decreases as n_hidden grows toward n_features. At ratio=1.0
+# (n_hidden=10), rho_mm drops to near 0 and loss vanishes — every feature
+# gets its own orthogonal direction. Below this threshold the model
+# superposes, packing all 10 features into fewer dimensions by sharing
+# directions.
 #
-# Below the critical ratio, the model packs more features than dimensions
-# by exploiting sparsity. The number of "alive" features (norm > 0.1)
-# should exceed n_hidden, indicating superposition.
+# All 10 features remain "alive" (norm > 0.1) at every bottleneck setting,
+# even n_hidden=2. Rather than dropping features, the model always represents
+# all of them via superposition and tolerates the resulting interference —
+# feasible here because p_active=0.03 makes co-activation rare.
+#
+# The superposition curve is not perfectly monotonic: there is some
+# non-monotonicity at small n_hidden values (e.g., rho jumps at ratio=0.5)
+# reflecting different local optima in how the model packs features.
 
 # ============================================================================
 # Part 3: 2D Phase Diagram
@@ -452,18 +464,22 @@ fig.show()
 # %% [markdown]
 # **Interpreting the phase diagram:**
 #
-# The diagram should show two regimes separated by a phase boundary:
+# The dominant factor is the **bottleneck ratio** (n_hidden / n_features).
+# When n_hidden >= n_features, superposition drops to near 0 regardless of
+# sparsity — the model has enough room for orthogonal features.
 #
-# 1. **No superposition** (top-right): high p_active AND large n_hidden.
-#    Features are dense and there is room for all of them. rho_mm is near 0.
+# When n_hidden < n_features, superposition is high across the board.
+# Sparsity has a much weaker effect on rho_mm than the bottleneck ratio in
+# this setup. This is because rho_mm measures the *geometric arrangement*
+# of feature directions (max cosine similarity), not the expected
+# reconstruction cost. A model can have high geometric superposition yet low
+# loss if features rarely co-activate.
 #
-# 2. **Full superposition** (bottom-left): low p_active AND small n_hidden.
-#    Features are sparse and the bottleneck is severe. rho_mm approaches 1.
-#
-# The phase boundary is not a sharp line but a smooth transition. The
-# "alive features" heatmap shows that in the superposition regime, the
-# model represents MORE features than it has hidden dimensions — a hallmark
-# of superposition.
+# The **alive features** heatmap shows that when features are sparse, the
+# model keeps all 10 alive even at extreme compression. At higher p_active
+# values with small n_hidden, some features are dropped (norm near 0)
+# because the interference cost of superposing dense features becomes
+# prohibitive.
 
 # ============================================================================
 # Part 4: Feature Geometry Snapshots
@@ -474,11 +490,9 @@ fig.show()
 
 # %% Select interesting configurations and visualize W^T W
 
-# Pick four parameter settings that span the transition:
-# (1) Dense + wide  = no superposition
-# (2) Sparse + wide = mild superposition
-# (3) Dense + narrow = forced superposition
-# (4) Sparse + narrow = full superposition
+# Pick four parameter settings that span different regimes.
+# With 10 features, n_hidden=8 gives mild compression (ratio=0.8) while
+# n_hidden=3 creates severe compression (ratio=0.3).
 snapshot_configs = [
     {"p_active": 0.3, "n_hidden": 8, "label": "Dense, wide bottleneck"},
     {"p_active": 0.03, "n_hidden": 8, "label": "Sparse, wide bottleneck"},
@@ -579,22 +593,26 @@ for cfg in snapshot_configs:
 # %% [markdown]
 # **Key takeaways:**
 #
-# 1. **Sparsity enables superposition.** When features fire rarely, the model
-#    can pack them into shared directions because simultaneous activation
-#    (and thus interference) is unlikely. The expected interference cost
-#    scales with p_active^2 for a pair of features.
+# 1. **The bottleneck ratio is the primary driver of superposition.** When
+#    n_hidden >= n_features, every feature gets its own orthogonal direction
+#    and rho_mm drops to near 0. Below this threshold, the model superposes.
 #
-# 2. **The bottleneck ratio controls capacity.** When n_hidden >= n_features,
-#    every feature can have its own orthogonal direction and superposition is
-#    unnecessary. Below this threshold, the model must choose between dropping
-#    features (norm -> 0) and superposing them (high cosine similarity).
+# 2. **Sparsity affects loss more than geometry.** In this setup, the model
+#    adopts the same superposed geometry (e.g., antipodal pairs) regardless
+#    of sparsity. What sparsity changes is the *cost* of that geometry:
+#    sparser features co-activate less, so interference causes less
+#    reconstruction error. The expected interference cost scales with
+#    p_active^2 for a pair of features.
 #
-# 3. **The tradeoff is between fidelity and capacity.** Superposition
-#    increases the effective number of represented features at the cost of
-#    reconstruction accuracy. The optimal tradeoff depends on sparsity:
-#    sparser features can tolerate more interference.
+# 3. **Sparsity determines whether features are kept or dropped.** When
+#    features are sparse (p_active=0.03), the model keeps all 10 alive even
+#    at extreme compression (n_hidden=2). When features are dense
+#    (p_active=0.3) and the bottleneck is narrow, the model drops some
+#    features entirely (norm near 0) because the interference cost of
+#    superposing frequently co-active features becomes too high.
 #
 # 4. **Feature dimensionality reveals the representation structure.** In the
 #    non-superposed regime, each feature uses roughly 1 dimension. In the
 #    superposed regime, features share dimensions and their effective
-#    dimensionality drops below 1.
+#    dimensionality drops below 1 (e.g., 0.5 for antipodal pairs, ~0.33
+#    for triplet structures in 3D).
