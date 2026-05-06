@@ -2,10 +2,10 @@
 # # Architecture Comparison: Does the Bottleneck Shape What Gets Learned?
 #
 # This experiment trains four autoencoder architectures on identical data
-# and compares what each one learns. The hypothesis is that architecture
-# matters — different bottlenecks impose different inductive biases on
+# and compares what each one learns. The question is whether architecture
+# matters — do different bottlenecks impose different inductive biases on
 # the learned feature geometry, even when the data, training budget,
-# and hyperparameters are held constant.
+# and hyperparameters are held constant?
 #
 # Architectures tested:
 # 1. **TiedLinearRelu** — Linear encoder, tied linear decoder + ReLU.
@@ -13,7 +13,7 @@
 # 2. **TiedMLPEncoder** — MLP encoder with tied (transposed) decoder.
 #    More expressive encoding, but weights are shared.
 # 3. **MLPEncoder** — Independent MLP encoder and decoder.
-#    Maximum expressiveness, no weight tying.
+#    No weight tying between encoder and decoder.
 # 4. **AttnLinearAE** — Multi-head softmax attention encoder with
 #    a linear decoder. A fundamentally different bottleneck: the latent
 #    is a convex combination of dictionary vectors.
@@ -157,10 +157,12 @@ for name, tm in models_sparse.items():
 # %% [markdown]
 # ## Loss Curves
 #
-# Do the architectures converge at different rates? The attention-based
-# model has a structurally different optimization landscape (softmax
-# constraints), which often manifests as slower early convergence but
-# potentially a different final basin.
+# Three of the four architectures (TiedLinearRelu, TiedMLPEncoder,
+# AttnLinearAE) converge to similar low losses. The outlier is
+# **MLPEncoder**, which converges to a substantially higher loss
+# despite having the most parameters. Without weight tying, the
+# encoder and decoder can drift apart, making optimization harder
+# in this small-scale setting.
 
 # %%
 # -- Plot loss curves --
@@ -371,16 +373,12 @@ fig_cos.update_layout(
 fig_cos.show()
 
 # %% [markdown]
-# ## Part 2: HierarchicalPairs — Does Architecture Matter More with Structure?
+# ## Part 2: HierarchicalPairs — Does the Distribution Change the Ranking?
 #
-# SparseUniform treats all features as independent. But many real-world
-# features have correlations. HierarchicalPairs creates parent-child
-# pairs where the child only fires when the parent does. This structured
-# correlation might favor architectures with more expressive encoders
-# that can capture conditional dependencies.
-#
-# The question: does the architecture ranking change when the data has
-# internal structure?
+# SparseUniform treats all features as independent. HierarchicalPairs
+# creates parent-child pairs where the child only fires when the parent
+# does. This structured correlation changes the effective sparsity pattern,
+# which may shift the architecture ranking.
 
 # %%
 # -- Build and train on HierarchicalPairs --
@@ -432,11 +430,11 @@ for name, m in metrics_hier.items():
     )
 
 # %% [markdown]
-# ## Side-by-Side: Does the Distribution Change the Ranking?
+# ## Side-by-Side Comparison
 #
-# Compare final loss and superposition across the two distributions.
-# If architecture matters uniformly, the ranking should be stable.
-# If it depends on the data, we will see crossovers.
+# The architecture ranking is **stable** across distributions:
+# TiedMLPEncoder wins on loss in both cases, MLPEncoder loses in both,
+# and TiedLinearRelu and AttnLinearAE land in the middle. No crossovers.
 
 # %%
 # -- Comparison bar chart --
@@ -523,10 +521,10 @@ fig_loss_hier.show()
 # ## Interference Patterns Under Hierarchy
 #
 # With HierarchicalPairs, features come in parent-child pairs
-# (f0-f1, f2-f3, ...). We might expect architectures to place paired
-# features in similar directions (high cosine similarity within pairs)
-# since they co-occur. Compare whether all architectures discover this
-# structure or only the more expressive ones.
+# (f0-f1, f2-f3, ...). Paired features co-occur, so the model may
+# place them in similar directions. The cosine similarity matrices
+# below show whether the different architectures discover this
+# pair structure.
 
 # %%
 # -- Cosine similarity for HierarchicalPairs --
@@ -568,23 +566,28 @@ fig_cos_hier.show()
 # %% [markdown]
 # ## Summary
 #
-# What to look for in the results:
+# Key findings from this experiment:
 #
-# 1. **Loss**: Do MLP-based architectures achieve lower final loss than
-#    the linear baseline? The extra encoder capacity should help, but
-#    the task may be simple enough that it does not matter.
+# 1. **Weight tying helps, not hurts.** TiedMLPEncoder consistently
+#    achieves the lowest loss across both distributions. MLPEncoder
+#    (no weight tying) performs worst by a large margin (~5-8x higher
+#    loss), despite having the most parameters. In this small-scale
+#    setting, the shared decoder constraint acts as beneficial
+#    regularization.
 #
-# 2. **Superposition**: Does the attention bottleneck (AttnLinearAE)
-#    produce a qualitatively different interference pattern? Its softmax
-#    constraint forces latent representations to be convex combinations
-#    of dictionary vectors, which is a very different inductive bias
-#    than a linear projection.
+# 2. **AttnLinearAE matches TiedLinearRelu, not exceeding it.** The
+#    attention bottleneck does not produce qualitatively different
+#    feature geometry here -- both converge to similar loss, superposition,
+#    and dimensionality values. The softmax constraint neither helps
+#    nor hurts at this scale.
 #
-# 3. **Distribution sensitivity**: If the ranking is stable across
-#    SparseUniform and HierarchicalPairs, then architecture choice is
-#    robust. If it changes, the data's correlation structure interacts
-#    with the bottleneck in nontrivial ways.
+# 3. **The architecture ranking is stable across distributions.**
+#    TiedMLPEncoder wins on both SparseUniform and HierarchicalPairs.
+#    MLPEncoder loses on both. No crossovers occur, suggesting the
+#    ranking reflects optimization properties rather than data-specific
+#    inductive biases.
 #
-# 4. **Feature norms under hierarchy**: Parent features (f0, f2, f4, f6)
-#    fire more often than children (f1, f3, f5, f7). All architectures
-#    should assign higher norms to parents, but the gap may differ.
+# 4. **Superposition varies with architecture.** TiedMLPEncoder achieves
+#    notably lower superposition (~0.7) than the others (~0.9-1.0),
+#    indicating it finds a less compressed representation. This likely
+#    stems from its nonlinear encoder providing better feature separation.
