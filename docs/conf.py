@@ -74,7 +74,7 @@ nitpick_ignore_regex = [
 ]
 
 # https://docs.readthedocs.com/platform/stable/intro/sphinx.html#set-the-canonical-url
-html_baseurl = os.environ.get("READTHEDOCS_CANONICAL_URL", "/")
+html_baseurl = os.environ.get("READTHEDOCS_CANONICAL_URL", "https://occhio.dev/")
 
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 html_static_path = ["_static"]
