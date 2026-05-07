@@ -15,6 +15,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
+from safetensors import safe_open
 from safetensors.torch import save_file
 
 # ── Utility imports (always available, no network needed) ──────────────────
@@ -141,201 +142,124 @@ class TestSuppressTqdm:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 3. PretrainedAE audit (mocked, no network)
+# 3. AutoEncoderBase.from_local / from_hub / push_to_hub
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-class TestPretrainedAEMocked:
-    """Tests using mocked HF Hub calls to avoid network dependency."""
+from occhio.autoencoders import (
+    AutoEncoderBase,
+    TiedLinearRelu,
+    TiedLinear,
+    MLPEncoder,
+    TiedMLPEncoder,
+    ComputeAutoEncoder,
+    AttnLinearAE,
+    AttnAttnAE,
+    LinearAttnAE,
+    SynthAE,
+)
 
-    def _create_safetensors(self, tmp_path, n_hidden=8, n_features=4, extra_keys=None):
-        """Helper: create a valid safetensors file with a W matrix and optional bias."""
-        W = torch.randn(n_hidden, n_features)
-        b = torch.zeros(n_features)
-        state = {"W": W, "b": b}
-        if extra_keys:
-            state.update(extra_keys)
+
+class TestFromLocalRoundTrip:
+    """Tests for AutoEncoderBase.from_local() architecture-invariant loading."""
+
+    @pytest.mark.parametrize(
+        "make_ae",
+        [
+            pytest.param(lambda: TiedLinearRelu(10, 5), id="TiedLinearRelu"),
+            pytest.param(lambda: TiedLinear(10, 5), id="TiedLinear"),
+            pytest.param(
+                lambda: MLPEncoder(embedding=[10, 8, 5], unembedding=[5, 8, 10]),
+                id="MLPEncoder",
+            ),
+            pytest.param(lambda: TiedMLPEncoder(dims=[10, 8, 5]), id="TiedMLPEncoder"),
+            pytest.param(
+                lambda: ComputeAutoEncoder(N=10, k=5), id="ComputeAutoEncoder"
+            ),
+            pytest.param(
+                lambda: AttnLinearAE(10, 4, n_heads=2, dict_size=8), id="AttnLinearAE"
+            ),
+            pytest.param(
+                lambda: AttnAttnAE(10, 4, n_heads=2, dict_size=8), id="AttnAttnAE"
+            ),
+            pytest.param(
+                lambda: LinearAttnAE(10, 4, n_heads=2, dict_size=8), id="LinearAttnAE"
+            ),
+            pytest.param(lambda: SynthAE(10, 5), id="SynthAE"),
+        ],
+    )
+    def test_round_trip_all_architectures(self, make_ae, tmp_path):
+        """Save → from_local round-trip preserves architecture and outputs."""
+        ae = make_ae()
         path = tmp_path / "model.safetensors"
-        save_file(state, str(path))
-        return path, W, b
+        ae.save_weights(path)
 
-    @patch("occhio.autoencoders.hugging_face.hf_hub_download")
-    @patch("occhio.autoencoders.hugging_face.HfApi")
-    def test_successful_load(self, mock_api_cls, mock_download, tmp_path):
-        path, W, b = self._create_safetensors(tmp_path, n_hidden=8, n_features=4)
+        loaded = AutoEncoderBase.from_local(path)
+        assert type(loaded).__name__ == type(ae).__name__
+        assert loaded.n_features == ae.n_features
+        assert loaded.n_hidden == ae.n_hidden
 
-        mock_info = MagicMock()
-        mock_info.sha = "abc123"
-        mock_api_cls.return_value.model_info.return_value = mock_info
-        mock_download.return_value = str(path)
+        x = torch.randn(4, ae.n_features)
+        assert torch.allclose(ae.encode(x), loaded.encode(x))
 
-        from occhio.autoencoders.hugging_face import PretrainedAE
-
-        ae = PretrainedAE(repo_id="test/repo", filename="model.safetensors")
-
-        assert ae.n_features == 4
-        assert ae.n_hidden == 8
-        assert ae.revision == "abc123"
-        assert ae.filename == "model.safetensors"
-        assert torch.allclose(ae.W, W)
-        assert torch.allclose(ae.b, b)
-
-    @patch("occhio.autoencoders.hugging_face.hf_hub_download")
-    @patch("occhio.autoencoders.hugging_face.HfApi")
-    def test_missing_W_key(self, mock_api_cls, mock_download, tmp_path):
-        """File has no 'W' key -- should raise KeyError."""
-        path = tmp_path / "bad.safetensors"
-        save_file({"other": torch.randn(3, 3)}, str(path))
-
-        mock_info = MagicMock()
-        mock_info.sha = "abc123"
-        mock_api_cls.return_value.model_info.return_value = mock_info
-        mock_download.return_value = str(path)
-
-        from occhio.autoencoders.hugging_face import PretrainedAE
-
-        with pytest.raises(KeyError, match="Expected key 'W'"):
-            PretrainedAE(repo_id="test/repo", filename="bad.safetensors")
-
-    @patch("occhio.autoencoders.hugging_face.hf_hub_download")
-    @patch("occhio.autoencoders.hugging_face.HfApi")
-    def test_3d_weight_matrix(self, mock_api_cls, mock_download, tmp_path):
-        """W is 3D -- should raise ValueError."""
-        path = tmp_path / "bad.safetensors"
-        save_file({"W": torch.randn(2, 3, 4)}, str(path))
-
-        mock_info = MagicMock()
-        mock_info.sha = "abc123"
-        mock_api_cls.return_value.model_info.return_value = mock_info
-        mock_download.return_value = str(path)
-
-        from occhio.autoencoders.hugging_face import PretrainedAE
-
-        with pytest.raises(ValueError, match="2D"):
-            PretrainedAE(repo_id="test/repo", filename="bad.safetensors")
-
-    @patch("occhio.autoencoders.hugging_face.hf_hub_download")
-    @patch("occhio.autoencoders.hugging_face.HfApi")
-    def test_non_safetensors_extension_warns(
-        self, mock_api_cls, mock_download, tmp_path
-    ):
-        """A file without .safetensors extension should warn."""
-        # Create a valid safetensors file but with a wrong name
-        W = torch.randn(4, 3)
-        b = torch.zeros(3)
-        path = tmp_path / "model.bin"
-        save_file({"W": W, "b": b}, str(path))
-
-        mock_info = MagicMock()
-        mock_info.sha = "abc123"
-        mock_api_cls.return_value.model_info.return_value = mock_info
-        mock_download.return_value = str(path)
-
-        from occhio.autoencoders.hugging_face import PretrainedAE
-
-        with pytest.warns(UserWarning, match="does not have expected .safetensors"):
-            ae = PretrainedAE(repo_id="test/repo", filename="model.bin")
-
-    @patch("occhio.autoencoders.hugging_face.hf_hub_download")
-    @patch("occhio.autoencoders.hugging_face.HfApi")
-    def test_device_parameter(self, mock_api_cls, mock_download, tmp_path):
-        """Verify device parameter moves model to specified device."""
-        path, W, b = self._create_safetensors(tmp_path, n_hidden=4, n_features=3)
-
-        mock_info = MagicMock()
-        mock_info.sha = "abc123"
-        mock_api_cls.return_value.model_info.return_value = mock_info
-        mock_download.return_value = str(path)
-
-        from occhio.autoencoders.hugging_face import PretrainedAE
-
-        ae = PretrainedAE(
-            repo_id="test/repo", filename="model.safetensors", device="cpu"
-        )
-        assert ae.device == torch.device("cpu")
-
-    @patch("occhio.autoencoders.hugging_face.hf_hub_download")
-    @patch("occhio.autoencoders.hugging_face.HfApi")
-    def test_load_state_dict_with_extra_keys_fails(
-        self, mock_api_cls, mock_download, tmp_path
-    ):
-        """If safetensors has unexpected keys beyond W and b, load_state_dict raises."""
+    def test_device_override(self, tmp_path):
+        ae = TiedLinearRelu(8, 4)
         path = tmp_path / "model.safetensors"
+        ae.save_weights(path)
+        loaded = AutoEncoderBase.from_local(path, device="cpu")
+        assert loaded.device == torch.device("cpu")
+
+    def test_missing_class_metadata(self, tmp_path):
+        path = tmp_path / "bad.safetensors"
+        save_file({"W": torch.randn(4, 3)}, str(path))
+        with pytest.raises(ValueError, match="no 'class' metadata"):
+            AutoEncoderBase.from_local(path)
+
+    def test_unknown_class(self, tmp_path):
+        path = tmp_path / "bad.safetensors"
+        save_file({"W": torch.randn(4, 3)}, str(path), metadata={"class": "FakeAE"})
+        with pytest.raises(ValueError, match="Unknown autoencoder class"):
+            AutoEncoderBase.from_local(path)
+
+    def test_legacy_file_without_config(self, tmp_path):
+        """Legacy files with class + W key but no config should still load."""
+        path = tmp_path / "legacy.safetensors"
+        ae = TiedLinearRelu(8, 4)
+        # Save manually without config (simulating old format)
+        save_file(ae.state_dict(), str(path), metadata={"class": "TiedLinearRelu"})
+        loaded = AutoEncoderBase.from_local(path)
+        assert isinstance(loaded, TiedLinearRelu)
+        assert loaded.n_features == 8
+        assert loaded.n_hidden == 4
+
+    def test_class_alias(self, tmp_path):
+        """Old class names should resolve via _class_aliases."""
+        ae = TiedLinearRelu(8, 4)
+        path = tmp_path / "old.safetensors"
         save_file(
-            {
-                "W": torch.randn(4, 3),
-                "b": torch.zeros(3),
-                "extra_param": torch.randn(5),
-            },
+            ae.state_dict(),
             str(path),
+            metadata={"class": "HuggingFaceAutoEncoder"},
         )
+        loaded = AutoEncoderBase.from_local(path)
+        assert isinstance(loaded, TiedLinearRelu)
 
-        mock_info = MagicMock()
-        mock_info.sha = "abc123"
-        mock_api_cls.return_value.model_info.return_value = mock_info
-        mock_download.return_value = str(path)
+    def test_config_in_metadata(self, tmp_path):
+        """Config is stored in safetensors metadata after save_weights."""
+        ae = AttnLinearAE(10, 4, n_heads=2, dict_size=8)
+        path = ae.save_weights(tmp_path / "model")
+        with safe_open(str(path), framework="pt") as f:
+            meta = f.metadata()
+        assert "config" in meta
+        import json
 
-        from occhio.autoencoders.hugging_face import PretrainedAE
+        config = json.loads(meta["config"])
+        assert config["n_heads"] == 2
+        assert config["dict_size"] == 8
 
-        with pytest.raises(RuntimeError, match="Unexpected key"):
-            PretrainedAE(repo_id="test/repo", filename="model.safetensors")
-
-    @patch("occhio.autoencoders.hugging_face.hf_hub_download")
-    @patch("occhio.autoencoders.hugging_face.HfApi")
-    def test_shape_mismatch_between_W_and_b(
-        self, mock_api_cls, mock_download, tmp_path
-    ):
-        """W says n_features=4, but b has length 3 -- load_state_dict should catch."""
-        path = tmp_path / "model.safetensors"
-        save_file({"W": torch.randn(8, 4), "b": torch.zeros(3)}, str(path))
-
-        mock_info = MagicMock()
-        mock_info.sha = "abc123"
-        mock_api_cls.return_value.model_info.return_value = mock_info
-        mock_download.return_value = str(path)
-
-        from occhio.autoencoders.hugging_face import PretrainedAE
-
-        with pytest.raises(RuntimeError, match="size mismatch"):
-            PretrainedAE(repo_id="test/repo", filename="model.safetensors")
-
-    @patch("occhio.autoencoders.hugging_face.hf_hub_download")
-    @patch("occhio.autoencoders.hugging_face.HfApi")
-    def test_repr(self, mock_api_cls, mock_download, tmp_path):
-        path, W, b = self._create_safetensors(tmp_path, n_hidden=4, n_features=3)
-
-        mock_info = MagicMock()
-        mock_info.sha = "abc123"
-        mock_api_cls.return_value.model_info.return_value = mock_info
-        mock_download.return_value = str(path)
-
-        from occhio.autoencoders.hugging_face import PretrainedAE
-
-        ae = PretrainedAE(repo_id="test/repo", filename="model.safetensors")
-        r = repr(ae)
-        assert "model.safetensors" in r
-        assert "n_features=3" in r
-        assert "n_hidden=4" in r
-
-    @patch("occhio.autoencoders.hugging_face.hf_hub_download")
-    @patch("occhio.autoencoders.hugging_face.HfApi")
-    def test_encode_decode_roundtrip(self, mock_api_cls, mock_download, tmp_path):
-        """After loading, encode/decode should work with correct shapes."""
-        path, W, b = self._create_safetensors(tmp_path, n_hidden=8, n_features=4)
-
-        mock_info = MagicMock()
-        mock_info.sha = "abc123"
-        mock_api_cls.return_value.model_info.return_value = mock_info
-        mock_download.return_value = str(path)
-
-        from occhio.autoencoders.hugging_face import PretrainedAE
-
-        ae = PretrainedAE(repo_id="test/repo", filename="model.safetensors")
-        x = torch.randn(16, 4)
-        z = ae.encode(x)
-        assert z.shape == (16, 8)
-        x_hat = ae.decode(z)
-        assert x_hat.shape == (16, 4)
+    def test_file_not_found(self):
+        with pytest.raises(FileNotFoundError):
+            AutoEncoderBase.from_local("/nonexistent/path.safetensors")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -567,34 +491,67 @@ class TestHuggingFaceDistributionMocked:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-class TestWarningMessageFormatting:
-    """Verify warning messages have correct spacing between sentences.
+class TestRegistryAndConfig:
+    """Tests for the autoencoder registry and config protocol."""
 
-    Previously both hugging_face.py files had a missing space:
-        "...extension.This may lead..."
-    Fixed to: "...extension. This may lead..."
-    """
+    def test_registry_contains_all_builtin_classes(self):
+        from occhio.autoencoders import AutoEncoderBase
 
-    @patch("occhio.autoencoders.hugging_face.hf_hub_download")
-    @patch("occhio.autoencoders.hugging_face.HfApi")
-    def test_ae_warning_has_correct_spacing(
-        self, mock_api_cls, mock_download, tmp_path
-    ):
-        """Warning message should have a space between sentences."""
-        path = tmp_path / "model.bin"
-        save_file({"W": torch.randn(4, 3), "b": torch.zeros(3)}, str(path))
+        expected = {
+            "TiedLinear",
+            "TiedLinearRelu",
+            "MLPEncoder",
+            "TiedMLPEncoder",
+            "ComputeAutoEncoder",
+            "AttnLinearAE",
+            "AttnAttnAE",
+            "LinearAttnAE",
+            "SynthAE",
+        }
+        assert expected.issubset(set(AutoEncoderBase._registry.keys()))
 
-        mock_info = MagicMock()
-        mock_info.sha = "abc123"
-        mock_api_cls.return_value.model_info.return_value = mock_info
-        mock_download.return_value = str(path)
+    def test_custom_subclass_auto_registers(self):
+        from occhio.autoencoders import AutoEncoderBase
 
-        from occhio.autoencoders.hugging_face import PretrainedAE
+        class _TestCustomAE(AutoEncoderBase):
+            def __init__(self, n_features, n_hidden, my_param=42, **kwargs):
+                super().__init__(n_features, n_hidden, **kwargs)
+                self.my_param = my_param
+                self.W = torch.nn.Parameter(torch.randn(n_hidden, n_features))
 
-        with pytest.warns(UserWarning) as record:
-            PretrainedAE(repo_id="test/repo", filename="model.bin")
+            def encode(self, x):
+                return x @ self.W.T
 
-        msg = str(record[0].message)
-        assert "extension. This" in msg, (
-            f"Expected proper spacing in warning, got: {msg}"
-        )
+            def decode(self, z):
+                return z @ self.W
+
+            def resample_weights(self):
+                pass
+
+        assert "_TestCustomAE" in AutoEncoderBase._registry
+
+    def test_custom_subclass_round_trip(self, tmp_path):
+        from occhio.autoencoders import AutoEncoderBase
+
+        class _TestRoundTripAE(AutoEncoderBase):
+            def __init__(self, n_features, n_hidden, scale=3.14, **kwargs):
+                super().__init__(n_features, n_hidden, **kwargs)
+                self.scale = scale
+                self.W = torch.nn.Parameter(torch.randn(n_hidden, n_features))
+
+            def encode(self, x):
+                return x @ self.W.T * self.scale
+
+            def decode(self, z):
+                return z @ self.W
+
+            def resample_weights(self):
+                pass
+
+        ae = _TestRoundTripAE(8, 4, scale=2.5)
+        path = ae.save_weights(tmp_path / "custom")
+        loaded = AutoEncoderBase.from_local(path)
+        assert type(loaded).__name__ == "_TestRoundTripAE"
+        assert loaded.scale == 2.5
+        x = torch.randn(2, 8)
+        assert torch.allclose(ae.encode(x), loaded.encode(x))

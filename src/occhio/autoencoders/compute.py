@@ -102,6 +102,13 @@ class ComputeAutoEncoder(AutoEncoderBase):
         weights = importances[x_hat.argmax(dim=-1)]
         return (per_sample * weights).mean()
 
+    def get_config(self) -> dict:
+        return {
+            "N": self.n_features,
+            "k": self.n_hidden,
+            "decode_activation": self.decode_activation,
+        }
+
     def resample_weights(self):
         dev = self.device
         gen = self.generator or torch.Generator(device=dev or "cpu")

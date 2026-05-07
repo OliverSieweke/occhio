@@ -2,10 +2,11 @@
 
 import datetime
 import functools
+import inspect
 import json
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable, ClassVar
 
 import torch
 import torch.nn as nn
@@ -15,12 +16,23 @@ from torch import Tensor
 
 from ..utils.device import _same_device
 
+# Params that cannot be serialized and should be excluded from config.
+_NON_SERIALIZABLE_PARAMS = frozenset({"loss_fn", "device", "generator"})
 
 # Sentinel for values that should be omitted from JSON.
 _SKIP = object()
 
 
 class AutoEncoderBase(nn.Module, ABC):
+    # Auto-populated registry: class_name -> class.
+    _registry: ClassVar[dict[str, type["AutoEncoderBase"]]] = {}
+
+    # Aliases for renamed classes (old_name -> current_name).
+    _class_aliases: ClassVar[dict[str, str]] = {
+        "HuggingFaceAutoEncoder": "TiedLinearRelu",
+        "PretrainedAE": "TiedLinearRelu",
+    }
+
     @abstractmethod
     def encode(self, x: Tensor) -> Tensor:
         """features --> latent"""
@@ -121,10 +133,16 @@ class AutoEncoderBase(nn.Module, ABC):
             path = path.with_suffix(".safetensors")
 
         class_name = type(self).__name__
-        save_file(self.state_dict(), str(path), metadata={"class": class_name})
+        config = self.get_config()
+        metadata = {
+            "class": class_name,
+            "config": json.dumps(config),
+        }
+        save_file(self.state_dict(), str(path), metadata=metadata)
 
         info: dict = {
             "class": class_name,
+            "config": config,
             "attributes": self._collect_attrs(),
             "parameters": {
                 k: {"shape": list(v.shape), "dtype": str(v.dtype)}
@@ -209,6 +227,181 @@ class AutoEncoderBase(nn.Module, ABC):
         # Fallback: repr for anything else (enums, callables, etc.)
         return repr(v)
 
+    def get_config(self) -> dict[str, Any]:
+        """Return kwargs needed to reconstruct this instance via ``cls(**config)``.
+
+        The default implementation inspects the constructor signature and looks
+        up each parameter as ``self.<param>`` or ``self._<param>``. Subclasses
+        with mismatched parameter/attribute names should override this method.
+        """
+        sig = inspect.signature(type(self).__init__)
+        config = {}
+        for name, param in sig.parameters.items():
+            if name == "self" or name in _NON_SERIALIZABLE_PARAMS:
+                continue
+            if param.kind in (param.VAR_POSITIONAL, param.VAR_KEYWORD):
+                continue
+            # Look up self.<name>, then self._<name> (SynthAE pattern)
+            if hasattr(self, name):
+                val = getattr(self, name)
+            elif hasattr(self, f"_{name}"):
+                val = getattr(self, f"_{name}")
+            else:
+                continue
+            # Only include JSON-serializable values
+            if isinstance(val, (int, float, str, bool, list, tuple)):
+                config[name] = val
+            elif val is None:
+                config[name] = val
+        return config
+
+    @classmethod
+    def from_local(
+        cls,
+        path: str | Path,
+        *,
+        device: torch.device | str | None = None,
+    ) -> "AutoEncoderBase":
+        """Reconstruct any autoencoder from a ``.safetensors`` file.
+
+        Reads the class name and constructor config from file metadata,
+        looks up the class in the auto-populated registry, constructs an
+        instance, and loads the saved weights.
+
+        Args:
+            path: Path to a ``.safetensors`` file.
+            device: Device to place the model on (overrides saved config).
+        """
+        path = Path(path)
+        if path.suffix != ".safetensors":
+            path = path.with_suffix(".safetensors")
+        if not path.exists():
+            raise FileNotFoundError(f"No such file: {path}")
+
+        with safe_open(str(path), framework="pt") as f:
+            metadata = f.metadata()
+
+        if not metadata or "class" not in metadata:
+            raise ValueError(
+                f"File {path} has no 'class' metadata. "
+                f"Was it saved with save_weights()?"
+            )
+
+        class_name = metadata["class"]
+
+        # Check aliases for renamed classes
+        class_name = cls._class_aliases.get(class_name, class_name)
+
+        ae_cls = cls._registry.get(class_name)
+        if ae_cls is None:
+            raise ValueError(
+                f"Unknown autoencoder class {class_name!r}. "
+                f"Available: {sorted(cls._registry.keys())}. "
+                f"Ensure the module defining {class_name} has been imported."
+            )
+
+        config_str = metadata.get("config")
+        if config_str is not None:
+            config = json.loads(config_str)
+        else:
+            # Legacy file: no config. Infer from state dict for simple cases.
+            state_dict = load_file(str(path))
+            if "W" in state_dict:
+                n_hidden, n_features = state_dict["W"].shape
+                config = {"n_features": int(n_features), "n_hidden": int(n_hidden)}
+            else:
+                raise ValueError(
+                    f"File {path} has no 'config' metadata and no 'W' key "
+                    f"to infer dimensions. Construct the model manually "
+                    f"and use load_weights(path)."
+                )
+
+        # Validate config against constructor
+        sig = inspect.signature(ae_cls.__init__)
+        valid_params = {
+            name
+            for name, p in sig.parameters.items()
+            if name != "self" and p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)
+        }
+        unknown = set(config.keys()) - valid_params
+        if unknown:
+            raise ValueError(
+                f"Saved config for {class_name} has unexpected keys {unknown}. "
+                f"Valid params: {sorted(valid_params)}"
+            )
+
+        if device is not None:
+            config["device"] = device
+
+        try:
+            instance = ae_cls(**config)
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to construct {class_name} with config {config}: {e}"
+            ) from e
+
+        instance.load_state_dict(load_file(str(path)), strict=True)
+
+        if device is not None:
+            instance.to(device)
+
+        return instance
+
+    @classmethod
+    def from_hub(
+        cls,
+        repo_id: str,
+        filename: str = "model.safetensors",
+        *,
+        revision: str | None = None,
+        device: torch.device | str | None = None,
+    ) -> "AutoEncoderBase":
+        """Download and reconstruct an autoencoder from HuggingFace Hub.
+
+        Args:
+            repo_id: HuggingFace Hub repository ID.
+            filename: Path to the safetensors file within the repo.
+            revision: Branch, tag, or commit hash.
+            device: Device to place the model on.
+        """
+        from .hub import load_autoencoder_from_hub
+
+        return load_autoencoder_from_hub(
+            repo_id, filename, revision=revision, device=device
+        )
+
+    def push_to_hub(
+        self,
+        repo_id: str,
+        *,
+        filename: str = "model.safetensors",
+        commit_message: str | None = None,
+        private: bool = False,
+        token: str | None = None,
+    ) -> str:
+        """Save and upload this autoencoder to HuggingFace Hub.
+
+        Args:
+            repo_id: HuggingFace Hub repository ID.
+            filename: Destination filename in the repo.
+            commit_message: Commit message (auto-generated if None).
+            private: Whether to create a private repo.
+            token: HuggingFace API token.
+
+        Returns:
+            URL of the uploaded model.
+        """
+        from .hub import push_autoencoder_to_hub
+
+        return push_autoencoder_to_hub(
+            self,
+            repo_id,
+            filename=filename,
+            commit_message=commit_message,
+            private=private,
+            token=token,
+        )
+
     def load_weights(self, path: str | Path, *, strict: bool = True) -> None:
         """Load weights from a .safetensors file into this model.
 
@@ -248,8 +441,9 @@ class AutoEncoderBase(nn.Module, ABC):
         self.load_state_dict(load_file(str(path)), strict=strict)
 
     def __init_subclass__(cls, **kwargs):
-        """This ensures that `n_features` and `n_hidden` are defined at creation"""
+        """Register subclass and ensure n_features/n_hidden are set."""
         super().__init_subclass__(**kwargs)
+        AutoEncoderBase._registry[cls.__name__] = cls
         original_init = cls.__init__
 
         @functools.wraps(original_init)

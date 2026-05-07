@@ -160,6 +160,68 @@ class ToyModel:
             else:
                 self.importances = torch.tensor(importances, device=ae_device)
 
+    @classmethod
+    def from_hub(
+        cls,
+        repo_id: str,
+        distribution: Distribution,
+        *,
+        filename: str = "model.safetensors",
+        revision: str | None = None,
+        device: torch.device | str | None = None,
+        importances: Tensor | list | None = None,
+    ) -> "ToyModel":
+        """Load a pretrained autoencoder from HuggingFace Hub and wrap it.
+
+        Downloads the autoencoder weights, reconstructs the correct
+        architecture automatically, and creates a ToyModel with the
+        user-supplied distribution.
+
+        Args:
+            repo_id: HuggingFace Hub repository ID.
+            distribution: Distribution to pair with the loaded autoencoder.
+            filename: Path to the safetensors file within the repo.
+            revision: Branch, tag, or commit hash.
+            device: Device for the model.
+            importances: Feature importance weights.
+
+        Returns:
+            A ToyModel wrapping the loaded autoencoder and distribution.
+        """
+        ae = AutoEncoderBase.from_hub(
+            repo_id, filename, revision=revision, device=device
+        )
+        return cls(distribution, ae, device=device, importances=importances)
+
+    def push_to_hub(
+        self,
+        repo_id: str,
+        *,
+        filename: str = "model.safetensors",
+        commit_message: str | None = None,
+        private: bool = False,
+        token: str | None = None,
+    ) -> str:
+        """Upload this model's autoencoder weights to HuggingFace Hub.
+
+        Args:
+            repo_id: HuggingFace Hub repository ID.
+            filename: Destination filename in the repo.
+            commit_message: Commit message (auto-generated if None).
+            private: Whether to create a private repo.
+            token: HuggingFace API token.
+
+        Returns:
+            URL of the repository.
+        """
+        return self.ae.push_to_hub(
+            repo_id,
+            filename=filename,
+            commit_message=commit_message,
+            private=private,
+            token=token,
+        )
+
     @staticmethod
     def _validate_data_file(
         tensors: dict[str, Tensor],

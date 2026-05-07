@@ -102,6 +102,13 @@ class MLPEncoder(AutoEncoderBase):
         z = torch.relu(z)  # ReLU on final output (outputs are non-negative)
         return z
 
+    def get_config(self) -> dict:
+        return {
+            "embedding": self.embedding_dims,
+            "unembedding": self.unembedding_dims,
+            "tied_initialization": self.tied_initialization,
+        }
+
     def resample_weights(self, force_norm=False):
         self._build_layers()
 
