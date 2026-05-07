@@ -51,3 +51,16 @@ print(model.superposition)
 
    source/api
 ```
+
+## Citation
+
+If you use occhio in your research, please cite:
+
+```bibtex
+@software{occhio2025,
+  title   = {occhio: A Library for Studying Superposition in Toy Models},
+  author  = {Kupper, Niclas and Reddy, Kaushik and Sieweke, Oliver and Ayonrinde, Kola},
+  year    = {2025},
+  url     = {https://github.com/OliverSieweke/occhio},
+}
+```
