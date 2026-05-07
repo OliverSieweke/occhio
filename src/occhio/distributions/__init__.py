@@ -2,6 +2,7 @@ from .base import Distribution, DistributionStack
 from .sparse import SparseUniform, SparseExponential, SingleUniform
 from .correlated import (
     CorrelatedPairs,
+    GaussianCorrelated,
     HierarchicalPairs,
     ScaledHierarchicalPairs,
     AnticorrelatedPairs,
@@ -17,6 +18,7 @@ from .dag import (
 from .simplex import SimplexDistribution, SimplicialComplexDistribution
 from .manifold import SphericalDistribution, TorusDistribution, HypercubeDistribution
 from .ssb import SyntheticDataModel, SyntheticDataConfig, HierarchyNode
+from .hugging_face import HuggingFaceDistribution
 
 
 __all__ = [
@@ -26,6 +28,7 @@ __all__ = [
     "SparseExponential",
     "SingleUniform",
     "CorrelatedPairs",
+    "GaussianCorrelated",
     "HierarchicalPairs",
     "ScaledHierarchicalPairs",
     "AnticorrelatedPairs",
@@ -44,4 +47,5 @@ __all__ = [
     "SyntheticDataModel",
     "SyntheticDataConfig",
     "HierarchyNode",
+    "HuggingFaceDistribution",
 ]

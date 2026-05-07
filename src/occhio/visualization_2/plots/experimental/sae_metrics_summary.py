@@ -54,7 +54,7 @@ def _get_sae_labels_and_check(
         return None
 
     sae_labels = (
-        [l for l in requested_sae_labels if l in common_sae_labels]
+        [lbl for lbl in requested_sae_labels if lbl in common_sae_labels]
         if requested_sae_labels
         else sorted(common_sae_labels)
     )
@@ -162,7 +162,6 @@ class PerformanceFidelityTablePlot(SinglePlot):
         axis = models.axes[0]
         n_models = len(models)
         model_labels = [str(axis.values[i]) for i in range(n_models)]
-        first_model = models[0]
 
         # Build header
         header_row1 = (
@@ -172,7 +171,7 @@ class PerformanceFidelityTablePlot(SinglePlot):
             + ["<b>MCC</b>"]
             + [""] * (n_models - 1)
         )
-        header_row2 = ["<b>SAE</b>"] + model_labels * 3
+        header_row2 = ["<b>SAE</b>"] + model_labels * 2
 
         header_values = [
             [header_row1[i], header_row2[i]] for i in range(len(header_row1))
@@ -181,7 +180,7 @@ class PerformanceFidelityTablePlot(SinglePlot):
         title_color = "rgb(66, 133, 244)"
         # Header colors: title row + model-colored second row
         header_colors = [[title_color, "rgb(240, 240, 240)"]]  # SAE column
-        for _ in range(3):  # 3 metrics
+        for _ in range(2):  # 2 metrics (F1, MCC)
             for model_idx in range(n_models):
                 header_colors.append(
                     [title_color, MODEL_COLORS[model_idx % len(MODEL_COLORS)]]
@@ -226,8 +225,8 @@ class PerformanceFidelityTablePlot(SinglePlot):
             mcc_cols.append(mcc_col)
 
         cell_values = [sae_col] + f1_cols + mcc_cols
-        fill_color = _get_model_column_colors(n_models, 3, len(sae_labels))
-        align = ["left"] + ["center"] * (n_models * 3)
+        fill_color = _get_model_column_colors(n_models, 2, len(sae_labels))
+        align = ["left"] + ["center"] * (n_models * 2)
 
         fig.add_trace(
             go.Table(
@@ -304,7 +303,6 @@ class InterpretabilityTablePlot(SinglePlot):
         axis = models.axes[0]
         n_models = len(models)
         model_labels = [str(axis.values[i]) for i in range(n_models)]
-        first_model = models[0]
 
         # Build header
         header_row1 = (
@@ -466,7 +464,6 @@ class DiagnosticTablePlot(SinglePlot):
         axis = models.axes[0]
         n_models = len(models)
         model_labels = [str(axis.values[i]) for i in range(n_models)]
-        first_model = models[0]
 
         # Build header
         header_row1 = (

@@ -123,7 +123,7 @@ class SAEBenchmarkTablePlot(SinglePlot):
             return
 
         sae_labels = (
-            [l for l in self.sae_labels if l in common_sae_labels]
+            [lbl for lbl in self.sae_labels if lbl in common_sae_labels]
             if self.sae_labels
             else sorted(common_sae_labels)
         )

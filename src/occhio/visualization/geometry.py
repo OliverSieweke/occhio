@@ -5,7 +5,6 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from occhio.distributions import CorrelatedPairs, HierarchicalPairs, SparseUniform
 from occhio.model_grid import ModelGrid, TrainingAxis
 from occhio.toy_model import ToyModel
 
@@ -701,29 +700,6 @@ def plot_feature_geometry(
 
     n_models = len(models)
 
-    feature_probabilities = [
-        # [10.02.26 | OliverSieweke] TODO: fix below once distributions updated
-        (
-            model.distribution.p_active[0]
-            if hasattr(model.distribution.p_active, "__getitem__")
-            and hasattr(model.distribution.p_active, "shape")
-            and len(model.distribution.p_active.shape) > 0
-            else (
-                model.distribution.p_active
-                if isinstance(model.distribution, SparseUniform)
-                or isinstance(model.distribution, CorrelatedPairs)
-                or isinstance(model.distribution, HierarchicalPairs)
-                else (_ for _ in ()).throw(
-                    UserWarning(
-                        "plot_geometry currently expects ToyModel.distribution to be SparseUniform "
-                        "(or at least to expose .p_active with the same meaning)."
-                    )
-                )
-            )
-        )
-        for model in models
-    ]
-
     fig = make_subplots(
         rows=1,
         cols=n_models,
@@ -743,7 +719,6 @@ def plot_feature_geometry(
             if hasattr(model.interferences, "cpu")
             else model.interferences
         )
-        n_features = len(feature_dimensionalities)
 
         # Filter features based on dimensionality threshold and range
         # Convert to CPU for NumPy compatibility if it's a GPU tensor

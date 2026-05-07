@@ -1,9 +1,5 @@
 import math
 
-# Example that triggers ruff linting errors:
-import os  # E401: multiple imports on one line
-import sys
-
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots

@@ -11,7 +11,7 @@ This module defines the core abstractions:
 
 import itertools
 from abc import ABC, abstractmethod
-from typing import Literal, Sequence, cast, overload
+from typing import Literal, Sequence, overload
 
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
