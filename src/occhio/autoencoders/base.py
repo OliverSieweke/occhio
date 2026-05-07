@@ -24,6 +24,25 @@ _SKIP = object()
 
 
 class AutoEncoderBase(nn.Module, ABC):
+    """Abstract base class for all autoencoders.
+
+    Subclasses must implement :meth:`encode`, :meth:`decode`, and
+    :meth:`resample_weights`.  The base class provides:
+
+    - Default ``forward()`` (encode + decode) and ``loss()`` (importance-weighted MSE)
+    - Serialization via :meth:`save_weights` / :meth:`from_local` / :meth:`from_hub` /
+      :meth:`push_to_hub`
+    - Automatic config extraction from constructor signature (:meth:`get_config`)
+    - Auto-registration of subclasses for deserialization
+
+    Args:
+        n_features: Input/output dimensionality (number of ground-truth features).
+        n_hidden: Latent/hidden dimensionality.
+        loss_fn: Optional custom loss function replacing the default MSE loss.
+        device: Torch device for parameters.
+        generator: Optional ``torch.Generator`` for reproducible weight init.
+    """
+
     # Auto-populated registry: class_name -> class.
     _registry: ClassVar[dict[str, type["AutoEncoderBase"]]] = {}
 
@@ -35,11 +54,25 @@ class AutoEncoderBase(nn.Module, ABC):
 
     @abstractmethod
     def encode(self, x: Tensor) -> Tensor:
-        """features --> latent"""
+        """Encode feature-space input to hidden/latent representation.
+
+        Args:
+            x: Input tensor of shape ``(batch, n_features)``.
+
+        Returns:
+            Latent tensor of shape ``(batch, n_hidden)``.
+        """
 
     @abstractmethod
     def decode(self, z: Tensor) -> Tensor:
-        """latent --> features"""
+        """Decode hidden/latent representation back to feature space.
+
+        Args:
+            z: Latent tensor of shape ``(batch, n_hidden)``.
+
+        Returns:
+            Reconstructed tensor of shape ``(batch, n_features)``.
+        """
 
     @property
     def feature_vectors(self) -> Tensor:
@@ -47,9 +80,20 @@ class AutoEncoderBase(nn.Module, ABC):
 
     @abstractmethod
     def resample_weights(self):
-        """Reset / resample all weights"""
+        """Reset / reinitialize all learnable parameters.
+
+        Called during ``__init__`` and available for manual reinitialization.
+        """
 
     def forward(self, x: Tensor) -> tuple[Tensor, Tensor]:
+        """Full forward pass: encode then decode.
+
+        Args:
+            x: Input tensor of shape ``(batch, n_features)``.
+
+        Returns:
+            ``(x_hat, z)`` -- the reconstruction and latent representation.
+        """
         z = self.encode(x)
         x_hat = self.decode(z)
         return x_hat, z

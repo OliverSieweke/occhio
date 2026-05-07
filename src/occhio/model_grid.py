@@ -34,6 +34,13 @@ from occhio.toy_model import SAEEntry, ToyModel
 
 @dataclass
 class Axis:
+    """A named axis for a :class:`ModelGrid` parameter sweep.
+
+    Args:
+        label: Human-readable name (used in plot headers and DataFrame indices).
+        values: Sequence of values to sweep over.
+    """
+
     label: str
     values: Sequence
 
@@ -499,6 +506,26 @@ class ModelGrid:
         snapshot_interval: int | None = None,
         sample_every: int = 25,
     ) -> ModelGrid | list[float] | None:
+        """Train all models in the grid in parallel using ``torch.vmap``.
+
+        Args:
+            n_epochs: Number of training epochs.
+            batch_size: Samples per model per epoch.
+            learning_rate: AdamW learning rate.
+            weight_decay: AdamW weight decay.
+            verbose: Show a tqdm progress bar.
+            compile: Apply ``torch.compile`` to the vectorized forward pass.
+            track_losses: Return per-epoch mean losses.
+            snapshot_interval: If set, capture model state every N epochs and
+                return a new ``ModelGrid`` with a prepended ``TrainingAxis``.
+            sample_every: Re-sample from distributions every N epochs.
+
+        Returns:
+            - If ``snapshot_interval`` is set: a new ``ModelGrid`` with
+              ``TrainingAxis`` prepended.
+            - If ``track_losses`` is True: list of per-epoch mean losses.
+            - Otherwise: ``None``.
+        """
         # Validate sample_every
         if sample_every < 1:
             raise ValueError(f"sample_every must be positive, got {sample_every}")

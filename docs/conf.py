@@ -44,6 +44,35 @@ exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 
 nitpicky = True
 
+# Suppress warnings for external types that Sphinx cannot resolve
+# (torch, numpy, plotly, sae_lens, etc.)
+nitpick_ignore_regex = [
+    (r"py:.*", r"torch\..*"),
+    (r"py:.*", r"Tensor"),
+    (r"py:.*", r"nn\..*"),
+    (r"py:.*", r"numpy\..*"),
+    (r"py:.*", r"np\..*"),
+    (r"py:.*", r"NDArray.*"),
+    (r"py:.*", r"plotly\..*"),
+    (r"py:.*", r"go\..*"),
+    (r"py:.*", r"pathlib\..*"),
+    (r"py:.*", r"Path"),
+    (r"py:.*", r"sae_lens\..*"),
+    (r"py:.*", r"SyntheticDataEvalResult"),
+    (r"py:.*", r"pd\..*"),
+    (r"py:.*", r"pandas\..*"),
+    (r"py:.*", r"Optimizer"),
+    (r"py:.*", r"FigureProxy"),
+    (r"py:.*", r"InteractiveFigure"),
+    (r"py:.*", r"TrainingSAE"),
+    (r"py:.*", r"SAETrainer"),
+    (r"py:.*", r"HfApi"),
+    (r"py:.*", r"abc\.ABC"),
+    (r"py:.*", r"enum\.Enum"),
+    (r"py:.*", r"occhio\.visualization\.plots\.feature_representation\._.*"),
+    (r"py:.*", r"occhio\.visualization\.plots\.compute\._.*"),
+]
+
 # https://docs.readthedocs.com/platform/stable/intro/sphinx.html#set-the-canonical-url
 html_baseurl = os.environ.get("READTHEDOCS_CANONICAL_URL", "/")
 
