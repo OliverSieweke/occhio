@@ -2,7 +2,7 @@
 
 import pytest
 import torch
-from ..dag import DAGDistribution, DAGBayesianPropagation
+from occhio.distributions.dag import DAGDistribution, DAGBayesianPropagation
 
 
 @pytest.fixture

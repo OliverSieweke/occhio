@@ -3,7 +3,7 @@
 import pytest
 import torch
 from torch import Tensor
-from ..sparse import SparseUniform, SparseExponential
+from occhio.distributions.sparse import SparseUniform, SparseExponential
 
 
 @pytest.fixture

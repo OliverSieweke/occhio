@@ -2,7 +2,11 @@
 
 import pytest
 import torch
-from ..correlated import HierarchicalPairs, CorrelatedPairs, AnticorrelatedPairs
+from occhio.distributions.correlated import (
+    HierarchicalPairs,
+    CorrelatedPairs,
+    AnticorrelatedPairs,
+)
 
 
 @pytest.fixture

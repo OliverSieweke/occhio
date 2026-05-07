@@ -7,8 +7,7 @@ import torch
 from huggingface_hub import HfApi, hf_hub_download
 from safetensors.torch import load_file
 
-from .autoencoder import TiedLinearRelu
-from ..benchmark.configs import OCCHIO_HF_MODELS_REPO
+from .tied import TiedLinearRelu
 
 
 # [2026-03-26 | OliverSieweke] TODO: Think about how to import non TiedLinearRelu models here...

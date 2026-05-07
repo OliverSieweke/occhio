@@ -2,7 +2,7 @@
 
 import pytest
 import torch
-from ..hierarchical import HierarchicalSparse
+from occhio.distributions.hierarchical import HierarchicalSparse
 
 
 @pytest.fixture

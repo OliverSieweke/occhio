@@ -2,7 +2,7 @@
 
 import pytest
 import torch
-from ..relational import RelationalSimple, MultiRelational
+from occhio.distributions.relational import RelationalSimple, MultiRelational
 
 
 @pytest.fixture
