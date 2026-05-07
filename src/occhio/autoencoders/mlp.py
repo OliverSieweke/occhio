@@ -60,7 +60,7 @@ class MLPEncoder(AutoEncoderBase):
             if self.tied_initialization:
                 # Initialize decoder layer i as transpose of mirrored encoder layer
                 enc_idx = len(self.encoder_weights) - 1 - i
-                w = nn.Parameter(self.encoder_weights[enc_idx].data.t().clone())
+                w = nn.Parameter(self.encoder_weights[enc_idx].data.t().contiguous())
             else:
                 w = nn.Parameter(
                     torch.empty(
