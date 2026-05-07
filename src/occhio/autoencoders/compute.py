@@ -44,10 +44,11 @@ class ComputeAutoEncoder(AutoEncoderBase):
         super().__init__(N, k, **kwargs)
         self.decode_activation = decode_activation
 
-        gen = torch.Generator().manual_seed(seed)
-        self.W = nn.Parameter(torch.randn(k, N, generator=gen) / N)
-        self.Z = nn.Parameter(torch.randn(k, k, generator=gen) / k)
-        self.b = nn.Parameter(torch.zeros(N))
+        dev = self.device
+        gen = torch.Generator(device=dev or "cpu").manual_seed(seed)
+        self.W = nn.Parameter(torch.randn(k, N, generator=gen, device=dev) / N)
+        self.Z = nn.Parameter(torch.randn(k, k, generator=gen, device=dev) / k)
+        self.b = nn.Parameter(torch.zeros(N, device=dev))
 
     # ── core operations ────────────────────────────────────────────────────
 
@@ -102,8 +103,9 @@ class ComputeAutoEncoder(AutoEncoderBase):
         return (per_sample * weights).mean()
 
     def resample_weights(self):
-        gen = self.generator or torch.Generator()
+        dev = self.device
+        gen = self.generator or torch.Generator(device=dev or "cpu")
         N, k = self.n_features, self.n_hidden
-        self.W = nn.Parameter(torch.randn(k, N, generator=gen) / N)
-        self.Z = nn.Parameter(torch.randn(k, k, generator=gen) / k)
-        self.b = nn.Parameter(torch.zeros(N))
+        self.W = nn.Parameter(torch.randn(k, N, generator=gen, device=dev) / N)
+        self.Z = nn.Parameter(torch.randn(k, k, generator=gen, device=dev) / k)
+        self.b = nn.Parameter(torch.zeros(N, device=dev))

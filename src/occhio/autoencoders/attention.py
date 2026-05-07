@@ -92,7 +92,7 @@ class AttnLinearAE(AutoEncoderBase):
             ]
         )
 
-        self.alpha = nn.Parameter(torch.Tensor([0.1]))
+        self.alpha = nn.Parameter(torch.tensor([0.1], device=dev))
 
         # Decoder: linear projection from latent to features
         self.W_out = nn.Parameter(
@@ -218,7 +218,7 @@ class AttnAttnAE(AutoEncoderBase):
         )
 
         self.b = nn.Parameter(torch.zeros(self.n_features, device=dev))
-        self.alpha = nn.Parameter(torch.Tensor([0.1]))
+        self.alpha = nn.Parameter(torch.tensor([0.1], device=dev))
 
     def encode(self, x: Tensor) -> Tensor:
         parts = []
