@@ -7,6 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
+from ..utils.device import seeded_generator
 from .base import AutoEncoderBase
 
 
@@ -45,7 +46,7 @@ class ComputeAutoEncoder(AutoEncoderBase):
         self.decode_activation = decode_activation
 
         dev = self.device
-        gen = torch.Generator(device=dev or "cpu").manual_seed(seed)
+        gen = seeded_generator(seed, dev)
         self.W = nn.Parameter(torch.randn(k, N, generator=gen, device=dev) / N)
         self.Z = nn.Parameter(torch.randn(k, k, generator=gen, device=dev) / k)
         self.b = nn.Parameter(torch.zeros(N, device=dev))

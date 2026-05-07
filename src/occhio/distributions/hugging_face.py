@@ -8,6 +8,7 @@ from huggingface_hub import HfApi, hf_hub_download
 from safetensors.torch import load_file
 from torch import Tensor
 
+from ..utils.device import ensure_device
 from .base import Distribution
 
 
@@ -116,8 +117,8 @@ class HuggingFaceDistribution(Distribution):
         # CUDA perf: transfer indices to CPU once for indexing into CPU-resident
         # _samples, then transfer the sampled batch to device with non_blocking
         indices = self._randint(0, self._n_samples, (self.buffer_size,))
-        cpu_indices = indices.cpu() if indices.device.type != "cpu" else indices
-        self._buffer = self._samples[cpu_indices].to(self.device, non_blocking=True)
+        cpu_indices = ensure_device(indices, "cpu", non_blocking=False)
+        self._buffer = ensure_device(self._samples[cpu_indices], self.device)
         self._buffer_ptr = 0
 
     def sample(self, batch_size: int) -> Tensor:
@@ -131,9 +132,9 @@ class HuggingFaceDistribution(Distribution):
         """
         if self.buffer_size is None:
             indices = self._randint(0, self._n_samples, (batch_size,))
-            cpu_indices = indices.cpu() if indices.device.type != "cpu" else indices
+            cpu_indices = ensure_device(indices, "cpu", non_blocking=False)
             batch = self._samples[cpu_indices]
-            return batch.to(self.device) if self.device else batch
+            return ensure_device(batch, self.device) if self.device else batch
 
         if batch_size > self.buffer_size:
             raise ValueError(
