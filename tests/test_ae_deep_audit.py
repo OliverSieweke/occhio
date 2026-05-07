@@ -857,10 +857,10 @@ class TestInitExports:
             assert obj is not None, f"{name} listed in __all__ but not importable"
 
     def test_hugging_face_not_in_enum(self):
-        """HuggingFaceAutoEncoder is deliberately excluded from the enum
+        """PretrainedAE is deliberately excluded from the enum
         (it's a loader, not a standard AE type). Verify intentional exclusion."""
         enum_names = {e.name for e in AutoencoderType}
-        assert "HuggingFaceAutoEncoder" not in enum_names
+        assert "PretrainedAE" not in enum_names
 
     def test_softmax1_importable_from_attention_module(self):
         """softmax1 is a helper function in attention.py — ensure it's importable."""

@@ -141,11 +141,11 @@ class TestSuppressTqdm:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 3. HuggingFaceAutoEncoder audit (mocked, no network)
+# 3. PretrainedAE audit (mocked, no network)
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-class TestHuggingFaceAutoEncoderMocked:
+class TestPretrainedAEMocked:
     """Tests using mocked HF Hub calls to avoid network dependency."""
 
     def _create_safetensors(self, tmp_path, n_hidden=8, n_features=4, extra_keys=None):
@@ -169,9 +169,9 @@ class TestHuggingFaceAutoEncoderMocked:
         mock_api_cls.return_value.model_info.return_value = mock_info
         mock_download.return_value = str(path)
 
-        from occhio.autoencoders.hugging_face import HuggingFaceAutoEncoder
+        from occhio.autoencoders.hugging_face import PretrainedAE
 
-        ae = HuggingFaceAutoEncoder(repo_id="test/repo", filename="model.safetensors")
+        ae = PretrainedAE(repo_id="test/repo", filename="model.safetensors")
 
         assert ae.n_features == 4
         assert ae.n_hidden == 8
@@ -192,10 +192,10 @@ class TestHuggingFaceAutoEncoderMocked:
         mock_api_cls.return_value.model_info.return_value = mock_info
         mock_download.return_value = str(path)
 
-        from occhio.autoencoders.hugging_face import HuggingFaceAutoEncoder
+        from occhio.autoencoders.hugging_face import PretrainedAE
 
         with pytest.raises(KeyError, match="Expected key 'W'"):
-            HuggingFaceAutoEncoder(repo_id="test/repo", filename="bad.safetensors")
+            PretrainedAE(repo_id="test/repo", filename="bad.safetensors")
 
     @patch("occhio.autoencoders.hugging_face.hf_hub_download")
     @patch("occhio.autoencoders.hugging_face.HfApi")
@@ -209,10 +209,10 @@ class TestHuggingFaceAutoEncoderMocked:
         mock_api_cls.return_value.model_info.return_value = mock_info
         mock_download.return_value = str(path)
 
-        from occhio.autoencoders.hugging_face import HuggingFaceAutoEncoder
+        from occhio.autoencoders.hugging_face import PretrainedAE
 
         with pytest.raises(ValueError, match="2D"):
-            HuggingFaceAutoEncoder(repo_id="test/repo", filename="bad.safetensors")
+            PretrainedAE(repo_id="test/repo", filename="bad.safetensors")
 
     @patch("occhio.autoencoders.hugging_face.hf_hub_download")
     @patch("occhio.autoencoders.hugging_face.HfApi")
@@ -231,10 +231,10 @@ class TestHuggingFaceAutoEncoderMocked:
         mock_api_cls.return_value.model_info.return_value = mock_info
         mock_download.return_value = str(path)
 
-        from occhio.autoencoders.hugging_face import HuggingFaceAutoEncoder
+        from occhio.autoencoders.hugging_face import PretrainedAE
 
         with pytest.warns(UserWarning, match="does not have expected .safetensors"):
-            ae = HuggingFaceAutoEncoder(repo_id="test/repo", filename="model.bin")
+            ae = PretrainedAE(repo_id="test/repo", filename="model.bin")
 
     @patch("occhio.autoencoders.hugging_face.hf_hub_download")
     @patch("occhio.autoencoders.hugging_face.HfApi")
@@ -247,9 +247,9 @@ class TestHuggingFaceAutoEncoderMocked:
         mock_api_cls.return_value.model_info.return_value = mock_info
         mock_download.return_value = str(path)
 
-        from occhio.autoencoders.hugging_face import HuggingFaceAutoEncoder
+        from occhio.autoencoders.hugging_face import PretrainedAE
 
-        ae = HuggingFaceAutoEncoder(
+        ae = PretrainedAE(
             repo_id="test/repo", filename="model.safetensors", device="cpu"
         )
         assert ae.device == torch.device("cpu")
@@ -275,10 +275,10 @@ class TestHuggingFaceAutoEncoderMocked:
         mock_api_cls.return_value.model_info.return_value = mock_info
         mock_download.return_value = str(path)
 
-        from occhio.autoencoders.hugging_face import HuggingFaceAutoEncoder
+        from occhio.autoencoders.hugging_face import PretrainedAE
 
         with pytest.raises(RuntimeError, match="Unexpected key"):
-            HuggingFaceAutoEncoder(repo_id="test/repo", filename="model.safetensors")
+            PretrainedAE(repo_id="test/repo", filename="model.safetensors")
 
     @patch("occhio.autoencoders.hugging_face.hf_hub_download")
     @patch("occhio.autoencoders.hugging_face.HfApi")
@@ -294,10 +294,10 @@ class TestHuggingFaceAutoEncoderMocked:
         mock_api_cls.return_value.model_info.return_value = mock_info
         mock_download.return_value = str(path)
 
-        from occhio.autoencoders.hugging_face import HuggingFaceAutoEncoder
+        from occhio.autoencoders.hugging_face import PretrainedAE
 
         with pytest.raises(RuntimeError, match="size mismatch"):
-            HuggingFaceAutoEncoder(repo_id="test/repo", filename="model.safetensors")
+            PretrainedAE(repo_id="test/repo", filename="model.safetensors")
 
     @patch("occhio.autoencoders.hugging_face.hf_hub_download")
     @patch("occhio.autoencoders.hugging_face.HfApi")
@@ -309,9 +309,9 @@ class TestHuggingFaceAutoEncoderMocked:
         mock_api_cls.return_value.model_info.return_value = mock_info
         mock_download.return_value = str(path)
 
-        from occhio.autoencoders.hugging_face import HuggingFaceAutoEncoder
+        from occhio.autoencoders.hugging_face import PretrainedAE
 
-        ae = HuggingFaceAutoEncoder(repo_id="test/repo", filename="model.safetensors")
+        ae = PretrainedAE(repo_id="test/repo", filename="model.safetensors")
         r = repr(ae)
         assert "model.safetensors" in r
         assert "n_features=3" in r
@@ -328,9 +328,9 @@ class TestHuggingFaceAutoEncoderMocked:
         mock_api_cls.return_value.model_info.return_value = mock_info
         mock_download.return_value = str(path)
 
-        from occhio.autoencoders.hugging_face import HuggingFaceAutoEncoder
+        from occhio.autoencoders.hugging_face import PretrainedAE
 
-        ae = HuggingFaceAutoEncoder(repo_id="test/repo", filename="model.safetensors")
+        ae = PretrainedAE(repo_id="test/repo", filename="model.safetensors")
         x = torch.randn(16, 4)
         z = ae.encode(x)
         assert z.shape == (16, 8)
@@ -589,10 +589,10 @@ class TestWarningMessageFormatting:
         mock_api_cls.return_value.model_info.return_value = mock_info
         mock_download.return_value = str(path)
 
-        from occhio.autoencoders.hugging_face import HuggingFaceAutoEncoder
+        from occhio.autoencoders.hugging_face import PretrainedAE
 
         with pytest.warns(UserWarning) as record:
-            HuggingFaceAutoEncoder(repo_id="test/repo", filename="model.bin")
+            PretrainedAE(repo_id="test/repo", filename="model.bin")
 
         msg = str(record[0].message)
         assert "extension. This" in msg, (

@@ -11,7 +11,7 @@ from .tied import TiedLinearRelu
 
 
 # [2026-03-26 | OliverSieweke] TODO: Think about how to import non TiedLinearRelu models here...
-class HuggingFaceAutoEncoder(TiedLinearRelu):
+class PretrainedAE(TiedLinearRelu):
     """A pre-trained autoencoder loaded from HuggingFace Hub.
 
     Downloads model weights from a HuggingFace model repository and loads them
@@ -25,7 +25,7 @@ class HuggingFaceAutoEncoder(TiedLinearRelu):
         device: Torch device for the model.
 
     Example:
-        >>> ae = HuggingFaceAutoEncoder(
+        >>> ae = PretrainedAE(
         ...     repo_id="your-org/occhio-models",
         ...     filename="correlated_pairs/model.safetensors",
         ... )
@@ -87,7 +87,7 @@ class HuggingFaceAutoEncoder(TiedLinearRelu):
 
     def __repr__(self) -> str:
         return (
-            f"HuggingFaceAutoEncoder(filename={self.filename!r}, n_features={self.n_features}, "
+            f"PretrainedAE(filename={self.filename!r}, n_features={self.n_features}, "
             f"n_hidden={self.n_hidden}, device={self.device})"
         )
 
