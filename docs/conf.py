@@ -121,4 +121,7 @@ html_theme_options = {
     "dark_logo": "occhio-cream.svg",
     "sidebar_hide_name": False,
     "navigation_with_keys": True,
+    "source_repository": "https://github.com/OliverSieweke/occhio/",
+    "source_branch": "main",
+    "source_directory": "docs/",
 }

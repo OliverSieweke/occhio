@@ -2,7 +2,7 @@
 
 A library for studying superposition in toy models of neural networks.
 
-Occhio provides controlled environments for investigating how neural networks
+occhio provides controlled environments for investigating how neural networks
 represent more features than they have dimensions, including distributions,
 autoencoder architectures, geometric analysis, SAE training/evaluation, and
 visualization tools.

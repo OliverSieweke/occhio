@@ -4,7 +4,7 @@
 
 Neural networks often represent more features than they have dimensions -- a
 phenomenon called **superposition**. Features share directions in activation
-space, trading off interference for representational capacity. Occhio provides
+space, trading off interference for representational capacity. occhio provides
 controlled environments for studying this tradeoff.
 
 For background, see [Toy Models of Superposition](https://transformer-circuits.pub/2022/toy_model/index.html)
@@ -62,7 +62,7 @@ Key features:
 
 ## SAE Training and Evaluation
 
-Occhio integrates with [SAE Lens](https://github.com/jbloomAus/SAELens) for
+occhio integrates with [SAE Lens](https://github.com/jbloomAus/SAELens) for
 training and evaluating Sparse Autoencoders on toy model activations.
 
 ```python

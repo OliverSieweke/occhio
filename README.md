@@ -22,7 +22,7 @@
 
 ## What is occhio?
 
-Occhio is a library for studying **superposition** in toy models of neural networks — the phenomenon where networks represent more features than they have dimensions. Built on the framework from Anthropic's [Toy Models of Superposition](https://transformer-circuits.pub/2022/toy_model/index.html), occhio provides the tools to systematically investigate how features are encoded, how they interfere, and how sparse autoencoders can recover them.
+occhio is a library for studying **superposition** in toy models of neural networks — the phenomenon where networks represent more features than they have dimensions. Built on the framework from Anthropic's [Toy Models of Superposition](https://transformer-circuits.pub/2022/toy_model/index.html), occhio provides the tools to systematically investigate how features are encoded, how they interfere, and how sparse autoencoders can recover them.
 
 ## Quick Start
 

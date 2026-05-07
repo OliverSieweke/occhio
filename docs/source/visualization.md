@@ -1,6 +1,6 @@
 # Visualization
 
-Occhio's visualization module produces interactive Plotly figures from
+occhio's visualization module produces interactive Plotly figures from
 `ToyModel` and `ModelGrid` objects.
 
 ## SinglePlot Pattern
