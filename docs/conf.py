@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 project = "occhio"
 author = "Niclas Kupper, Kaushik Reddy, Oliver Sieweke, Kola Ayonrinde"
 release = "0.2.0"
-html_title = "A Library for Studying Superposition in Toy Models"
+html_title = "occhio Documentation"
 html_short_title = "occhio"
 
 # -- General configuration ---------------------------------------------------
@@ -86,22 +86,39 @@ html_extra_path = ["robots.txt"]
 html_css_files = ["custom.css"]
 
 # -- Options for UX ----------------------------------------------------------
-html_theme = "sphinx_rtd_theme"
-html_logo = "_static/logo.svg"
-html_favicon = "_static/logo.svg"
+html_theme = "furo"
+html_favicon = "_static/occhio-dark.svg"
 html_show_sphinx = False
 html_show_copyright = False
 html_last_updated_fmt = "%b %d, %Y"
 
+# Furo theme customization — occhio brand: dark grey #171513 + crème #f4ede2
 html_theme_options = {
-    # Toc options
-    "collapse_navigation": False,
-    "sticky_navigation": True,
-    "navigation_depth": 2,
-    "includehidden": True,
-    "titles_only": False,
-    "logo_only": False,
-    # "display_version": True,
-    # Style options
-    "style_nav_header_background": "#d18770",  # Change this color
+    "light_css_variables": {
+        "color-brand-primary": "#171513",
+        "color-brand-content": "#2c2825",
+        "color-sidebar-background": "#f4ede2",
+        "color-sidebar-brand-text": "#171513",
+        "color-sidebar-caption-text": "#6b6560",
+        "color-sidebar-link-text": "#2c2825",
+        "color-sidebar-link-text--top-level": "#171513",
+        "sidebar-caption-font-size": "0.85rem",
+    },
+    "dark_css_variables": {
+        "color-brand-primary": "#f4ede2",
+        "color-brand-content": "#e8dfd3",
+        "color-background-primary": "#171513",
+        "color-background-secondary": "#1e1c19",
+        "color-sidebar-background": "#1e1c19",
+        "color-sidebar-brand-text": "#f4ede2",
+        "color-sidebar-caption-text": "#a09890",
+        "color-sidebar-link-text": "#d4cdc2",
+        "color-sidebar-link-text--top-level": "#f4ede2",
+        "color-foreground-primary": "#f4ede2",
+        "color-foreground-secondary": "#d4cdc2",
+    },
+    "light_logo": "occhio-dark.svg",
+    "dark_logo": "occhio-cream.svg",
+    "sidebar_hide_name": False,
+    "navigation_with_keys": True,
 }
