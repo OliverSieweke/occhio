@@ -2,7 +2,9 @@
 
 Covers:
 - base.py: Distribution (ABC) helpers, DistributionStack
-- manifold.py: SphericalDistribution, TorusDistribution, HypercubeDistribution
+- spherical.py: SphericalDistribution
+- toric.py: ToricDistribution
+- hypercube.py: HypercubeDistribution
 - simplex.py: SimplexDistribution, SimplicialComplexDistribution
 - ssb.py: SyntheticDataModel, CorrelationStructure, FiringSampler,
           MagnitudeSampler, HierarchyConstraints, helper functions
@@ -20,11 +22,9 @@ import torch
 from torch import Tensor
 
 from occhio.distributions.base import Distribution, DistributionStack
-from occhio.distributions.manifold import (
-    HypercubeDistribution,
-    SphericalDistribution,
-    TorusDistribution,
-)
+from occhio.distributions.spherical import SphericalDistribution
+from occhio.distributions.toric import ToricDistribution
+from occhio.distributions.hypercube import HypercubeDistribution
 from occhio.distributions.simplex import (
     SimplexDistribution,
     SimplicialComplexDistribution,
@@ -512,25 +512,25 @@ class TestSphericalDistributionReproducibility:
 
 
 # ===================================================================
-# TorusDistribution
+# ToricDistribution
 # ===================================================================
 
 
-class TestTorusDistributionBasic:
+class TestToricDistributionBasic:
     def test_construction(self, seeded_generator):
-        dist = TorusDistribution(n_features=12, torus_dim=2, generator=seeded_generator)
+        dist = ToricDistribution(n_features=12, toric_dim=2, generator=seeded_generator)
         assert dist.n_features == 12
-        assert dist.torus_dim == 2
+        assert dist.toric_dim == 2
 
     @pytest.mark.parametrize("batch_size", [1, 32, 128])
     def test_sample_shape(self, batch_size, seeded_generator):
-        dist = TorusDistribution(n_features=15, generator=seeded_generator)
+        dist = ToricDistribution(n_features=15, generator=seeded_generator)
         s = dist.sample(batch_size)
         assert s.shape == (batch_size, 15)
 
     def test_values_non_negative(self, seeded_generator):
         """Cosine bump clipped at zero: no negatives."""
-        dist = TorusDistribution(
+        dist = ToricDistribution(
             n_features=20, length_scale=0.5, generator=seeded_generator
         )
         s = dist.sample(500)
@@ -538,7 +538,7 @@ class TestTorusDistributionBasic:
 
     def test_values_bounded_above(self, seeded_generator):
         hi = 3.0
-        dist = TorusDistribution(
+        dist = ToricDistribution(
             n_features=20, magnitude_range=(1.0, hi), generator=seeded_generator
         )
         s = dist.sample(500)
@@ -546,7 +546,7 @@ class TestTorusDistributionBasic:
 
     def test_sparsity_with_small_length_scale(self, seeded_generator):
         """Small length_scale should produce sparse activations."""
-        dist = TorusDistribution(
+        dist = ToricDistribution(
             n_features=40, length_scale=0.2, generator=seeded_generator
         )
         s = dist.sample(500)
@@ -554,47 +554,47 @@ class TestTorusDistributionBasic:
         assert frac_zero > 0.3
 
 
-class TestTorusDistributionGeometry:
+class TestToricDistributionGeometry:
     @pytest.mark.parametrize("dim", [1, 2, 3])
     def test_feature_angles_shape(self, dim, seeded_generator):
-        """Feature angles should have shape (n_features, torus_dim)."""
-        dist = TorusDistribution(
-            n_features=10, torus_dim=dim, generator=seeded_generator
+        """Feature angles should have shape (n_features, toric_dim)."""
+        dist = ToricDistribution(
+            n_features=10, toric_dim=dim, generator=seeded_generator
         )
         assert dist.feature_angles.shape == (10, dim)
 
     def test_feature_angles_in_range(self, seeded_generator):
         """Angles should be in [0, 2*pi)."""
-        dist = TorusDistribution(n_features=50, torus_dim=2, generator=seeded_generator)
+        dist = ToricDistribution(n_features=50, toric_dim=2, generator=seeded_generator)
         assert dist.feature_angles.min() >= 0.0
         assert dist.feature_angles.max() < 2 * math.pi + 1e-6
 
-    def test_torus_distance_zero_for_same_point(self, seeded_generator):
+    def test_toric_distance_zero_for_same_point(self, seeded_generator):
         """Distance between a point and itself should be zero."""
-        dist = TorusDistribution(n_features=5, torus_dim=2, generator=seeded_generator)
+        dist = ToricDistribution(n_features=5, toric_dim=2, generator=seeded_generator)
         a = torch.tensor([[1.0, 2.0]])
-        d = dist._torus_distance(a, a)
+        d = dist._toric_distance(a, a)
         assert torch.allclose(d, torch.zeros(1), atol=1e-7)
 
-    def test_torus_distance_wraps(self, seeded_generator):
+    def test_toric_distance_wraps(self, seeded_generator):
         """Distance should wrap around: d(0, 2*pi - eps) ~ eps."""
-        dist = TorusDistribution(n_features=5, torus_dim=1, generator=seeded_generator)
+        dist = ToricDistribution(n_features=5, toric_dim=1, generator=seeded_generator)
         eps = 0.1
         a = torch.tensor([[0.0]])
         b = torch.tensor([[2 * math.pi - eps]])
-        d = dist._torus_distance(a, b)
+        d = dist._toric_distance(a, b)
         assert torch.allclose(d, torch.tensor([eps]), atol=1e-5)
 
 
-class TestTorusDistributionReproducibility:
+class TestToricDistributionReproducibility:
     def test_seeded_reproducibility(self, make_generator):
         """Torus _place_features uses torch.rand (global RNG), so feature
         positions differ across instances even with the same generator seed.
         We seed the global RNG as well to get full reproducibility."""
         torch.manual_seed(0)
-        d1 = TorusDistribution(n_features=10, generator=make_generator(77))
+        d1 = ToricDistribution(n_features=10, generator=make_generator(77))
         torch.manual_seed(0)
-        d2 = TorusDistribution(n_features=10, generator=make_generator(77))
+        d2 = ToricDistribution(n_features=10, generator=make_generator(77))
         # Feature positions must match for samples to match
         assert torch.equal(d1.feature_angles, d2.feature_angles)
         assert torch.equal(d1.sample(50), d2.sample(50))

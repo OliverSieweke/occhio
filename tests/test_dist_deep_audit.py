@@ -11,11 +11,9 @@ import torch
 from torch import Tensor
 
 from occhio.distributions.base import Distribution, DistributionStack
-from occhio.distributions.manifold import (
-    HypercubeDistribution,
-    SphericalDistribution,
-    TorusDistribution,
-)
+from occhio.distributions.spherical import SphericalDistribution
+from occhio.distributions.toric import ToricDistribution
+from occhio.distributions.hypercube import HypercubeDistribution
 from occhio.distributions.simplex import (
     SimplexDistribution,
     SimplicialComplexDistribution,
@@ -148,7 +146,7 @@ class TestSphericalSparsity:
 
 
 # ===================================================================
-# 2. TorusDistribution — deep audit
+# 2. ToricDistribution — deep audit
 # ===================================================================
 
 
@@ -157,34 +155,34 @@ class TestTorusPeriodicWrapping:
 
     def test_wrapping_symmetry(self, make_generator):
         """Points at angle 0.01 and 2*pi - 0.01 should be close."""
-        dist = TorusDistribution(
-            n_features=10, torus_dim=1, generator=make_generator(42)
+        dist = ToricDistribution(
+            n_features=10, toric_dim=1, generator=make_generator(42)
         )
         a = torch.tensor([[0.01]])
         b = torch.tensor([[2 * math.pi - 0.01]])
-        d = dist._torus_distance(a, b)
+        d = dist._toric_distance(a, b)
         assert d.item() == pytest.approx(0.02, abs=1e-5)
 
     def test_wrapping_vs_direct(self, make_generator):
         """Distance should take the shorter path around the torus."""
-        dist = TorusDistribution(
-            n_features=10, torus_dim=1, generator=make_generator(42)
+        dist = ToricDistribution(
+            n_features=10, toric_dim=1, generator=make_generator(42)
         )
         # Two points: 0.1 and 2*pi - 0.1. Direct distance = 2*pi - 0.2.
         # Wrapped distance = 0.2.
         a = torch.tensor([[0.1]])
         b = torch.tensor([[2 * math.pi - 0.1]])
-        d = dist._torus_distance(a, b)
+        d = dist._toric_distance(a, b)
         assert d.item() == pytest.approx(0.2, abs=1e-5)
 
     def test_multidim_wrapping(self, make_generator):
         """Wrapping should work in each dimension independently."""
-        dist = TorusDistribution(
-            n_features=10, torus_dim=2, generator=make_generator(42)
+        dist = ToricDistribution(
+            n_features=10, toric_dim=2, generator=make_generator(42)
         )
         a = torch.tensor([[0.0, 0.0]])
         b = torch.tensor([[2 * math.pi - 0.1, 2 * math.pi - 0.1]])
-        d = dist._torus_distance(a, b)
+        d = dist._toric_distance(a, b)
         expected = math.sqrt(0.1**2 + 0.1**2)
         assert d.item() == pytest.approx(expected, abs=1e-5)
 
@@ -192,33 +190,33 @@ class TestTorusPeriodicWrapping:
 class TestTorusFeaturePositions:
     """Feature positions should be valid angles on the torus."""
 
-    @pytest.mark.parametrize("torus_dim", [1, 2, 3])
-    def test_angles_in_range(self, torus_dim, make_generator):
+    @pytest.mark.parametrize("toric_dim", [1, 2, 3])
+    def test_angles_in_range(self, toric_dim, make_generator):
         torch.manual_seed(42)
-        dist = TorusDistribution(
-            n_features=20, torus_dim=torus_dim, generator=make_generator(42)
+        dist = ToricDistribution(
+            n_features=20, toric_dim=toric_dim, generator=make_generator(42)
         )
         assert dist.feature_angles.min() >= 0.0
         assert dist.feature_angles.max() < 2 * math.pi + 1e-6
 
-    @pytest.mark.parametrize("torus_dim", [1, 2, 3])
-    def test_angles_shape(self, torus_dim, make_generator):
+    @pytest.mark.parametrize("toric_dim", [1, 2, 3])
+    def test_angles_shape(self, toric_dim, make_generator):
         torch.manual_seed(42)
-        dist = TorusDistribution(
-            n_features=15, torus_dim=torus_dim, generator=make_generator(42)
+        dist = ToricDistribution(
+            n_features=15, toric_dim=toric_dim, generator=make_generator(42)
         )
-        assert dist.feature_angles.shape == (15, torus_dim)
+        assert dist.feature_angles.shape == (15, toric_dim)
 
 
 class TestTorusNRings:
-    """Test n_features with different torus_dim (n_rings conceptually)."""
+    """Test n_features with different toric_dim (n_rings conceptually)."""
 
-    @pytest.mark.parametrize("n_features,torus_dim", [(5, 1), (10, 2), (20, 3)])
-    def test_sample_shape(self, n_features, torus_dim, make_generator):
+    @pytest.mark.parametrize("n_features,toric_dim", [(5, 1), (10, 2), (20, 3)])
+    def test_sample_shape(self, n_features, toric_dim, make_generator):
         torch.manual_seed(42)
-        dist = TorusDistribution(
+        dist = ToricDistribution(
             n_features=n_features,
-            torus_dim=torus_dim,
+            toric_dim=toric_dim,
             generator=make_generator(42),
         )
         s = dist.sample(50)
@@ -970,12 +968,12 @@ class TestMultiRelationalDeviceBug:
 
 
 class TestTorusReproducibilityBug:
-    """Regression: TorusDistribution._place_features uses torch.rand without generator."""
+    """Regression: ToricDistribution._place_features uses torch.rand without generator."""
 
     def test_seeded_reproducibility(self, make_generator):
         """Two instances with same generator seed should produce identical feature_angles."""
-        d1 = TorusDistribution(n_features=10, torus_dim=2, generator=make_generator(42))
-        d2 = TorusDistribution(n_features=10, torus_dim=2, generator=make_generator(42))
+        d1 = ToricDistribution(n_features=10, toric_dim=2, generator=make_generator(42))
+        d2 = ToricDistribution(n_features=10, toric_dim=2, generator=make_generator(42))
         assert torch.equal(d1.feature_angles, d2.feature_angles), (
             "Feature angles should be identical with same generator seed"
         )

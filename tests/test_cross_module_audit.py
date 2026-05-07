@@ -81,7 +81,7 @@ class TestExportCompleteness:
             HierarchicalSparse,
             HypercubeDistribution,
             MultiRelational,
-            PowerLawDigraph,
+            PreferentialAttachment,
             RelationalSimple,
             ScaledHierarchicalPairs,
             SimplexDistribution,
@@ -92,7 +92,7 @@ class TestExportCompleteness:
             SphericalDistribution,
             SyntheticDataConfig,
             SyntheticDataModel,
-            TorusDistribution,
+            ToricDistribution,
             HierarchyNode,
         )
 
@@ -415,7 +415,7 @@ class TestAPIConsistency:
             HierarchicalSparse,
             HypercubeDistribution,
             MultiRelational,
-            PowerLawDigraph,
+            PreferentialAttachment,
             RelationalSimple,
             ScaledHierarchicalPairs,
             SimplexDistribution,
@@ -425,7 +425,7 @@ class TestAPIConsistency:
             SparseUniform,
             SphericalDistribution,
             SyntheticDataModel,
-            TorusDistribution,
+            ToricDistribution,
         )
 
         for cls in [
@@ -442,11 +442,11 @@ class TestAPIConsistency:
             DAGDistribution,
             DAGBayesianPropagation,
             DAGRandomWalkToRoot,
-            PowerLawDigraph,
+            PreferentialAttachment,
             SimplexDistribution,
             SimplicialComplexDistribution,
             SphericalDistribution,
-            TorusDistribution,
+            ToricDistribution,
             HypercubeDistribution,
             SyntheticDataModel,
         ]:
@@ -489,21 +489,21 @@ class TestDeviceBugs:
         assert ae.alpha.device.type == "cpu"
 
     def test_torus_distribution_place_features_uses_generator(self):
-        """TorusDistribution._place_features uses torch.rand without generator.
+        """ToricDistribution._place_features uses torch.rand without generator.
         This means feature placement is non-deterministic even with a generator."""
-        from occhio.distributions.manifold import TorusDistribution
+        from occhio.distributions.toric import ToricDistribution
 
         gen1 = torch.Generator(device="cpu").manual_seed(42)
         gen2 = torch.Generator(device="cpu").manual_seed(42)
-        d1 = TorusDistribution(10, device="cpu", generator=gen1)
-        d2 = TorusDistribution(10, device="cpu", generator=gen2)
+        d1 = ToricDistribution(10, device="cpu", generator=gen1)
+        d2 = ToricDistribution(10, device="cpu", generator=gen2)
         # After fix, these should be equal
         assert torch.allclose(d1.feature_angles, d2.feature_angles)
 
     def test_spherical_distribution_random_placement_uses_generator(self):
         """SphericalDistribution._place_on_sphere_random uses torch.randn
         without generator. Fixed: should use self._randn."""
-        from occhio.distributions.manifold import SphericalDistribution
+        from occhio.distributions.spherical import SphericalDistribution
 
         gen1 = torch.Generator(device="cpu").manual_seed(42)
         gen2 = torch.Generator(device="cpu").manual_seed(42)
@@ -515,7 +515,7 @@ class TestDeviceBugs:
     def test_hypercube_distribution_random_placement_uses_generator(self):
         """HypercubeDistribution._place_features uses torch.rand without
         generator when n_features is not a perfect power."""
-        from occhio.distributions.manifold import HypercubeDistribution
+        from occhio.distributions.hypercube import HypercubeDistribution
 
         gen1 = torch.Generator(device="cpu").manual_seed(42)
         gen2 = torch.Generator(device="cpu").manual_seed(42)

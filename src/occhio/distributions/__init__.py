@@ -13,10 +13,12 @@ from .dag import (
     DAGBayesianPropagation,
     DAGDistribution,
     DAGRandomWalkToRoot,
-    PowerLawDigraph,
+    PreferentialAttachment,
 )
 from .simplex import SimplexDistribution, SimplicialComplexDistribution
-from .manifold import SphericalDistribution, TorusDistribution, HypercubeDistribution
+from .spherical import SphericalDistribution
+from .toric import ToricDistribution
+from .hypercube import HypercubeDistribution
 from .ssb import SyntheticDataModel, SyntheticDataConfig, HierarchyNode
 from .hugging_face import HuggingFaceDistribution
 
@@ -38,11 +40,11 @@ __all__ = [
     "DAGBayesianPropagation",
     "DAGDistribution",
     "DAGRandomWalkToRoot",
-    "PowerLawDigraph",
+    "PreferentialAttachment",
     "SimplexDistribution",
     "SimplicialComplexDistribution",
     "SphericalDistribution",
-    "TorusDistribution",
+    "ToricDistribution",
     "HypercubeDistribution",
     "SyntheticDataModel",
     "SyntheticDataConfig",

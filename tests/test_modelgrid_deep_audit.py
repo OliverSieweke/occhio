@@ -878,20 +878,12 @@ class TestGetitemReverseSlicingBug:
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-class TestParametersMeshBug:
-    """BUG: parameters_mesh calls torch.meshgrid(*axis.values) but when
-    axis.values is a list (which it always is after Axis.__init__), meshgrid
-    unpacks individual scalars instead of treating the list as a 1D tensor.
+class TestParametersMesh:
+    """parameters_mesh converts axis values via torch.as_tensor and produces
+    correct meshgrid output."""
 
-    For list-of-scalars this produces a TypeError.
-    For list-of-scalar-tensors (when Tensor was passed to Axis), it produces
-    incorrect dimensionality (each scalar becomes a separate grid dimension).
-
-    Severity: MEDIUM — parameters_mesh is unusable for grids with >1 axis.
-    """
-
-    def test_parameters_mesh_with_list_values_fails(self):
-        """parameters_mesh fails when axis values are plain Python lists."""
+    def test_parameters_mesh_with_list_values_works(self):
+        """parameters_mesh handles plain Python list axis values."""
         grid = ModelGrid(
             _create_model_fn,
             axes=[
@@ -900,20 +892,18 @@ class TestParametersMeshBug:
             ],
             broadcast_samples=False,
         )
-        with pytest.raises(TypeError):
-            _ = grid.parameters_mesh
+        mesh = grid.parameters_mesh
+        assert len(mesh) == 2
+        assert mesh[0].shape == (2, 2)
+        assert mesh[1].shape == (2, 2)
 
-    def test_parameters_mesh_with_tensor_values_wrong_shape(self):
-        """When Tensor values are passed, Axis converts to list of scalar tensors.
-        meshgrid then treats each scalar as a separate dimension, producing
-        wrong shape."""
+    def test_parameters_mesh_with_tensor_values_correct_shape(self):
+        """Tensor axis values produce correct 1D meshgrid."""
         grid = ModelGrid(
             _create_model_fn,
             axes=[Axis(label="density", values=torch.tensor([0.1, 0.5, 0.9]))],
             broadcast_samples=False,
         )
-        # This will unpack [tensor(0.1), tensor(0.5), tensor(0.9)] into meshgrid
-        # producing 3 grids of shape () instead of 1 grid of shape (3,)
         mesh = grid.parameters_mesh
-        # BUG: we get 3 grids (one per scalar) instead of 1 grid of size 3
-        assert len(mesh) == 3  # Wrong! Should be 1
+        assert len(mesh) == 1
+        assert mesh[0].shape == (3,)

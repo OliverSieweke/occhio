@@ -428,7 +428,7 @@ class DAGRandomWalkToRoot(Distribution):
             print(f"    Component {k}: {', '.join(names)}")
 
 
-class PowerLawDigraph(Distribution):
+class PreferentialAttachment(Distribution):
     """Digraph with power-law in-degree distribution and one-step cascade propagation.
 
     Node **0** has the highest expected in-degree (many nodes point to it), and

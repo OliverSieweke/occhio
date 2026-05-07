@@ -26,7 +26,7 @@ class HuggingFaceAutoEncoder(TiedLinearRelu):
 
     Example:
         >>> ae = HuggingFaceAutoEncoder(
-        ...     repo_id="kaushikreddyxyz/occhio-models",
+        ...     repo_id="your-org/occhio-models",
         ...     filename="correlated_pairs/model.safetensors",
         ... )
         >>> z = ae.encode(x)  # x shape: (batch, 512)

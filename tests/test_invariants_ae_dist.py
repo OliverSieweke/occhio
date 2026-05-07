@@ -42,7 +42,7 @@ from occhio.distributions import (
     SimplexDistribution,
     SimplicialComplexDistribution,
     SphericalDistribution,
-    TorusDistribution,
+    ToricDistribution,
     HypercubeDistribution,
     DistributionStack,
 )
@@ -484,7 +484,7 @@ class TestDistributionNonNegativity:
             lambda: HierarchicalSparse(10, generator=make_gen()),
             lambda: SimplexDistribution([3, 3, 4], 0.5, generator=make_gen()),
             lambda: SphericalDistribution(10, generator=make_gen()),
-            lambda: TorusDistribution(10, generator=make_gen()),
+            lambda: ToricDistribution(10, generator=make_gen()),
             lambda: HypercubeDistribution(10, generator=make_gen()),
         ],
         ids=[
@@ -497,7 +497,7 @@ class TestDistributionNonNegativity:
             "HierarchicalSparse",
             "SimplexDistribution",
             "SphericalDistribution",
-            "TorusDistribution",
+            "ToricDistribution",
             "HypercubeDistribution",
         ],
     )
@@ -666,7 +666,7 @@ class TestDimensionConsistency:
             (lambda: HierarchicalSparse(10, generator=make_gen()), 10),
             (lambda: SimplexDistribution([3, 3, 4], 0.5, generator=make_gen()), 10),
             (lambda: SphericalDistribution(10, generator=make_gen()), 10),
-            (lambda: TorusDistribution(10, generator=make_gen()), 10),
+            (lambda: ToricDistribution(10, generator=make_gen()), 10),
             (lambda: HypercubeDistribution(10, generator=make_gen()), 10),
         ],
         ids=[
@@ -680,7 +680,7 @@ class TestDimensionConsistency:
             "HierarchicalSparse",
             "SimplexDistribution",
             "SphericalDistribution",
-            "TorusDistribution",
+            "ToricDistribution",
             "HypercubeDistribution",
         ],
     )

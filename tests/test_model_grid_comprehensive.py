@@ -1114,10 +1114,8 @@ class TestParametersMesh:
     We also test the happy path where axis values happen to be compatible.
     """
 
-    def test_mesh_with_list_axis_values_raises(self):
-        """parameters_mesh fails when axis values are plain Python lists
-        (not tensors), because meshgrid expects tensors. Catches the known
-        limitation."""
+    def test_mesh_with_list_axis_values_works(self):
+        """parameters_mesh converts list values via torch.as_tensor."""
         grid = ModelGrid(
             _simple_create_model,
             axes=[
@@ -1126,8 +1124,10 @@ class TestParametersMesh:
             ],
             broadcast_samples=False,
         )
-        with pytest.raises(TypeError):
-            _ = grid.parameters_mesh
+        mesh = grid.parameters_mesh
+        assert len(mesh) == 2
+        assert mesh[0].shape == (2, 2)
+        assert mesh[1].shape == (2, 2)
 
     def test_mesh_is_cached(self, grid_1d):
         """parameters_mesh is a cached_property, so repeated access returns same object.

@@ -9,7 +9,7 @@ Systematically tests:
 - DAGDistribution: causality, structure, edge cases
 - DAGBayesianPropagation: Noisy-OR semantics, edge cases
 - DAGRandomWalkToRoot: walk mechanics, structure, edge cases
-- PowerLawDigraph: degree distribution, cascade, edge cases
+- PreferentialAttachment: degree distribution, cascade, edge cases
 - Cross-cutting: shape, non-negativity, reproducibility, device
 """
 
@@ -27,7 +27,7 @@ from occhio.distributions.dag import (
     DAGDistribution,
     DAGBayesianPropagation,
     DAGRandomWalkToRoot,
-    PowerLawDigraph,
+    PreferentialAttachment,
 )
 
 
@@ -745,28 +745,30 @@ class TestDAGRandomWalkToRootAudit:
 
 
 # ============================================================================
-# 9. PowerLawDigraph
+# 9. PreferentialAttachment
 # ============================================================================
-class TestPowerLawDigraphAudit:
-    """Deep audit of PowerLawDigraph."""
+class TestPreferentialAttachmentAudit:
+    """Deep audit of PreferentialAttachment."""
 
     def test_output_shape(self, gen):
-        dist = PowerLawDigraph(n_features=20, generator=gen)
+        dist = PreferentialAttachment(n_features=20, generator=gen)
         s = dist.sample(100)
         assert s.shape == (100, 20)
 
     def test_values_non_negative(self, gen):
-        dist = PowerLawDigraph(n_features=20, generator=gen)
+        dist = PreferentialAttachment(n_features=20, generator=gen)
         s = dist.sample(N)
         assert s.min() >= 0.0
 
     def test_no_self_loops(self, gen):
-        dist = PowerLawDigraph(n_features=20, generator=gen)
+        dist = PreferentialAttachment(n_features=20, generator=gen)
         assert not dist.adjacency.diagonal().any(), "Self-loops found"
 
     def test_in_degree_power_law_ordering(self, gen):
         """Node 0 should have highest expected in-degree, node N-1 lowest."""
-        dist = PowerLawDigraph(n_features=50, alpha=2.0, p_edge=0.5, generator=gen)
+        dist = PreferentialAttachment(
+            n_features=50, alpha=2.0, p_edge=0.5, generator=gen
+        )
         in_deg = dist.in_degrees()
         # Node 0 should have strictly higher in-degree than node N-1
         assert in_deg[0] > in_deg[-1], (
@@ -775,7 +777,9 @@ class TestPowerLawDigraphAudit:
 
     def test_alpha_zero_erdos_renyi(self, gen):
         """alpha=0 should give uniform edge probability (Erdos-Renyi)."""
-        dist = PowerLawDigraph(n_features=50, alpha=0.0, p_edge=0.3, generator=gen)
+        dist = PreferentialAttachment(
+            n_features=50, alpha=0.0, p_edge=0.3, generator=gen
+        )
         in_deg = dist.in_degrees()
         # In-degrees should be roughly uniform
         mean_deg = in_deg.mean().item()
@@ -785,7 +789,9 @@ class TestPowerLawDigraphAudit:
 
     def test_cascade_with_p_child_zero_no_cascade(self, gen):
         """p_child=0: no cascade, only independent fires."""
-        dist = PowerLawDigraph(n_features=20, p_active=0.1, p_child=0.0, generator=gen)
+        dist = PreferentialAttachment(
+            n_features=20, p_active=0.1, p_child=0.0, generator=gen
+        )
         s = dist.sample(N)
         rate = (s > 0).float().mean().item()
         # Should be approximately p_active = 0.1
@@ -793,7 +799,7 @@ class TestPowerLawDigraphAudit:
 
     def test_cascade_with_p_child_one_deterministic(self, gen):
         """p_child=1: deterministic cascade, all children of active nodes fire."""
-        dist = PowerLawDigraph(
+        dist = PreferentialAttachment(
             n_features=20, p_active=0.3, p_child=1.0, p_edge=0.3, generator=gen
         )
         s = dist.sample(N)
@@ -803,7 +809,7 @@ class TestPowerLawDigraphAudit:
 
     def test_p_child_tuple_per_edge(self, gen):
         """p_child as tuple should create per-edge cascade probabilities."""
-        dist = PowerLawDigraph(
+        dist = PreferentialAttachment(
             n_features=20, p_active=0.1, p_child=(0.5, 0.9), p_edge=0.3, generator=gen
         )
         s = dist.sample(1000)
@@ -812,7 +818,7 @@ class TestPowerLawDigraphAudit:
 
     def test_exponential_value_dist(self, gen):
         """value_dist='exponential' should produce values > 1 sometimes."""
-        dist = PowerLawDigraph(
+        dist = PreferentialAttachment(
             n_features=20, p_active=0.5, value_dist="exponential", generator=gen
         )
         s = dist.sample(N)
@@ -823,14 +829,14 @@ class TestPowerLawDigraphAudit:
     def test_reproducibility(self):
         g1 = _fresh_gen(42)
         g2 = _fresh_gen(42)
-        d1 = PowerLawDigraph(n_features=15, generator=g1)
-        d2 = PowerLawDigraph(n_features=15, generator=g2)
+        d1 = PreferentialAttachment(n_features=15, generator=g1)
+        d2 = PreferentialAttachment(n_features=15, generator=g2)
         s1 = d1.sample(50)
         s2 = d2.sample(50)
         assert torch.equal(s1, s2)
 
     def test_single_node(self, gen):
-        dist = PowerLawDigraph(n_features=1, p_active=0.5, generator=gen)
+        dist = PreferentialAttachment(n_features=1, p_active=0.5, generator=gen)
         s = dist.sample(10000)
         assert s.shape == (10000, 1)
         rate = (s > 0).float().mean().item()
@@ -885,8 +891,8 @@ ALL_DIST_FACTORIES = [
         lambda gen: DAGRandomWalkToRoot(n_features=10, p_edge=0.3, generator=gen),
     ),
     (
-        "PowerLawDigraph",
-        lambda gen: PowerLawDigraph(n_features=10, p_active=0.3, generator=gen),
+        "PreferentialAttachment",
+        lambda gen: PreferentialAttachment(n_features=10, p_active=0.3, generator=gen),
     ),
 ]
 
@@ -1042,20 +1048,20 @@ class TestDAGRandomWalkEdgeCases:
         assert (s[:, 1:] == 0).all()
 
 
-class TestPowerLawDigraphCascadeAccuracy:
-    """Detailed cascade tests for PowerLawDigraph."""
+class TestPreferentialAttachmentCascadeAccuracy:
+    """Detailed cascade tests for PreferentialAttachment."""
 
     def test_cascade_increases_density_over_independent(self, gen):
         """With cascade enabled, density should exceed p_active."""
         # Independent only (p_child=0)
         g1 = _fresh_gen(42)
-        d_no_cascade = PowerLawDigraph(
+        d_no_cascade = PreferentialAttachment(
             n_features=20, p_active=0.1, p_child=0.0, p_edge=0.3, generator=g1
         )
         s_no = d_no_cascade.sample(N)
 
         g2 = _fresh_gen(42)
-        d_cascade = PowerLawDigraph(
+        d_cascade = PreferentialAttachment(
             n_features=20, p_active=0.1, p_child=0.9, p_edge=0.3, generator=g2
         )
         # Same graph for fair comparison

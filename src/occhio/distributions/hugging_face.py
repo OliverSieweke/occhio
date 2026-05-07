@@ -34,7 +34,7 @@ class HuggingFaceDistribution(Distribution):
 
     Example:
         >>> dist = HuggingFaceDistribution(
-        ...     repo_id="kaushikreddyxyz/occhio-distributions",
+        ...     repo_id="your-org/occhio-distributions",
         ...     filename="sparse_uniform/samples/samples.safetensors",
         ... )
         >>> samples = dist.sample(64)  # shape: (64, 1296)

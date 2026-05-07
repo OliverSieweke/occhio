@@ -4,6 +4,7 @@ from enum import Enum
 
 from .attention import AttnAttnAE, AttnLinearAE, LinearAttnAE
 from .base import AutoEncoderBase
+from .hugging_face import HuggingFaceAutoEncoder
 from .compute import ComputeAutoEncoder
 from .mlp import MLPEncoder, TiedMLPEncoder
 from .synth import SynthAE
@@ -35,6 +36,7 @@ __all__ = [
     "ComputeAutoEncoder",
     "LinearAttnAE",
     "MLPEncoder",
+    "HuggingFaceAutoEncoder",
     "SynthAE",
     "TiedLinear",
     "TiedLinearRelu",
