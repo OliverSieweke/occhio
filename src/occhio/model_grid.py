@@ -575,6 +575,11 @@ class ModelGrid:
             )
 
         # Training ---------------------------------------------------------------------
+        # Pre-allocate a device-side buffer so loss tracking never forces a
+        # per-step GPU→CPU sync. Converted to a Python list in one transfer
+        # at the end. (CUDA perf: .item() per epoch is a sync point.)
+        ae_device = flattened_models[0].ae.device
+        loss_buffer = torch.empty(n_epochs, device=ae_device) if track_losses else None
         losses: list[float] | None = [] if track_losses else None
 
         # Snapshot storage
@@ -620,7 +625,8 @@ class ModelGrid:
             end = start + batch_size
             stacked_samples = sample_buffer[:, start:end, :]  # ty:ignore
 
-            optimizer.zero_grad()
+            # CUDA perf: set_to_none=True avoids a memset kernel per parameter
+            optimizer.zero_grad(set_to_none=True)
             stacked_x_hat = stacked_forward(
                 stacked_params, stacked_buffers, stacked_samples
             )
@@ -645,8 +651,10 @@ class ModelGrid:
             total_loss.backward()
             optimizer.step()
 
-            if track_losses:
-                losses.append(total_loss.item())
+            if loss_buffer is not None:
+                # CUDA perf: store on device to avoid a GPU→CPU sync every epoch.
+                # Transferred to CPU in one batch after the loop.
+                loss_buffer[ep] = total_loss.detach()
 
             # Capture snapshot if needed
             if snapshot_interval is not None and (ep + 1) % snapshot_interval == 0:
@@ -673,6 +681,10 @@ class ModelGrid:
 
         if self.broadcast_samples:
             self._sync_generators(broadcasters, broadcast_map)
+
+        # Convert device-side loss buffer to a Python list in one transfer
+        if loss_buffer is not None:
+            losses = loss_buffer.cpu().tolist()
 
         # Build history grid if snapshots were captured
         if snapshots is not None:
@@ -802,7 +814,7 @@ class ModelGrid:
                     range_start = start if start is not None else dim_size - 1
                     range_stop = stop if stop is not None else -1
                     indices = list(range(range_start, range_stop, step))
-                    values = axis.values[indices]
+                    values = [axis.values[i] for i in indices]
                 else:
                     values = axis.values[s]
 

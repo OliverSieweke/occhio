@@ -286,15 +286,10 @@ class ToyModel:
                 assert raw_buffer is not None  # Always set on first iter (0 % n == 0)
                 start = buf_offset * batch_size
                 end = start + batch_size
+                # CUDA perf: raw_buffer was already transferred to ae_device
+                # when it was created (buf_offset == 0 branch above). The
+                # redundant .to() call per epoch has been removed.
                 if isinstance(raw_buffer, tuple):
-                    raw_buffer = tuple(
-                        (
-                            t.to(ae_device, non_blocking=True)
-                            if isinstance(t, Tensor)
-                            else t
-                        )
-                        for t in raw_buffer
-                    )
                     raw = tuple(
                         t[start:end] if isinstance(t, Tensor) else t for t in raw_buffer
                     )
@@ -760,14 +755,21 @@ class ToyModel:
     def saes_feature_similarity_ordering(self) -> dict[str, Tensor]:
         """Indices to reorder SAE latents for diagonal alignment with true features.
 
-        For each SAE latent, finds the best-matching true feature (by absolute
-        cosine similarity), then sorts latents by that feature index. This produces
-        a reordering where the diagonal of the similarity matrix shows the best
-        matches.
+        Uses the Hungarian algorithm to find an optimal 1-to-1 assignment between
+        SAE latents and true features that maximizes total absolute cosine
+        similarity. Returns the ``min(n_sae_latents, n_features)`` matched SAE
+        latent indices, ordered so that the *i*-th entry corresponds to the *i*-th
+        true feature.
+
+        When ``n_sae_latents > n_features`` (the typical overcomplete case),
+        only the ``n_features`` best-matched latents are included; the remaining
+        latents are unmatched and omitted.
 
         Returns:
-            Dict mapping SAE label to tensor of shape (n_sae_latents,) containing
-            indices that reorder the SAE latents.
+            Dict mapping SAE label to tensor of shape
+            ``(min(n_sae_latents, n_features),)`` containing SAE latent indices
+            that, when used to index the similarity matrix rows, produce a
+            (near-)diagonal alignment with true features.
         """
         from scipy.optimize import linear_sum_assignment
 

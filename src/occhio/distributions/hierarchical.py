@@ -125,6 +125,15 @@ class HierarchicalSparse(Distribution):
         for node in self.nodes:
             self.depth_indices[node.depth].append(node.index)
 
+        # CUDA perf: precompute per-depth index tensors to avoid creating
+        # torch.tensor() from Python lists inside sample() on every call
+        self._depth_indices_tensors = [
+            torch.tensor(indices, device=self.device, dtype=torch.long)
+            if indices
+            else None
+            for indices in self.depth_indices
+        ]
+
         parents = []
         for node in self.nodes:
             parents.append(node.parent if node.parent is not None else 0)
@@ -173,11 +182,11 @@ class HierarchicalSparse(Distribution):
         )
 
         for depth in range(self.max_depth + 1):
-            indices = self.depth_indices[depth]
-            if not indices:
+            # CUDA perf: use precomputed device tensors instead of
+            # torch.tensor(list, device=...) on every sample() call
+            indices_tensor = self._depth_indices_tensors[depth]
+            if indices_tensor is None:
                 continue
-
-            indices_tensor = torch.tensor(indices, device=self.device, dtype=torch.long)
 
             if depth == 0:
                 active[:, indices_tensor] = True
@@ -187,7 +196,7 @@ class HierarchicalSparse(Distribution):
                 parent_indices = self.parent_tensor[indices_tensor]
                 parent_active = active[:, parent_indices]
 
-                fires = self._rand(batch_size, len(indices)) < p_fire
+                fires = self._rand(batch_size, len(self.depth_indices[depth])) < p_fire
                 active[:, indices_tensor] = parent_active & fires
 
         values = self._rand(batch_size, self.n_features)
@@ -233,4 +242,8 @@ class HierarchicalSparse(Distribution):
         """Move distribution to device."""
         super().to(device)
         self.parent_tensor = self.parent_tensor.to(device)
+        # Move precomputed depth index tensors to new device
+        self._depth_indices_tensors = [
+            t.to(device) if t is not None else None for t in self._depth_indices_tensors
+        ]
         return self

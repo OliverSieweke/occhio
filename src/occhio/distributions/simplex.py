@@ -58,6 +58,12 @@ class SimplexDistribution(Distribution):
                 f"expected {self.n_simplices} (one per simplex)"
             )
 
+        # CUDA perf: precompute on device to avoid creating this tensor
+        # on every sample() call
+        self._simplex_sizes_tensor = torch.tensor(
+            self.simplex_sizes, device=self.device
+        )
+
     def sample(self, batch_size: int) -> Tensor:
         # Sample all Exp(1) variates jointly: -log(U)
         u = self._rand(batch_size, self.n_features).clamp(min=1e-10)
@@ -73,9 +79,7 @@ class SimplexDistribution(Distribution):
 
         # Zero out non-firing simplices: expand p_active per-feature
         fire = self._rand(batch_size, self.n_simplices) < self.p_active
-        mask = fire.repeat_interleave(
-            torch.tensor(self.simplex_sizes, device=self.device), dim=1
-        )
+        mask = fire.repeat_interleave(self._simplex_sizes_tensor, dim=1)
         result *= mask
 
         return result
@@ -170,11 +174,14 @@ class SimplicialComplexDistribution(Distribution):
             return self._sample_single_fast(batch_size, face_idx)
 
         result = torch.zeros(batch_size, self.n_features, device=self.device)
+        # CUDA perf: batch-compute per-face counts in one op + one CPU transfer,
+        # instead of .sum().item() per face (n_faces CUDA syncs)
+        counts = torch.bincount(face_idx, minlength=self.n_faces).cpu().tolist()
         for i in range(self.n_faces):
-            mask = face_idx == i
-            n_active = int(mask.sum().item())
+            n_active = counts[i]
             if n_active == 0:
                 continue
+            mask = face_idx == i
             face = self.faces[i]
             k = len(face)
             u = self._rand(n_active, k).clamp(min=1e-10)

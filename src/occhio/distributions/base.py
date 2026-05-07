@@ -391,10 +391,15 @@ class DistributionStack(Distribution):
 
         if self.sampling_mode == "single":
             indices = self._randint(0, len(self.distributions), (batch_size,))
+            # CUDA perf: compute all per-distribution counts in one batched op,
+            # then transfer counts to CPU in a single sync instead of one .item()
+            # per sub-distribution.
+            n_dists = len(self.distributions)
+            counts = torch.bincount(indices, minlength=n_dists).cpu().tolist()
             for i, dist in enumerate(self.distributions):
-                mask = indices == i
-                n_active = int(mask.sum().item())
+                n_active = counts[i]
                 if n_active > 0:
+                    mask = indices == i
                     result[mask, offset : offset + dist.n_features] = dist.sample(
                         n_active
                     )

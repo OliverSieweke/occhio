@@ -146,6 +146,10 @@ class DAGBayesianPropagation(Distribution):
     def sample(self, batch_size: int) -> Tensor:
         """Sample from the DAG distribution with Noisy-OR propagation."""
         values = torch.zeros(batch_size, self.n_features, device=self.device)
+        # CUDA perf: pre-generate all random values to avoid n_features tiny
+        # _rand() kernel launches with varying sizes. Instead, use a single
+        # (batch, n_features) draw and mask-assign.
+        all_values = self._rand(batch_size, self.n_features)
 
         for j in range(self.n_features):
             if not self._has_parents[j]:
@@ -159,9 +163,10 @@ class DAGBayesianPropagation(Distribution):
 
                 fires = self._rand(batch_size) < fire_prob
 
-            n_fires = int(fires.sum().item())
-            if n_fires > 0:
-                values[fires, j] = self._rand(n_fires)
+            # CUDA perf: avoid .sum().item() sync per feature by using
+            # mask assignment unconditionally. When fires is all-False,
+            # the masked assignment is a no-op.
+            values[fires, j] = all_values[fires, j]
 
         return values
 
