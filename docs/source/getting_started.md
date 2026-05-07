@@ -2,8 +2,38 @@
 
 ## Installation
 
+### From PyPI
+
 ```bash
 pip install occhio
+```
+
+### From source (GitHub)
+
+```bash
+git clone https://github.com/OliverSieweke/occhio.git
+cd occhio
+```
+
+If you use [uv](https://docs.astral.sh/uv/) (recommended):
+
+```bash
+uv sync                    # Install all dependencies
+uv run python -c "import occhio; print('Ready!')"
+```
+
+Or with pip in a virtual environment:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+pip install -e .           # Editable install
+```
+
+To include development and documentation dependencies:
+
+```bash
+uv sync --extra dev --extra docs
 ```
 
 For GPU support, install PyTorch with CUDA first, then install occhio.
