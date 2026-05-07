@@ -291,7 +291,7 @@ class FiringSampler:
         """Sample binary firing mask z ∈ {0,1}^{batch_size × N}."""
         if self.correlation.rank == 0:
             # Independent Bernoulli — avoid copula overhead
-            probs = 1.0 - self._inv_normal_cdf_to_prob(self._thresholds)
+            probs = self._inv_normal_cdf_to_prob(self._thresholds)
             u = torch.rand(
                 batch_size,
                 probs.shape[0],
