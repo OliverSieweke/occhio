@@ -85,7 +85,7 @@ class SphericalDistribution(Distribution):
     def _place_on_sphere_random(self) -> Tensor:
         """Random points on S^{manifold_dim} via normalized Gaussians."""
         d = self.manifold_dim + 1
-        pts = torch.randn(self.n_features, d, device=self.device)
+        pts = self._randn(self.n_features, d)
         return pts / pts.norm(dim=-1, keepdim=True)
 
     def _sample_direction(self, batch_size: int) -> Tensor:
@@ -155,11 +155,7 @@ class TorusDistribution(Distribution):
 
     def _place_features(self) -> Tensor:
         """Place features at uniformly random angles on T^d."""
-        return (
-            2
-            * math.pi
-            * torch.rand(self.n_features, self.torus_dim, device=self.device)
-        )
+        return 2 * math.pi * self._rand(self.n_features, self.torus_dim)
 
     def _torus_distance(self, a: Tensor, b: Tensor) -> Tensor:
         """Geodesic distance on the flat torus.
@@ -248,7 +244,7 @@ class HypercubeDistribution(Distribution):
     def _place_features(self) -> Tensor:
         """Place features on an evenly spaced grid in [0, 1]^d, or randomly if no grid fits."""
         if self.grid_size is None:
-            return torch.rand(self.n_features, self.cube_dim, device=self.device)
+            return self._rand(self.n_features, self.cube_dim)
 
         if self.grid_size == 1:
             coords = torch.tensor([0.5], device=self.device)

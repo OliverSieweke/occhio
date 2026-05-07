@@ -56,7 +56,7 @@ class MultiRelational(Distribution):
         self.new_On_matricies()
 
     def sample(self, batch_size: int) -> Tensor:
-        res = torch.zeros((batch_size, self.n_features))
+        res = torch.zeros((batch_size, self.n_features), device=self.device)
 
         for mat in self.on_mats:
             mask = self._rand(batch_size, self.n_features) < self.p_active
