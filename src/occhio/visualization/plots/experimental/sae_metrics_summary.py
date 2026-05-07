@@ -15,9 +15,9 @@ import plotly.graph_objects as go
 
 from occhio import ModelGrid
 from occhio.toy_model import ToyModel
-from occhio.visualization_2.core import CompositePlot
-from occhio.visualization_2.core.base_plot import SinglePlot
-from occhio.visualization_2.core.figure_wrappers import FigureProxy
+from occhio.visualization.core import CompositePlot
+from occhio.visualization.core.base_plot import SinglePlot
+from occhio.visualization.core.figure_wrappers import FigureProxy
 
 # Alternating column colors for model distinction
 MODEL_COLORS = ["rgb(240, 248, 255)", "rgb(255, 250, 240)"]  # AliceBlue, FloralWhite

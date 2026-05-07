@@ -18,8 +18,8 @@ from plotly.subplots import make_subplots
 
 from occhio.model_grid import ModelGrid
 from occhio.toy_model import ToyModel
-from occhio.visualization_2.core.figure_wrappers import FigureProxy, InteractiveFigure
-from occhio.visualization_2.core.plotting_utils import add_grid_headers
+from occhio.visualization.core.figure_wrappers import FigureProxy, InteractiveFigure
+from occhio.visualization.core.plotting_utils import add_grid_headers
 
 
 class PlotRenderer(ABC):

@@ -12,9 +12,9 @@ import plotly.graph_objects as go
 
 from occhio import ModelGrid
 from occhio.toy_model import ToyModel
-from occhio.visualization_2.core import CompositePlot
-from occhio.visualization_2.core.base_plot import SinglePlot
-from occhio.visualization_2.core.figure_wrappers import FigureProxy
+from occhio.visualization.core import CompositePlot
+from occhio.visualization.core.base_plot import SinglePlot
+from occhio.visualization.core.figure_wrappers import FigureProxy
 
 
 @dataclass
@@ -39,7 +39,7 @@ class SAEClassificationMetricPlot(SinglePlot):
     Example::
 
         from occhio import ModelGrid
-        from occhio.visualization_2.plots import SAEClassificationMetricsGridPlot
+        from occhio.visualization.plots import SAEClassificationMetricsGridPlot
 
         grid = ModelGrid(create_model, axes=[Axis("sparsity", [0.1, 0.2, 0.3])])
         grid.fit(n_epochs=1000)
@@ -180,7 +180,7 @@ class SAEMetricsComparisonPlot(SinglePlot):
     Example::
 
         from occhio import ModelGrid
-        from occhio.visualization_2.plots import SAEMetricsComparisonPlot
+        from occhio.visualization.plots import SAEMetricsComparisonPlot
 
         grid = ModelGrid(create_model, axes=[Axis("sparsity", [0.1, 0.2, 0.3])])
         grid.fit(n_epochs=1000)

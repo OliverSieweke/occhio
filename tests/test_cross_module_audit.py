@@ -166,8 +166,8 @@ class TestImportChainHealth:
 
         assert callable(plot_embedding)
 
-    def test_visualization_2_importable(self):
-        from occhio.visualization_2 import RepresentationPlot
+    def test_visualization_classes_importable(self):
+        from occhio.visualization import RepresentationPlot
 
         assert inspect.isclass(RepresentationPlot)
 

@@ -1,3 +1,12 @@
+"""Geometry visualization ported to the v2 SinglePlot framework.
+
+``GeometryPlot`` shows geometry metrics across one axis (``n_render_axes = 1``).
+``FeatureGeometryPlot`` renders the per-model network graph (``n_render_axes = 0``).
+
+The standalone functions ``plot_geometry``, ``plot_feature_geometry``, and
+``plot_feature_geometry_3d`` are preserved for backward compatibility.
+"""
+
 from enum import Enum
 
 import networkx as nx
@@ -7,6 +16,8 @@ from plotly.subplots import make_subplots
 
 from occhio.model_grid import ModelGrid, TrainingAxis
 from occhio.toy_model import ToyModel
+from occhio.visualization.core.base_plot import SinglePlot
+from occhio.visualization.core.figure_wrappers import FigureProxy
 
 
 class GeometryPlotComponent(Enum):
@@ -18,11 +29,346 @@ class GeometryPlotComponent(Enum):
     GEOMETRIES = "geometries"
 
 
+# Reference geometry lines used across plots
+_GEOMETRIES: list[tuple[float, str, tuple[int, int, int]]] = [
+    (1, "Dedicated Dimension", (255, 179, 186)),
+    (3 / 4, "Tetrahedron", (186, 225, 255)),
+    (2 / 3, "Triangle", (186, 255, 201)),
+    (1 / 2, "Digon", (255, 223, 186)),
+    (2 / 5, "Pentagon", (221, 186, 255)),
+    (3 / 8, "Square Antiprism", (255, 235, 150)),
+    (2 / 6, "Hexagon", (255, 200, 170)),
+    (2 / 8, "Octagon", (186, 255, 255)),
+    (0, "Not Learned", (255, 214, 229)),
+]
+
+
+# ---------------------------------------------------------------------------
+# GeometryPlot (n_render_axes = 1)
+# ---------------------------------------------------------------------------
+
+
+class GeometryPlot(SinglePlot):
+    """Geometry metrics across one model-grid axis.
+
+    Displays hidden-dimensions-per-feature, feature dimensionalities, means,
+    totals, and reference geometry lines.
+
+    ``n_render_axes = 1`` -- the plot expects a 1D ModelGrid slice.
+    """
+
+    n_render_axes = 1
+
+    def __init__(
+        self,
+        components: set[GeometryPlotComponent] | None = None,
+    ):
+        if components is None:
+            components = set(GeometryPlotComponent) - {
+                GeometryPlotComponent.EMBEDDED_FEATURES_PER_HIDDEN_DIMENSIONS
+            }
+        self.components = components
+
+    def render(self, fig: FigureProxy, models: ModelGrid) -> None:
+        components = self.components
+
+        if GeometryPlotComponent.HIDDEN_DIMENSIONS_PER_EMBEDDED_FEATURES in components:
+            fig.add_trace(
+                go.Scatter(
+                    x=list(models.axes[0].values),
+                    y=[
+                        model.hidden_dimensions_per_embedded_features.cpu()
+                        for model in models.models
+                    ],
+                    mode="lines+markers",
+                    line=dict(width=1, color="#333333", shape="spline"),
+                    marker=dict(size=4, color="black"),
+                    name="Hidden Dimensions / Learned Feature",
+                    hovertemplate="Hidden Dimensions / Learned Feature: %{y:.3f}<extra></extra>",
+                )
+            )
+
+        if GeometryPlotComponent.EMBEDDED_FEATURES_PER_HIDDEN_DIMENSIONS in components:
+            fig.add_trace(
+                go.Scatter(
+                    x=list(models.axes[0].values),
+                    y=[
+                        model.embedded_features_per_hidden_dimensions.cpu()
+                        for model in models.models
+                    ],
+                    mode="lines+markers",
+                    line=dict(width=1, color="#333333", shape="spline"),
+                    marker=dict(size=4, color="black"),
+                    name="Learned Features / Hidden Dimensions",
+                    hovertemplate="Learned Features / Hidden Dimensions: %{y:.3f}<extra></extra>",
+                )
+            )
+
+        if GeometryPlotComponent.FEATURE_DIMENSIONALITIES in components:
+            x_vals = []
+            feature_dimensionalities = []
+            for i, model in enumerate(models.models):
+                x_vals.extend(
+                    [models.axes[0].values[i]] * len(model.feature_dimensionalities)
+                )
+                feature_dimensionalities.extend(model.feature_dimensionalities.cpu())
+
+            x_vals_jittered = np.array(x_vals) * np.exp(
+                np.random.normal(0, 0.3 / len(models.models), len(x_vals))
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=x_vals_jittered.tolist(),
+                    y=[float(v) for v in feature_dimensionalities],
+                    mode="markers",
+                    marker=dict(size=3, color="#333333", opacity=0.7),
+                    name="Feature Dimensionality",
+                    hovertemplate="Feature Dimensionality: %{y:.3f}<extra></extra>",
+                )
+            )
+
+        if GeometryPlotComponent.MEAN_FEATURE_DIMENSIONALITIES in components:
+            fig.add_trace(
+                go.Scatter(
+                    x=list(models.axes[0].values),
+                    y=[
+                        model.mean_feature_dimensionalities.cpu()
+                        for model in models.models
+                    ],
+                    mode="lines+markers",
+                    line=dict(width=1),
+                    marker=dict(size=3, color="orange", opacity=0.6),
+                    name="Mean Feature Dimensionality",
+                    hovertemplate="Mean Feature Dimensionality: %{y:.3f}<extra></extra>",
+                )
+            )
+
+        if GeometryPlotComponent.TOTAL_FEATURE_DIMENSIONALITIES in components:
+            fig.add_trace(
+                go.Scatter(
+                    x=list(models.axes[0].values),
+                    y=[
+                        model.total_feature_dimensionalities_per_hidden_dimension.cpu()
+                        for model in models.models
+                    ],
+                    mode="markers",
+                    marker=dict(size=4, color="blue", opacity=0.6),
+                    name="Total Feature Dimensionality / Hidden Dimension",
+                    hovertemplate="Total Feature Dimensionality / Hidden Dimension: %{y:.3f}<extra></extra>",
+                )
+            )
+
+        fig.update_xaxes(
+            title_text=models.axes[0].label,
+            type="log",
+            showgrid=False,
+            dtick=0.2,
+            tickformat=".3f",
+            autorange="reversed",
+            showline=True,
+            linewidth=1,
+            linecolor="lightgray",
+            mirror=True,
+        )
+        fig.update_yaxes(
+            title_text="Hidden Dimensionality / Embedded Feature",
+            showgrid=False,
+            rangemode="tozero",
+            showline=True,
+            linewidth=1,
+            linecolor="lightgray",
+            mirror=True,
+        )
+
+    def configure_layout(self, fig: go.Figure) -> None:
+        # Add geometry reference lines (figure-wide, not per-subplot)
+        if GeometryPlotComponent.GEOMETRIES in self.components:
+            for y, label, lc in _GEOMETRIES:
+                fig.add_hline(
+                    y=y,
+                    line_color=f"rgba({lc[0]}, {lc[1]}, {lc[2]}, 0.5)",
+                    line_width=5,
+                )
+                fig.add_annotation(
+                    x=1.02,
+                    xref="paper",
+                    y=y,
+                    yref="y",
+                    text=label,
+                    showarrow=False,
+                    xanchor="left",
+                    font=dict(
+                        size=7,
+                        color=f"rgb({lc[0]}, {lc[1]}, {lc[2]})",
+                        weight="bold",
+                    ),
+                )
+
+        fig.update_layout(
+            paper_bgcolor="white",
+            plot_bgcolor="white",
+            showlegend=True,
+            legend=dict(
+                orientation="h", yanchor="top", y=-0.3, xanchor="center", x=0.5
+            ),
+            margin=dict(r=100, b=120),
+        )
+
+
+# ---------------------------------------------------------------------------
+# FeatureGeometryPlot (n_render_axes = 0)
+# ---------------------------------------------------------------------------
+
+
+class FeatureGeometryPlot(SinglePlot):
+    """Network-graph visualization of feature interference for a single model.
+
+    Each node is a feature; edges represent interference above the threshold.
+    ``n_render_axes = 0`` -- renders per-model.
+    """
+
+    n_render_axes = 0
+
+    def __init__(
+        self,
+        *,
+        min_edge_interference: float = 0.1,
+        feature_dimensionality_threshold: float = 0.1,
+        dimensionality_range: list[float] | None = None,
+    ):
+        self.min_edge_interference = min_edge_interference
+        self.feature_dimensionality_threshold = feature_dimensionality_threshold
+        self.dimensionality_range = dimensionality_range
+
+    def render(self, fig: FigureProxy, model: ToyModel) -> None:
+        feature_dimensionalities = model.feature_dimensionalities.cpu()
+        feature_interferences = (
+            model.interferences.cpu()
+            if hasattr(model.interferences, "cpu")
+            else model.interferences
+        )
+
+        feature_dims_cpu = (
+            feature_dimensionalities.cpu()
+            if hasattr(feature_dimensionalities, "cpu")
+            else feature_dimensionalities
+        )
+
+        if self.dimensionality_range is not None:
+            active_feature_indices = np.where(
+                (feature_dims_cpu >= self.feature_dimensionality_threshold)
+                & (feature_dims_cpu >= self.dimensionality_range[0])
+                & (feature_dims_cpu <= self.dimensionality_range[1])
+            )[0]
+        else:
+            active_feature_indices = np.where(
+                feature_dims_cpu >= self.feature_dimensionality_threshold
+            )[0]
+
+        if len(active_feature_indices) == 0:
+            fig.add_trace(
+                go.Scatter(
+                    x=[],
+                    y=[],
+                    mode="markers",
+                    showlegend=False,
+                    name="No active features",
+                )
+            )
+            fig.update_xaxes(showgrid=False, showticklabels=False, zeroline=False)
+            fig.update_yaxes(showgrid=False, showticklabels=False, zeroline=False)
+            return
+
+        G = nx.Graph()
+        G.add_nodes_from(active_feature_indices)
+
+        for i_idx, i in enumerate(active_feature_indices):
+            for j_idx, j in enumerate(
+                active_feature_indices[i_idx + 1 :], start=i_idx + 1
+            ):
+                interference = feature_interferences[i, j]
+                if abs(interference) >= self.min_edge_interference:
+                    G.add_edge(i, j, weight=float(abs(interference).cpu()))
+
+        if G.number_of_edges() > 0:
+            positions = nx.spring_layout(
+                G, weight="weight", k=15, iterations=5000, seed=42, scale=1.0, dim=2
+            )
+        else:
+            positions = nx.circular_layout(G)
+
+        node_x = [positions[n][0] for n in active_feature_indices]
+        node_y = [positions[n][1] for n in active_feature_indices]
+
+        max_dim = feature_dimensionalities[active_feature_indices].max()
+
+        fig.add_trace(
+            go.Scatter(
+                x=node_x,
+                y=node_y,
+                mode="markers",
+                marker=dict(
+                    size=7,
+                    color="black",
+                    opacity=(
+                        feature_dimensionalities[active_feature_indices] / max_dim
+                        if max_dim > 0
+                        else 1.0
+                    ),
+                ),
+                text=[
+                    f"Feature {i}<br>Dimensionality: {feature_dimensionalities[i]:.3f}"
+                    for i in active_feature_indices
+                ],
+                hoverinfo="text",
+                showlegend=False,
+            )
+        )
+
+        for i_idx, i_node in enumerate(active_feature_indices):
+            for j_idx, j_node in enumerate(
+                active_feature_indices[i_idx + 1 :], start=i_idx + 1
+            ):
+                interference = feature_interferences[i_node, j_node]
+                if abs(interference) > self.min_edge_interference:
+                    x_coords = [positions[i_node][0], positions[j_node][0]]
+                    y_coords = [positions[i_node][1], positions[j_node][1]]
+                    edge_color = (
+                        "rgba(255, 102, 102, 0.6)"
+                        if interference > 0
+                        else "rgba(51, 102, 204, 0.6)"
+                    )
+                    fig.add_trace(
+                        go.Scatter(
+                            x=x_coords,
+                            y=y_coords,
+                            mode="lines",
+                            line=dict(color=edge_color, width=0.6),
+                            hovertemplate=f"Interference: {interference:.3f}<extra></extra>",
+                            showlegend=False,
+                        )
+                    )
+
+        fig.update_xaxes(showgrid=False, showticklabels=False, zeroline=False)
+        fig.update_yaxes(showgrid=False, showticklabels=False, zeroline=False)
+
+    def configure_layout(self, fig: go.Figure) -> None:
+        fig.update_layout(
+            showlegend=False,
+            paper_bgcolor="white",
+            plot_bgcolor="white",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Standalone functions (backward-compatible legacy API)
+# ---------------------------------------------------------------------------
+
+
 def plot_geometry(
     model_grid: ToyModel | ModelGrid,
     components: set[GeometryPlotComponent] | None = None,
 ):
-    # Convert ToyModel to ModelGrid
     if isinstance(model_grid, ToyModel):
         model_grid = ModelGrid(
             create_model=lambda: model_grid,
@@ -31,7 +377,6 @@ def plot_geometry(
             _models=np.array([model_grid]),
         )
 
-    # Find TrainingAxis if present
     training_axis_idx = None
     for idx, axis in enumerate(model_grid.axes):
         if isinstance(axis, TrainingAxis):
@@ -41,9 +386,7 @@ def plot_geometry(
                 )
             training_axis_idx = idx
 
-    # Validate dimensions
     if training_axis_idx is None:
-        # Static case: require 0D or 1D grid
         if len(model_grid.shape) > 1:
             raise ValueError(
                 f"plot_geometry requires a 0 or 1-dimensional ModelGrid, "
@@ -51,7 +394,6 @@ def plot_geometry(
             )
         return _plot_geometry_static(model_grid, components)
     else:
-        # Animated case: require 2D grid with one TrainingAxis
         if len(model_grid.shape) != 2:
             raise ValueError(
                 f"plot_geometry with TrainingAxis requires a 2-dimensional ModelGrid, "
@@ -63,7 +405,6 @@ def plot_geometry(
 def _plot_geometry_static(
     model_grid: ModelGrid, components: set[GeometryPlotComponent] | None = None
 ):
-    """Create static geometry plot for 0D or 1D grid."""
     if components is None:
         components = set(GeometryPlotComponent) - {
             GeometryPlotComponent.EMBEDDED_FEATURES_PER_HIDDEN_DIMENSIONS
@@ -71,9 +412,7 @@ def _plot_geometry_static(
 
     fig = go.Figure()
 
-    # Handle 0D grid (single model)
     if len(model_grid.shape) == 0:
-        # For a single model, show a single point plot
         model = model_grid.models.flat[0]
 
         if GeometryPlotComponent.HIDDEN_DIMENSIONS_PER_EMBEDDED_FEATURES in components:
@@ -103,7 +442,6 @@ def _plot_geometry_static(
         if GeometryPlotComponent.FEATURE_DIMENSIONALITIES in components:
             feature_dimensionalities = model.feature_dimensionalities.cpu()
             x_vals_jittered = np.random.normal(0, 0.05, len(feature_dimensionalities))
-
             fig.add_trace(
                 go.Scatter(
                     x=x_vals_jittered,
@@ -139,21 +477,8 @@ def _plot_geometry_static(
                 )
             )
 
-        # Add geometries reference lines
         if GeometryPlotComponent.GEOMETRIES in components:
-            geometries: list[tuple[float, str, tuple[int, int, int]]] = [
-                (1, "Dedicated Dimension", (255, 179, 186)),
-                (3 / 4, "Tetrahedron", (186, 225, 255)),
-                (2 / 3, "Triangle", (186, 255, 201)),
-                (1 / 2, "Digon", (255, 223, 186)),
-                (2 / 5, "Pentagon", (221, 186, 255)),
-                (3 / 8, "Square Antiprism", (255, 235, 150)),
-                (2 / 6, "Hexagon", (255, 200, 170)),
-                (2 / 8, "Octagon", (186, 255, 255)),
-                (0, "Not Learned", (255, 214, 229)),
-            ]
-
-            for y, label, line_color in geometries:
+            for y, label, line_color in _GEOMETRIES:
                 fig.add_hline(
                     y=y,
                     line_color=f"rgba({line_color[0]}, {line_color[1]}, {line_color[2]}, 0.5)",
@@ -205,10 +530,9 @@ def _plot_geometry_static(
             ),
             margin=dict(r=100, b=80),
         )
-
         return fig
 
-    # Handle 1D grid (multiple models)
+    # Handle 1D grid
     if GeometryPlotComponent.HIDDEN_DIMENSIONS_PER_EMBEDDED_FEATURES in components:
         fig.add_trace(
             go.Scatter(
@@ -244,22 +568,14 @@ def _plot_geometry_static(
     if GeometryPlotComponent.FEATURE_DIMENSIONALITIES in components:
         x_vals = []
         feature_dimensionalities = []
-
         for i, model in enumerate(model_grid.models):
             x_vals.extend(
                 [model_grid.axes[0].values[i]] * len(model.feature_dimensionalities)
             )
             feature_dimensionalities.extend(model.feature_dimensionalities.cpu())
-
-        # [10.02.26 | OliverSieweke] TODO: Work on this to make it a sensible jitter based on number of models
-        # [10.02.26 | OliverSieweke] TODO: also make sure the ticks don't expand to wide
-        # log_x = np.log(x_vals)
-        # log_x_range = np.max(log_x) - np.min(log_x)
-        # sigma_log = (0.15 * log_x_range) / max(1, len(models))
         x_vals_jittered = np.array(x_vals) * np.exp(
             np.random.normal(0, 0.3 / len(model_grid.models), len(x_vals))
         )
-
         fig.add_trace(
             go.Scatter(
                 x=x_vals_jittered,
@@ -272,21 +588,7 @@ def _plot_geometry_static(
         )
 
     if GeometryPlotComponent.GEOMETRIES in components:
-        geometries: list[tuple[float, str, tuple[int, int, int]]] = [
-            (1, "Dedicated Dimension", (255, 179, 186)),
-            (3 / 4, "Tetrahedron", (186, 225, 255)),
-            (2 / 3, "Triangle", (186, 255, 201)),
-            (1 / 2, "Digon", (255, 223, 186)),
-            (2 / 5, "Pentagon", (221, 186, 255)),
-            (3 / 8, "Square Antiprism", (255, 235, 150)),
-            (2 / 6, "Hexagon", (255, 200, 170)),
-            (2 / 8, "Octagon", (186, 255, 255)),
-            # [2 / 20, "Icosagon", (200, 220, 255)],
-            # [1 / 12, "Dodecagon", (200, 220, 255)],
-            (0, "Not Learned", (255, 214, 229)),
-        ]
-
-        for y, label, line_color in geometries:
+        for y, label, line_color in _GEOMETRIES:
             fig.add_hline(
                 y=y,
                 line_color=f"rgba({line_color[0]}, {line_color[1]}, {line_color[2]}, 0.5)",
@@ -310,13 +612,11 @@ def _plot_geometry_static(
     if GeometryPlotComponent.MEAN_FEATURE_DIMENSIONALITIES in components:
         x_vals = []
         mean_feature_dimensionalities = []
-
         for i, model in enumerate(model_grid.models):
             x_vals.append(model_grid.axes[0].values[i])
             mean_feature_dimensionalities.append(
                 model.mean_feature_dimensionalities.cpu()
             )
-
         fig.add_trace(
             go.Scatter(
                 x=x_vals,
@@ -331,13 +631,11 @@ def _plot_geometry_static(
     if GeometryPlotComponent.TOTAL_FEATURE_DIMENSIONALITIES in components:
         x_vals = []
         total_feature_dimensionalities = []
-
         for i, model in enumerate(model_grid.models):
             x_vals.append(model_grid.axes[0].values[i])
             total_feature_dimensionalities.append(
                 model.total_feature_dimensionalities_per_hidden_dimension.cpu()
             )
-
         fig.add_trace(
             go.Scatter(
                 x=x_vals,
@@ -383,7 +681,6 @@ def _plot_geometry_static(
         ),
         margin=dict(r=100, b=80),
     )
-
     return fig
 
 
@@ -392,44 +689,32 @@ def _plot_geometry_animated(
     training_axis_idx: int,
     components: set[GeometryPlotComponent] | None = None,
 ):
-    """Create animated geometry plot with slider for 2D grid with TrainingAxis."""
     if components is None:
         components = set(GeometryPlotComponent) - {
             GeometryPlotComponent.EMBEDDED_FEATURES_PER_HIDDEN_DIMENSIONS
         }
 
-    # Get the training axis
     training_axis = model_grid.axes[training_axis_idx]
     n_epochs = len(training_axis.values)
 
-    # Helper to slice grid at a specific epoch
     def slice_at_epoch(epoch_idx: int) -> ModelGrid:
-        """Extract 1D grid at specific epoch."""
         if training_axis_idx == 0:
             return model_grid[epoch_idx, :]
-        else:  # training_axis_idx == 1
+        else:
             return model_grid[:, epoch_idx]
 
-    # Create initial figure with first epoch
     initial_grid = slice_at_epoch(0)
     fig = _create_geometry_figure(initial_grid, components)
 
-    # Pre-compute all frame data for animation
     frames = []
     for epoch_idx in range(n_epochs):
         grid_slice = slice_at_epoch(epoch_idx)
         frame_fig = _create_geometry_figure(grid_slice, components)
-
-        # Create frame with all traces from the frame figure
-        frame = go.Frame(
-            data=frame_fig.data,
-            name=str(epoch_idx),
-        )
+        frame = go.Frame(data=frame_fig.data, name=str(epoch_idx))
         frames.append(frame)
 
     fig.frames = frames
 
-    # Add slider for epoch selection
     sliders = [
         {
             "active": 0,
@@ -501,14 +786,12 @@ def _plot_geometry_animated(
             }
         ],
     )
-
     return fig
 
 
 def _create_geometry_figure(
     model_grid: ModelGrid, components: set[GeometryPlotComponent]
 ) -> go.Figure:
-    """Create a geometry figure for a 1D model grid."""
     fig = go.Figure()
 
     if GeometryPlotComponent.HIDDEN_DIMENSIONS_PER_EMBEDDED_FEATURES in components:
@@ -546,17 +829,14 @@ def _create_geometry_figure(
     if GeometryPlotComponent.FEATURE_DIMENSIONALITIES in components:
         x_vals = []
         feature_dimensionalities = []
-
         for i, model in enumerate(model_grid.models):
             x_vals.extend(
                 [model_grid.axes[0].values[i]] * len(model.feature_dimensionalities)
             )
             feature_dimensionalities.extend(model.feature_dimensionalities.cpu())
-
         x_vals_jittered = np.array(x_vals) * np.exp(
             np.random.normal(0, 0.3 / len(model_grid.models), len(x_vals))
         )
-
         fig.add_trace(
             go.Scatter(
                 x=x_vals_jittered,
@@ -569,19 +849,7 @@ def _create_geometry_figure(
         )
 
     if GeometryPlotComponent.GEOMETRIES in components:
-        geometries: list[tuple[float, str, tuple[int, int, int]]] = [
-            (1, "Dedicated Dimension", (255, 179, 186)),
-            (3 / 4, "Tetrahedron", (186, 225, 255)),
-            (2 / 3, "Triangle", (186, 255, 201)),
-            (1 / 2, "Digon", (255, 223, 186)),
-            (2 / 5, "Pentagon", (221, 186, 255)),
-            (3 / 8, "Square Antiprism", (255, 235, 150)),
-            (2 / 6, "Hexagon", (255, 200, 170)),
-            (2 / 8, "Octagon", (186, 255, 255)),
-            (0, "Not Learned", (255, 214, 229)),
-        ]
-
-        for y, label, line_color in geometries:
+        for y, label, line_color in _GEOMETRIES:
             fig.add_hline(
                 y=y,
                 line_color=f"rgba({line_color[0]}, {line_color[1]}, {line_color[2]}, 0.5)",
@@ -605,13 +873,11 @@ def _create_geometry_figure(
     if GeometryPlotComponent.MEAN_FEATURE_DIMENSIONALITIES in components:
         x_vals = []
         mean_feature_dimensionalities = []
-
         for i, model in enumerate(model_grid.models):
             x_vals.append(model_grid.axes[0].values[i])
             mean_feature_dimensionalities.append(
                 model.mean_feature_dimensionalities.cpu()
             )
-
         fig.add_trace(
             go.Scatter(
                 x=x_vals,
@@ -627,13 +893,11 @@ def _create_geometry_figure(
     if GeometryPlotComponent.TOTAL_FEATURE_DIMENSIONALITIES in components:
         x_vals = []
         total_feature_dimensionalities = []
-
         for i, model in enumerate(model_grid.models):
             x_vals.append(model_grid.axes[0].values[i])
             total_feature_dimensionalities.append(
                 model.total_feature_dimensionalities_per_hidden_dimension.cpu()
             )
-
         fig.add_trace(
             go.Scatter(
                 x=x_vals,
@@ -679,7 +943,6 @@ def _create_geometry_figure(
         ),
         margin=dict(r=100, b=120),
     )
-
     return fig
 
 
@@ -691,10 +954,8 @@ def plot_feature_geometry(
     dimensionality_range: list[float] = None,
     dimensions: int = 2,
 ):
-    # Convert ToyModel to list
     if isinstance(models, ToyModel):
         models = [models]
-    # Convert ModelGrid to list
     elif isinstance(models, ModelGrid):
         models = list(models.models.flat)
 
@@ -720,8 +981,6 @@ def plot_feature_geometry(
             else model.interferences
         )
 
-        # Filter features based on dimensionality threshold and range
-        # Convert to CPU for NumPy compatibility if it's a GPU tensor
         feature_dims_cpu = (
             feature_dimensionalities.cpu()
             if hasattr(feature_dimensionalities, "cpu")
@@ -740,9 +999,7 @@ def plot_feature_geometry(
             )[0]
         n_active_features = len(active_feature_indices)
 
-        # Skip this model if no features meet the criteria
         if n_active_features == 0:
-            # Add empty subplot to maintain layout
             if dimensions == 3:
                 fig.add_trace(
                     go.Scatter3d(
@@ -768,8 +1025,6 @@ def plot_feature_geometry(
                     row=1,
                     col=model_idx + 1,
                 )
-
-                # Update subplot axes for empty plot
                 fig.update_xaxes(
                     showgrid=False,
                     showticklabels=False,
@@ -786,23 +1041,18 @@ def plot_feature_geometry(
                 )
             continue
 
-        # Create networkx graph
         G = nx.Graph()
         G.add_nodes_from(active_feature_indices)
-
         for i_idx, i in enumerate(active_feature_indices):
             for j_idx, j in enumerate(
                 active_feature_indices[i_idx + 1 :], start=i_idx + 1
             ):
                 interference = feature_interferences[i, j]
-
                 if abs(interference) >= min_edge_interference:
-                    # Convert to Python scalar to avoid device type issues with networkx
                     weight_value = float(abs(interference).cpu())
                     G.add_edge(i, j, weight=weight_value)
 
         if G.number_of_edges() > 0:
-            # [11.02.26 | OliverSieweke] TODO: check parameters here
             k_value = 30 if dimensions == 3 else 15
             positions = nx.spring_layout(
                 G,
@@ -813,20 +1063,8 @@ def plot_feature_geometry(
                 scale=1.0,
                 dim=dimensions,
             )
-
-            # positions = nx.kamada_kawai_layout(G, weight="weight")
-
-            # positions = nx.spectral_layout(G, weight="weight")
-
-            # try:
-            #     positions = nx.nx_agraph.graphviz_layout(G, prog='neato')
-            # except:
-            #     positions = nx.spring_layout(G, weight="weight", k=3, iterations=800,
-            #                                  seed=42)
-
         else:
             if dimensions == 3:
-                # Use circular layout and add z=0 for 3D
                 positions_2d = nx.circular_layout(G)
                 positions = {
                     node: [pos[0], pos[1], 0] for node, pos in positions_2d.items()
@@ -834,17 +1072,14 @@ def plot_feature_geometry(
             else:
                 positions = nx.circular_layout(G)
 
-        # Extract node positions
         node_x = [positions[node][0] for node in active_feature_indices]
         node_y = [positions[node][1] for node in active_feature_indices]
         if dimensions == 3:
             node_z = [positions[node][2] for node in active_feature_indices]
 
-        # Node representation
         max_dimensionality = feature_dimensionalities[active_feature_indices].max()
 
         if dimensions == 3:
-            # Convert opacity values for 3D (plotly has issues with tensor types)
             opacity_values = (
                 feature_dimensionalities[active_feature_indices] / max_dimensionality
                 if max_dimensionality > 0
@@ -861,10 +1096,7 @@ def plot_feature_geometry(
                     y=node_y,
                     z=node_z,
                     mode="markers",
-                    marker=dict(
-                        size=5,
-                        color="black",
-                    ),
+                    marker=dict(size=5, color="black"),
                     text=[
                         f"Feature {i}<br>Dimensionality: {feature_dimensionalities[i]:.3f}"
                         for i in active_feature_indices
@@ -902,23 +1134,19 @@ def plot_feature_geometry(
                 col=model_idx + 1,
             )
 
-        # Edge representation - individual traces to enable hover info
-        # [11.02.26 | OliverSieweke] TODO: Check if this can be optimized for in the G loops
         for i_idx, i_node in enumerate(active_feature_indices):
             for j_idx, j_node in enumerate(
                 active_feature_indices[i_idx + 1 :], start=i_idx + 1
             ):
                 interference = feature_interferences[i_node, j_node]
-
                 if abs(interference) > min_edge_interference:
                     x_coords = [positions[i_node][0], positions[j_node][0]]
                     y_coords = [positions[i_node][1], positions[j_node][1]]
-
-                    if interference > 0:
-                        edge_color = "rgba(255, 102, 102, 0.6)"
-                    else:
-                        edge_color = "rgba(51, 102, 204, 0.6)"
-
+                    edge_color = (
+                        "rgba(255, 102, 102, 0.6)"
+                        if interference > 0
+                        else "rgba(51, 102, 204, 0.6)"
+                    )
                     if dimensions == 3:
                         z_coords = [positions[i_node][2], positions[j_node][2]]
                         fig.add_trace(
@@ -948,9 +1176,7 @@ def plot_feature_geometry(
                             col=model_idx + 1,
                         )
 
-        # Update subplot axes
         if dimensions == 3:
-            # Update 3D scene for this subplot
             scene_name = "scene" if model_idx == 0 else f"scene{model_idx + 1}"
             fig.update_layout(
                 **{
@@ -996,7 +1222,6 @@ def plot_feature_geometry(
                 col=model_idx + 1,
             )
 
-    # Update layout
     fig.update_layout(
         showlegend=False,
         paper_bgcolor="white",
@@ -1004,7 +1229,6 @@ def plot_feature_geometry(
         height=500,
         width=500 * n_models,
     )
-
     return fig
 
 
@@ -1015,7 +1239,6 @@ def plot_feature_geometry_3d(
     feature_dimensionality_threshold: float = 0.1,
     dimensionality_range: list[float] = None,
 ):
-    """Backwards compatibility wrapper for plot_feature_geometry with dimensions=3."""
     return plot_feature_geometry(
         models,
         min_edge_interference=min_edge_interference,

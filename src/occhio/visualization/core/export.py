@@ -1,3 +1,5 @@
+"""Figure export utility."""
+
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -20,7 +22,6 @@ def export_figure(
 
     filename_parts = []
     for key, value in sorted(labels.items()):
-        # Sanitize value for filesystem
         safe_value = str(value).replace("/", "-").replace("\\", "-").replace(" ", "_")
         filename_parts.append(f"{key}={safe_value}")
 

@@ -11,8 +11,8 @@ import plotly.graph_objects as go
 
 from occhio import ModelGrid
 from occhio.toy_model import ToyModel
-from occhio.visualization_2.core.base_plot import SinglePlot
-from occhio.visualization_2.core.figure_wrappers import FigureProxy
+from occhio.visualization.core.base_plot import SinglePlot
+from occhio.visualization.core.figure_wrappers import FigureProxy
 
 
 class SAEMetricsTablePlot(SinglePlot):

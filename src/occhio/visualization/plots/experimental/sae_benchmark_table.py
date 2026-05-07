@@ -11,8 +11,8 @@ from IPython.display import HTML, display
 
 from occhio import ModelGrid
 from occhio.toy_model import ToyModel
-from occhio.visualization_2.core.base_plot import SinglePlot
-from occhio.visualization_2.core.figure_wrappers import FigureProxy
+from occhio.visualization.core.base_plot import SinglePlot
+from occhio.visualization.core.figure_wrappers import FigureProxy
 
 
 class ScrollableFigure(go.Figure):

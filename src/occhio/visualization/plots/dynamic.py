@@ -1,3 +1,10 @@
+"""Dynamic scatter animation -- standalone function (not a SinglePlot).
+
+``plot_dynamic_scatter`` takes ``losses`` and ``hooks_list`` as constructor
+args rather than model data, so it does not fit the SinglePlot protocol.
+It is kept as a standalone function and re-exported from the package.
+"""
+
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
@@ -12,7 +19,6 @@ def plot_dynamic_scatter(
         hooks_list: list of tuples of (loss_epoch, Tensor[k, n]) with k>=2
         loss_stride: plot every nth loss entry (first and last are always included).
     """
-    # Thin the losses for faster plotting
     all_indices = list(range(len(losses)))
     if loss_stride > 1 and len(losses) > 2:
         sampled = list(range(0, len(losses), loss_stride))
@@ -32,7 +38,6 @@ def plot_dynamic_scatter(
     )
     n: int = hooks_list[0][-1].shape[-1]
 
-    # Compute global axis limits across all frames for fixed scatter axes
     all_x = [emb_mat[0] for _, emb_mat in hooks_list]
     all_y = [emb_mat[1] for _, emb_mat in hooks_list]
     x_min = min(v.min().item() for v in all_x)
@@ -42,14 +47,12 @@ def plot_dynamic_scatter(
     x_pad = (x_max - x_min) * 0.05 or 0.5
     y_pad = (y_max - y_min) * 0.05 or 0.5
 
-    # Add loss line plot (static)
     fig.add_trace(
         go.Scatter(x=loss_x, y=loss_y, mode="lines", name="Loss"),
         row=1,
         col=1,
     )
 
-    # Create frames for animation (one per epoch in hooks_list)
     frames = []
     for idx, (epoch, emb_mat) in enumerate(hooks_list):
         frames.append(
@@ -89,7 +92,6 @@ def plot_dynamic_scatter(
             )
         )
 
-    # Add initial scatter plot
     emb_mat = hooks_list[0][1]
     fig.add_trace(
         go.Scatter(
@@ -105,10 +107,8 @@ def plot_dynamic_scatter(
         col=2,
     )
 
-    # Add frames to figure
     fig.frames = frames
 
-    # Add slider
     steps = []
     for idx, (epoch, _) in enumerate(hooks_list):
         step = dict(

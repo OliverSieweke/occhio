@@ -10,9 +10,9 @@ from plotly.subplots import make_subplots
 
 from occhio.model_grid import ModelGrid
 from occhio.toy_model import ToyModel
-from occhio.visualization_2.core.base_plot import PlotOrchestrator, PlotRenderer
-from occhio.visualization_2.core.figure_wrappers import FigureProxy
-from occhio.visualization_2.core.plotting_utils import add_grid_headers
+from occhio.visualization.core.base_plot import PlotOrchestrator, PlotRenderer
+from occhio.visualization.core.figure_wrappers import FigureProxy
+from occhio.visualization.core.plotting_utils import add_grid_headers
 
 
 class PlotlySubplotSpecDict(TypedDict, total=False):

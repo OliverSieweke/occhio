@@ -1,4 +1,4 @@
-"""Deep audit tests for visualization and visualization_2 modules.
+"""Deep audit tests for the visualization module.
 
 Covers: import correctness, render smoke tests, data flow validation,
 edge cases, CompositePlot/Span layout, and dead code detection.
@@ -85,8 +85,8 @@ class TestImports:
         assert callable(plot_representation)
         assert callable(export_figure)
 
-    def test_import_visualization_2_star(self):
-        from occhio.visualization_2 import (
+    def test_import_visualization_classes(self):
+        from occhio.visualization import (
             EmbeddingPlot,
             FeatureDimensionalityByIndexPlot,
             FeatureNormByIndexPlot,
@@ -94,14 +94,14 @@ class TestImports:
             SAEFeatureSimilarityPlot,
             SuperpositionIndicatorPlot,
         )
-        from occhio.visualization_2.core import CompositePlot
+        from occhio.visualization.core import CompositePlot
 
         assert RepresentationPlot is not None
         assert EmbeddingPlot is not None
         assert CompositePlot is not None
 
     def test_import_core_submodules(self):
-        from occhio.visualization_2.core import (
+        from occhio.visualization.core import (
             CompositePlot,
             PlotOrchestrator,
             PlotRenderer,
@@ -113,32 +113,32 @@ class TestImports:
         assert issubclass(SinglePlot, PlotOrchestrator)
 
     def test_import_experimental_plots(self):
-        from occhio.visualization_2.plots.experimental.sae_benchmark_table import (
+        from occhio.visualization.plots.experimental.sae_benchmark_table import (
             SAEBenchmarkTablePlot,
         )
-        from occhio.visualization_2.plots.experimental.sae_classification_metric import (
+        from occhio.visualization.plots.experimental.sae_classification_metric import (
             SAEClassificationMetricPlot,
         )
-        from occhio.visualization_2.plots.experimental.sae_classification_metrics import (
+        from occhio.visualization.plots.experimental.sae_classification_metrics import (
             SAEClassificationMetricsPlot,
         )
-        from occhio.visualization_2.plots.experimental.sae_f1_vs_l0 import (
+        from occhio.visualization.plots.experimental.sae_f1_vs_l0 import (
             SAEF1vsL0Plot,
         )
-        from occhio.visualization_2.plots.experimental.sae_metrics_summary import (
+        from occhio.visualization.plots.experimental.sae_metrics_summary import (
             DiagnosticTablePlot,
             InterpretabilityTablePlot,
             PerformanceFidelityTablePlot,
         )
-        from occhio.visualization_2.plots.experimental.sae_metrics_table import (
+        from occhio.visualization.plots.experimental.sae_metrics_table import (
             SAECoreMetricsTablePlot,
             SAEMetricsTablePlot,
             SAESparsityMetricsTablePlot,
         )
-        from occhio.visualization_2.plots.experimental.sae_one_hot_to_latent_heatmap import (
+        from occhio.visualization.plots.experimental.sae_one_hot_to_latent_heatmap import (
             SAEOneHotToLatentHeatmapPlot,
         )
-        from occhio.visualization_2.plots.experimental.sae_per_feature_f1 import (
+        from occhio.visualization.plots.experimental.sae_per_feature_f1 import (
             SAEPerFeatureF1DistributionPlot,
             SAEPerFeatureF1Plot,
         )
@@ -147,7 +147,7 @@ class TestImports:
 
 
 # ---------------------------------------------------------------------------
-# 2. Plot Rendering — visualization_2 Plots
+# 2. Plot Rendering
 # ---------------------------------------------------------------------------
 
 
@@ -155,7 +155,7 @@ class TestVisualization2Rendering:
     """Smoke tests: construct each plot and call render() with minimal valid data."""
 
     def test_representation_plot_renders(self, small_model):
-        from occhio.visualization_2 import RepresentationPlot
+        from occhio.visualization import RepresentationPlot
 
         plot = RepresentationPlot()
         fig = plot(small_model)
@@ -163,7 +163,7 @@ class TestVisualization2Rendering:
         assert len(fig.data) > 0, "RepresentationPlot produced no traces"
 
     def test_embedding_plot_renders(self, small_model):
-        from occhio.visualization_2 import EmbeddingPlot
+        from occhio.visualization import EmbeddingPlot
 
         plot = EmbeddingPlot()
         fig = plot(small_model)
@@ -172,7 +172,7 @@ class TestVisualization2Rendering:
         assert len(fig.data) > 0, "EmbeddingPlot produced no traces"
 
     def test_feature_norm_by_index_renders(self, small_model):
-        from occhio.visualization_2 import FeatureNormByIndexPlot
+        from occhio.visualization import FeatureNormByIndexPlot
 
         plot = FeatureNormByIndexPlot()
         fig = plot(small_model)
@@ -180,7 +180,7 @@ class TestVisualization2Rendering:
         assert len(fig.data) > 0
 
     def test_feature_norm_distribution_renders(self, small_model):
-        from occhio.visualization_2 import FeatureNormDistributionPlot
+        from occhio.visualization import FeatureNormDistributionPlot
 
         plot = FeatureNormDistributionPlot()
         fig = plot(small_model)
@@ -188,7 +188,7 @@ class TestVisualization2Rendering:
         assert len(fig.data) > 0
 
     def test_feature_dimensionality_by_index_renders(self, small_model):
-        from occhio.visualization_2 import FeatureDimensionalityByIndexPlot
+        from occhio.visualization import FeatureDimensionalityByIndexPlot
 
         plot = FeatureDimensionalityByIndexPlot()
         fig = plot(small_model)
@@ -196,7 +196,7 @@ class TestVisualization2Rendering:
         assert len(fig.data) > 0
 
     def test_feature_dimensionality_distribution_renders(self, small_model):
-        from occhio.visualization_2 import FeatureDimensionalityDistributionPlot
+        from occhio.visualization import FeatureDimensionalityDistributionPlot
 
         plot = FeatureDimensionalityDistributionPlot()
         fig = plot(small_model)
@@ -204,7 +204,7 @@ class TestVisualization2Rendering:
         assert len(fig.data) > 0
 
     def test_feature_interference_by_index_renders(self, small_model):
-        from occhio.visualization_2 import FeatureInterferenceByIndexPlot
+        from occhio.visualization import FeatureInterferenceByIndexPlot
 
         plot = FeatureInterferenceByIndexPlot()
         fig = plot(small_model)
@@ -212,7 +212,7 @@ class TestVisualization2Rendering:
         assert len(fig.data) > 0
 
     def test_feature_interference_distribution_renders(self, small_model):
-        from occhio.visualization_2 import FeatureInterferenceDistributionPlot
+        from occhio.visualization import FeatureInterferenceDistributionPlot
 
         plot = FeatureInterferenceDistributionPlot()
         fig = plot(small_model)
@@ -220,7 +220,7 @@ class TestVisualization2Rendering:
         assert len(fig.data) > 0
 
     def test_superposition_indicator_renders(self, small_model):
-        from occhio.visualization_2 import SuperpositionIndicatorPlot
+        from occhio.visualization import SuperpositionIndicatorPlot
 
         plot = SuperpositionIndicatorPlot()
         fig = plot(small_model)
@@ -228,7 +228,7 @@ class TestVisualization2Rendering:
         assert len(fig.data) > 0
 
     def test_representation_plot_faceted_on_grid(self, model_grid_1d):
-        from occhio.visualization_2 import RepresentationPlot
+        from occhio.visualization import RepresentationPlot
 
         plot = RepresentationPlot()
         fig = plot(model_grid_1d)
@@ -237,7 +237,7 @@ class TestVisualization2Rendering:
         assert len(fig.data) >= 3
 
     def test_embedding_plot_faceted_on_grid(self, model_grid_1d):
-        from occhio.visualization_2 import EmbeddingPlot
+        from occhio.visualization import EmbeddingPlot
 
         plot = EmbeddingPlot()
         fig = plot(model_grid_1d)
@@ -253,7 +253,7 @@ class TestSAEPlotGracefulDegradation:
     """SAE plots should display an error annotation rather than crash when no SAEs are present."""
 
     def test_sae_feature_similarity_no_saes(self, small_model):
-        from occhio.visualization_2 import SAEFeatureSimilarityPlot
+        from occhio.visualization import SAEFeatureSimilarityPlot
 
         plot = SAEFeatureSimilarityPlot(sae_label="nonexistent")
         fig = plot(small_model)
@@ -266,7 +266,7 @@ class TestSAEPlotGracefulDegradation:
         )
 
     def test_sae_one_hot_heatmap_no_saes(self, small_model):
-        from occhio.visualization_2 import SAEOneHotToLatentHeatmapPlot
+        from occhio.visualization import SAEOneHotToLatentHeatmapPlot
 
         plot = SAEOneHotToLatentHeatmapPlot(sae_label="missing")
         fig = plot(small_model)
@@ -278,7 +278,7 @@ class TestSAEPlotGracefulDegradation:
         )
 
     def test_dynamic_sae_feature_similarity_no_saes(self, small_model):
-        from occhio.visualization_2 import plot_sae_feature_similarity
+        from occhio.visualization import plot_sae_feature_similarity
 
         plot = plot_sae_feature_similarity()
         fig = plot(small_model)
@@ -299,8 +299,8 @@ class TestCompositePlot:
     """Test CompositePlot with multiple renderers and Span support."""
 
     def test_composite_2x2_renders(self, small_model):
-        from occhio.visualization_2.core import CompositePlot
-        from occhio.visualization_2.plots.feature_representation import (
+        from occhio.visualization.core import CompositePlot
+        from occhio.visualization.plots.feature_representation import (
             FeatureDimensionalityByIndexPlot,
             FeatureInterferenceByIndexPlot,
             FeatureNormByIndexPlot,
@@ -322,8 +322,8 @@ class TestCompositePlot:
         assert len(fig.data) >= 4
 
     def test_composite_with_span_renders(self, small_model):
-        from occhio.visualization_2.core import CompositePlot, Span
-        from occhio.visualization_2.plots.feature_representation import (
+        from occhio.visualization.core import CompositePlot, Span
+        from occhio.visualization.plots.feature_representation import (
             FeatureNormByIndexPlot,
             FeatureNormDistributionPlot,
             SuperpositionIndicatorPlot,
@@ -341,14 +341,14 @@ class TestCompositePlot:
         assert len(fig.data) >= 3
 
     def test_composite_empty_layout_raises(self):
-        from occhio.visualization_2.core import CompositePlot
+        from occhio.visualization.core import CompositePlot
 
         with pytest.raises(ValueError, match="at least one plot"):
             CompositePlot(layout=[[None]])
 
     def test_composite_faceted_on_grid(self, model_grid_1d):
-        from occhio.visualization_2.core import CompositePlot
-        from occhio.visualization_2.plots.feature_representation import (
+        from occhio.visualization.core import CompositePlot
+        from occhio.visualization.plots.feature_representation import (
             FeatureNormByIndexPlot,
             FeatureNormDistributionPlot,
         )
@@ -383,11 +383,6 @@ class TestOldVisualization:
         fig = plot_embedding([small_model, small_model])
         assert isinstance(fig, go.Figure)
 
-    @pytest.mark.xfail(
-        reason="BUG: old viz plot_representation creates ModelGrid(axes=[]) "
-        "which now raises ValueError. Needs refactor to handle ToyModel directly.",
-        raises=ValueError,
-    )
     def test_plot_representation_toymodel(self, small_model):
         from occhio.visualization import plot_representation
 
@@ -396,8 +391,8 @@ class TestOldVisualization:
         assert len(fig.data) > 0
 
     @pytest.mark.xfail(
-        reason="BUG: old viz plot_geometry creates ModelGrid(axes=[]) "
-        "which now raises ValueError. Needs refactor to handle ToyModel directly.",
+        reason="BUG: plot_geometry wraps ToyModel in ModelGrid(axes=[]) "
+        "which raises ValueError. Needs refactor to handle ToyModel directly.",
         raises=ValueError,
     )
     def test_plot_geometry_toymodel(self, small_model):
@@ -488,7 +483,7 @@ class TestEdgeCases:
 
     def test_representation_plot_single_feature(self, single_feature_model):
         """RepresentationPlot should work with a 1-feature model."""
-        from occhio.visualization_2 import RepresentationPlot
+        from occhio.visualization import RepresentationPlot
 
         plot = RepresentationPlot()
         fig = plot(single_feature_model)
@@ -496,7 +491,7 @@ class TestEdgeCases:
         assert len(fig.data) > 0
 
     def test_feature_norm_single_feature(self, single_feature_model):
-        from occhio.visualization_2 import FeatureNormByIndexPlot
+        from occhio.visualization import FeatureNormByIndexPlot
 
         plot = FeatureNormByIndexPlot()
         fig = plot(single_feature_model)
@@ -505,7 +500,7 @@ class TestEdgeCases:
 
     def test_superposition_single_feature(self, single_feature_model):
         """Single-feature model: superposition should be 0 (no off-diagonal elements)."""
-        from occhio.visualization_2 import SuperpositionIndicatorPlot
+        from occhio.visualization import SuperpositionIndicatorPlot
 
         plot = SuperpositionIndicatorPlot()
         fig = plot(single_feature_model)
@@ -515,7 +510,7 @@ class TestEdgeCases:
 
     def test_sae_feature_similarity_wrong_label(self, small_model):
         """Asking for an SAE label that doesn't exist."""
-        from occhio.visualization_2 import SAEFeatureSimilarityPlot
+        from occhio.visualization import SAEFeatureSimilarityPlot
 
         # Give it an SAE dict so it passes the "no SAEs" check
         # but fails on the specific label
@@ -531,24 +526,21 @@ class TestEdgeCases:
             if ann.text is not None
         )
 
-    def test_plot_representation_old_viz_single_toymodel_raises(self):
-        """Old viz plot_representation crashes with single ToyModel due to ModelGrid(axes=[]).
-
-        This documents the incompatibility between the old viz ToyModel-wrapping
-        pattern and the current ModelGrid validation.
-        """
-        from occhio.visualization.representation import plot_representation
+    def test_plot_representation_single_toymodel(self):
+        """plot_representation (now RepresentationPlot()) works with single ToyModel."""
+        from occhio.visualization import plot_representation
 
         dist = SparseUniform(3, p_active=0.5)
         ae = TiedLinearRelu(3, 2)
         tm = ToyModel(dist, ae)
         tm.fit(n_epochs=3, batch_size=32, verbose=False)
-        with pytest.raises(ValueError, match="At least one axis"):
-            plot_representation(tm)
+        fig = plot_representation(tm)
+        assert isinstance(fig, go.Figure)
+        assert len(fig.data) > 0
 
     def test_composite_plot_feature_representation_renders(self, small_model):
         """The pre-built plot_feature_representation composite should render."""
-        from occhio.visualization_2.plots.feature_representation import (
+        from occhio.visualization.plots.feature_representation import (
             plot_feature_representation,
         )
 
@@ -569,7 +561,7 @@ class TestFigureProxy:
     def test_update_layout_blocked(self, small_model):
         from plotly.subplots import make_subplots
 
-        from occhio.visualization_2.core.figure_wrappers import FigureProxy
+        from occhio.visualization.core.figure_wrappers import FigureProxy
 
         fig = make_subplots(rows=1, cols=1)
         proxy = FigureProxy(fig, row=1, col=1)
@@ -579,7 +571,7 @@ class TestFigureProxy:
     def test_legend_dedup_across_subplots(self):
         from plotly.subplots import make_subplots
 
-        from occhio.visualization_2.core.figure_wrappers import FigureProxy
+        from occhio.visualization.core.figure_wrappers import FigureProxy
 
         fig = make_subplots(rows=1, cols=2)
         registry: set[str] = set()
@@ -603,7 +595,7 @@ class TestOverlayPlots:
     """Test overlay distribution plots that require n_render_axes=1."""
 
     def test_feature_norm_overlay_renders(self, model_grid_1d):
-        from occhio.visualization_2 import FeatureNormDistributionOverlayPlot
+        from occhio.visualization import FeatureNormDistributionOverlayPlot
 
         plot = FeatureNormDistributionOverlayPlot()
         fig = plot(model_grid_1d)
@@ -612,7 +604,7 @@ class TestOverlayPlots:
         assert len(fig.data) >= 3
 
     def test_feature_dimensionality_overlay_renders(self, model_grid_1d):
-        from occhio.visualization_2 import (
+        from occhio.visualization import (
             FeatureDimensionalityDistributionOverlayPlot,
         )
 
@@ -622,7 +614,7 @@ class TestOverlayPlots:
         assert len(fig.data) >= 3
 
     def test_feature_interference_overlay_renders(self, model_grid_1d):
-        from occhio.visualization_2 import (
+        from occhio.visualization import (
             FeatureInterferenceDistributionOverlayPlot,
         )
 

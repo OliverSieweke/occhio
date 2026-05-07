@@ -11,8 +11,8 @@ import plotly.colors
 import plotly.graph_objects as go
 
 from occhio.toy_model import ToyModel
-from occhio.visualization_2.core import SinglePlot
-from occhio.visualization_2.core.figure_wrappers import FigureProxy
+from occhio.visualization.core import SinglePlot
+from occhio.visualization.core.figure_wrappers import FigureProxy
 
 
 @dataclass
@@ -33,7 +33,7 @@ class SAEClassificationMetricsPlot(SinglePlot):
     Example::
 
         from occhio import ToyModel
-        from occhio.visualization_2.plots import SAEMetricsPlot
+        from occhio.visualization.plots import SAEMetricsPlot
 
         # Create and train toy model with SAEs
         tm = ToyModel(distribution, ae)
