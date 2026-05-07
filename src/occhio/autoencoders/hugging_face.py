@@ -50,7 +50,7 @@ class HuggingFaceAutoEncoder(TiedLinearRelu):
 
         if not Path(path).suffix == ".safetensors":
             warnings.warn(
-                f"File '{filename}' does not have expected .safetensors extension."
+                f"File '{filename}' does not have expected .safetensors extension. "
                 f"This may lead to unexpected behavior.",
                 UserWarning,
                 stacklevel=2,

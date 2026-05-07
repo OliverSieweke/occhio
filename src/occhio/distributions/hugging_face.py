@@ -66,7 +66,7 @@ class HuggingFaceDistribution(Distribution):
 
         if not Path(path).suffix == ".safetensors":
             warnings.warn(
-                f"File '{filename}' does not have expected .safetensors extension."
+                f"File '{filename}' does not have expected .safetensors extension. "
                 f"This may lead to unexpected behavior.",
                 UserWarning,
                 stacklevel=2,
@@ -113,8 +113,11 @@ class HuggingFaceDistribution(Distribution):
         self._buffer_ptr: int = 0
 
     def _refill_buffer(self) -> None:
+        # CUDA perf: transfer indices to CPU once for indexing into CPU-resident
+        # _samples, then transfer the sampled batch to device with non_blocking
         indices = self._randint(0, self._n_samples, (self.buffer_size,))
-        self._buffer = self._samples[indices.cpu()].to(self.device)
+        cpu_indices = indices.cpu() if indices.device.type != "cpu" else indices
+        self._buffer = self._samples[cpu_indices].to(self.device, non_blocking=True)
         self._buffer_ptr = 0
 
     def sample(self, batch_size: int) -> Tensor:
@@ -128,7 +131,8 @@ class HuggingFaceDistribution(Distribution):
         """
         if self.buffer_size is None:
             indices = self._randint(0, self._n_samples, (batch_size,))
-            batch = self._samples[indices.cpu()]
+            cpu_indices = indices.cpu() if indices.device.type != "cpu" else indices
+            batch = self._samples[cpu_indices]
             return batch.to(self.device) if self.device else batch
 
         if batch_size > self.buffer_size:
