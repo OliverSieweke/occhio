@@ -36,7 +36,22 @@ To include development and documentation dependencies:
 uv sync --extra dev --extra docs
 ```
 
-For GPU support, install PyTorch with CUDA first, then install occhio.
+### Device support
+
+occhio runs on **CPU**, **CUDA**, and **Apple MPS**. All production development
+and the majority of testing was done on MPS. For CUDA, install PyTorch with CUDA
+support first, then install occhio.
+
+```python
+# Use MPS (Apple Silicon)
+model = ToyModel(dist, ae, device="mps")
+
+# Use CUDA
+model = ToyModel(dist, ae, device="cuda")
+
+# Auto-detect (defaults to CPU if no GPU available)
+model = ToyModel(dist, ae)
+```
 
 ## First Experiment
 

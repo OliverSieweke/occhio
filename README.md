@@ -24,11 +24,43 @@
 
 occhio is a library for studying **superposition** in toy models of neural networks — the phenomenon where networks represent more features than they have dimensions. Built on the framework from Anthropic's [Toy Models of Superposition](https://transformer-circuits.pub/2022/toy_model/index.html), occhio provides the tools to systematically investigate how features are encoded, how they interfere, and how sparse autoencoders can recover them.
 
-## Quick Start
+## Installation
+
+### From PyPI
 
 ```bash
 pip install occhio
 ```
+
+### From source
+
+```bash
+git clone https://github.com/OliverSieweke/occhio.git
+cd occhio
+```
+
+With [uv](https://docs.astral.sh/uv/) (recommended):
+
+```bash
+uv sync                    # Install all dependencies
+uv run python -c "import occhio; print('Ready!')"
+```
+
+Or with pip:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+pip install -e .           # Editable install
+```
+
+For dev/docs extras: `uv sync --extra dev --extra docs`
+
+### Device support
+
+occhio runs on **CPU**, **CUDA**, and **Apple MPS**. All production development and the majority of testing was done on MPS. Pass `device="mps"` or `device="cuda"` to ToyModel, or let it auto-detect from your autoencoder.
+
+## Quick Start
 
 ```python
 from occhio import ToyModel
