@@ -258,12 +258,12 @@ class TestCoefficientAutotunerConfig:
         assert cfg.start_step == 0
         assert cfg.smoothing_factor == 0.99
         assert cfg.rate_smoothing_factor == 0.95
-        assert cfg.integral_gain == 3e-4
+        assert cfg.integral_gain == 5e-3
         assert cfg.min_multiplier == 1e-2
         assert cfg.max_multiplier == 100.0
         assert cfg.deadband == 0.0
         assert cfg.gain_scale == 10.0
-        assert cfg.convergence_gain == 0.01
+        assert cfg.convergence_gain == 0.1
 
     def test_custom_values(self):
         """Verify custom values override defaults correctly."""

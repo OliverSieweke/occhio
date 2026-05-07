@@ -380,7 +380,10 @@ class ModelGrid:
     @cached_property
     def parameters_mesh(self):
         """Returns a tuple of the meshgrid of the axes."""
-        return meshgrid(*(axis.values for axis in self.axes), indexing="ij")
+        tensors = [
+            torch.as_tensor(axis.values, dtype=torch.float32) for axis in self.axes
+        ]
+        return meshgrid(*tensors, indexing="ij")
 
     @property
     def _shape_from_axes(self) -> tuple[int, ...]:

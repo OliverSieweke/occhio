@@ -30,7 +30,7 @@ class CoefficientAutotunerConfig:
     # EMA smoothing factor for L0 rate (derivative) estimation.
     rate_smoothing_factor: float = 0.95
     # Integral gain (Ki). Controls speed of multiplier adjustment.
-    integral_gain: float = 3e-4
+    integral_gain: float = 5e-3
     min_multiplier: float = 1e-2
     max_multiplier: float = 100.0
     # Deadband: no adjustment if |error| <= deadband
@@ -38,8 +38,8 @@ class CoefficientAutotunerConfig:
     # Nonlinear gain parameter. Adjustment = Ki * tanh(|rel_error| * gain_scale)
     gain_scale: float = 10.0
     # Gain multiplier when error is decreasing (moving toward target).
-    # Lower = more damping. 0.01 means 99% reduction when converging.
-    convergence_gain: float = 0.01
+    # Lower = more damping. 0.1 means 90% reduction when converging.
+    convergence_gain: float = 0.1
 
 
 class CoefficientAutotuner(torch.nn.Module):

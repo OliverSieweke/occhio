@@ -227,7 +227,7 @@ class AttnAttnAE(AutoEncoderBase):
             weights = softmax1(logits, dim=-1)  # (B, dict_size)
             parts.append(weights @ self.encoder_values[h])  # (B, value_dim)
         z = torch.cat(parts, dim=-1)
-        return z + z @ self.W_mix  # + x @ self.W_skip
+        return z + z @ self.W_mix + x @ self.W_skip
 
     def decode(self, z: Tensor) -> Tensor:
         chunks = z.split(self.value_dim, dim=-1)  # n_heads x (B, value_dim)
