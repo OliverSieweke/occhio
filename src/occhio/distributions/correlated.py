@@ -218,7 +218,7 @@ class CorrelatedPairs(Distribution):
                 pass
             case ("correlation", "p_active"):
                 pi: Tensor = c / (1 - pa + c * pa)  # ty:ignore
-            case ("p_active", "density"):
+            case ("density", "p_active"):
                 pi: Tensor = s / pa  # ty:ignore
             case ("correlation", "p_individual"):
                 pa: Tensor = (pi - c) / (pi * (1 - c))  # ty:ignore
