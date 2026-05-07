@@ -1,4 +1,4 @@
-"""Synthetic Superposition Benchmark (SSB) data generator.
+"""SynthSAEBench data generator.
 
 Produces batches of hidden activations a = D^T c + b from a ground-truth feature
 dictionary D ∈ R^{N×D}, where N > D (superposition). Supports correlated firings
@@ -6,6 +6,8 @@ via a Gaussian copula, hierarchical feature dependencies, and configurable
 probability/magnitude distributions.
 
 Used downstream to benchmark SAE variants against known ground-truth features.
+
+Reference: `SynthSAEBench <https://arxiv.org/abs/2602.14687>`_
 """
 
 from __future__ import annotations

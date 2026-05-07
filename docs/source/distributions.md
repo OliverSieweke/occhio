@@ -56,7 +56,7 @@ distribution produces tensors of shape `(batch_size, n_features)`.
 |---|---|
 | {class}`~occhio.distributions.DistributionStack` | Concatenates multiple distributions along the feature dimension. Supports independent, sparse, and single-active modes. |
 | {class}`~occhio.distributions.HuggingFaceDistribution` | Serves pre-generated samples from a HuggingFace Hub dataset. |
-| {class}`~occhio.distributions.SyntheticDataModel` | Synthetic Superposition Benchmark (SSB) data generator with Gaussian copula correlations and hierarchical dependencies. |
+| {class}`~occhio.distributions.SyntheticDataModel` | [SynthSAEBench](https://arxiv.org/abs/2602.14687) data generator with Gaussian copula correlations and hierarchical dependencies. |
 
 ## When to Use Each
 
