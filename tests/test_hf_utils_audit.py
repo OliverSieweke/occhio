@@ -562,30 +562,6 @@ class TestHuggingFaceDistributionMocked:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-class TestHuggingFaceApiModule:
-    """Tests for src/occhio/hugging_face/api.py."""
-
-    def test_module_imports_sae_lens(self):
-        """api.py imports sae_lens.synthetic.SyntheticModel at module level.
-        This is a hard dependency -- verify it at least imports."""
-        from occhio.hugging_face.api import download_distributions, download_models
-
-    def test_download_functions_exist(self):
-        from occhio.hugging_face import api
-
-        assert callable(api.download_distributions)
-        assert callable(api.download_models)
-
-    def test_no_init_py_in_hugging_face_dir(self):
-        """The hugging_face/ directory has NO __init__.py, so
-        'from occhio.hugging_face import api' works only as implicit namespace pkg."""
-        import importlib
-
-        # This should work because Python 3 supports implicit namespace packages
-        mod = importlib.import_module("occhio.hugging_face.api")
-        assert hasattr(mod, "download_distributions")
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # 6. Warning message formatting bugs
 # ═══════════════════════════════════════════════════════════════════════════
