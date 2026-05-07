@@ -2,7 +2,7 @@ import torch
 
 from occhio import ToyModel
 from occhio.autoencoders.hugging_face import HuggingFaceAutoEncoder
-from occhio.benchmark.configs import (
+from occhio.toybench.configs import (
     OCCHIO_HF_DISTRIBUTIONS_REPO,
     OCCHIO_HF_MODELS_REPO,
     BenchmarkDistributionName,

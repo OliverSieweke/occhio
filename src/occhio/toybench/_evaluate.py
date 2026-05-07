@@ -13,12 +13,12 @@ import pandas as pd
 import torch
 from tqdm.auto import tqdm
 
-from occhio.benchmark.configs import (
+from occhio.toybench.configs import (
     BenchmarkDistributionName,
     BenchmarkSAEsInput,
     default_benchmark_saes,
 )
-from occhio.benchmark.utils import toy_model_from_benchmark
+from occhio.toybench.utils import toy_model_from_benchmark
 from occhio.model_grid import Axis, ModelGrid
 from occhio.toy_model import SAEEntry, ToyModel
 
