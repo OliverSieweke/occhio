@@ -1,0 +1,17 @@
+{% extends "!page.html" %}
+
+{% block footer %}
+{{ super() }}
+<div class="occhio-citation" style="text-align: center; padding: 1.5rem 1rem 1rem; border-top: 1px solid var(--color-background-border);">
+  <div style="display: inline-block; position: relative; text-align: left;">
+    <button onclick="navigator.clipboard.writeText(this.nextElementSibling.textContent.trim())" style="position: absolute; top: 0.4rem; right: 0.4rem; background: var(--color-background-primary); border: 1px solid var(--color-background-border); border-radius: 4px; padding: 0.25rem 0.4rem; cursor: pointer; font-size: 0.8rem; color: var(--color-foreground-secondary);" title="Copy to clipboard">&#128203;</button>
+    <pre style="margin: 0; padding: 0.75rem 2.5rem 0.75rem 1rem; font-size: 0.9rem; border-radius: 4px; background: var(--color-background-secondary); overflow-x: auto;">@software{occhio2025,
+  title   = {occhio: A Library for Studying Superposition in Toy Models},
+  author  = {Kupper, Niclas and Reddy, Kaushik and Sieweke, Oliver and Ayonrinde, Kola},
+  year    = {2025},
+  url     = {https://github.com/OliverSieweke/occhio},
+}
+</pre>
+  </div>
+</div>
+{% endblock %}

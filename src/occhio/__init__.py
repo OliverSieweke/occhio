@@ -3,7 +3,7 @@
 Re-exports autoencoder conveniences for users.
 """
 
-from .autoencoder import AutoEncoderBase, AutoencoderType
+from .autoencoders import AutoEncoderBase, AutoencoderType
 from .model_grid import ModelGrid
 from .toy_model import SAEEntry, ToyModel
 

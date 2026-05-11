@@ -8,7 +8,7 @@ import torch
 from safetensors.torch import save_file
 from torch import Generator
 
-from occhio.autoencoder import (
+from occhio.autoencoders import (
     ComputeAutoEncoder,
     MLPEncoder,
     TiedLinearRelu,
@@ -34,8 +34,6 @@ def _make_mlp_encoder(seed=42):
     return MLPEncoder(
         embedding=[N_FEATURES, 6, N_HIDDEN],
         unembedding=[N_HIDDEN, 6, N_FEATURES],
-        n_features=N_FEATURES,
-        n_hidden=N_HIDDEN,
         generator=_gen(seed),
         device=DEVICE,
     )
@@ -45,8 +43,6 @@ def _make_compute_ae(seed=42):
     return ComputeAutoEncoder(
         N=N_FEATURES,
         k=N_HIDDEN,
-        n_features=N_FEATURES,
-        n_hidden=N_HIDDEN,
         generator=_gen(seed),
         device=DEVICE,
     )
@@ -234,8 +230,6 @@ class TestShapeMismatch:
         deep = MLPEncoder(
             embedding=[N_FEATURES, 6, 4, N_HIDDEN],
             unembedding=[N_HIDDEN, 4, 6, N_FEATURES],
-            n_features=N_FEATURES,
-            n_hidden=N_HIDDEN,
             generator=_gen(),
             device=DEVICE,
         )

@@ -6,7 +6,7 @@ import pytest
 import torch
 from safetensors.torch import load_file, save_file
 
-from occhio.autoencoder import TiedLinearRelu
+from occhio.autoencoders import TiedLinearRelu
 from occhio.distributions.sparse import SparseUniform
 from occhio.toy_model import ToyModel
 

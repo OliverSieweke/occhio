@@ -12,7 +12,7 @@ import numpy as np
 import torch
 from torch import Generator, Tensor
 
-from occhio.autoencoder import TiedLinearRelu
+from occhio.autoencoders import TiedLinearRelu
 from occhio.distributions.sparse import SparseUniform
 from occhio.model_grid import Axis, ModelGrid
 from occhio.toy_model import ToyModel
@@ -233,11 +233,11 @@ class TestGetitemSlicing:
         assert len(sub.axes) == 1
         assert sub.axes[0].label == "importance"
 
-    def test_axis_values_are_tensors(self):
+    def test_axis_values_are_sequences(self):
         grid = _make_grid(n_density=6, n_importance=5)
         sub = grid[2, 1:3]
         for ax in sub.axes:
-            assert isinstance(ax.values, Tensor)
+            assert isinstance(ax.values, (list, Tensor))
 
     def test_int_index_collapses_axis_leaves_remaining(self):
         grid = _make_grid(n_density=6, n_importance=5)
@@ -245,13 +245,13 @@ class TestGetitemSlicing:
         # Int on density collapses it; remaining axis is importance
         assert len(sub.axes) == 1
         assert sub.axes[0].label == "importance"
-        assert torch.allclose(sub.axes[0].values, grid.axes[1].values)
+        assert list(sub.axes[0].values) == list(grid.axes[1].values)
 
     def test_slice_axis_values_correct(self):
         grid = _make_grid(n_density=6, n_importance=5)
         sub = grid[1:4]
         expected = grid.axes[0].values[1:4]
-        assert torch.allclose(sub.axes[0].values, expected)
+        assert list(sub.axes[0].values) == list(expected)
 
 
 # ── __getitem__: Negative Indexing ───────────────────────────────────────────
@@ -296,8 +296,8 @@ class TestGetitemReverseIndexing:
         grid = _make_grid(n_density=6, n_importance=5)
         sub = grid[4:1]
         assert sub.shape == (3, 5)
-        expected = grid.axes[0].values[[4, 3, 2]]
-        assert torch.allclose(sub.axes[0].values, expected)
+        expected = [grid.axes[0].values[i] for i in [4, 3, 2]]
+        assert list(sub.axes[0].values) == expected
 
     def test_reverse_slice_models_order(self):
         grid = _make_grid(n_density=6, n_importance=5)
@@ -314,15 +314,15 @@ class TestGetitemReverseIndexing:
         grid = _make_grid(n_density=6, n_importance=5)
         sub = grid[4::-1]
         assert sub.shape == (5, 5)
-        expected = grid.axes[0].values[[4, 3, 2, 1, 0]]
-        assert torch.allclose(sub.axes[0].values, expected)
+        expected = [grid.axes[0].values[i] for i in [4, 3, 2, 1, 0]]
+        assert list(sub.axes[0].values) == expected
 
     def test_explicit_neg_step_open_start(self):
         grid = _make_grid(n_density=6, n_importance=5)
         sub = grid[:2:-1]
         assert sub.shape == (3, 5)
-        expected = grid.axes[0].values[[5, 4, 3]]
-        assert torch.allclose(sub.axes[0].values, expected)
+        expected = [grid.axes[0].values[i] for i in [5, 4, 3]]
+        assert list(sub.axes[0].values) == expected
 
 
 # ── __getitem__: Out-of-Bounds Errors ────────────────────────────────────────

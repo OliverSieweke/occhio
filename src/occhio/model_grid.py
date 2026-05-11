@@ -27,13 +27,20 @@ from torch.func import functional_call, stack_module_state
 from torch.optim import AdamW
 from tqdm.auto import tqdm
 
-from occhio.autoencoder import AutoEncoderBase
+from occhio.autoencoders import AutoEncoderBase
 from occhio.distributions.base import Distribution
 from occhio.toy_model import SAEEntry, ToyModel
 
 
 @dataclass
 class Axis:
+    """A named axis for a :class:`ModelGrid` parameter sweep.
+
+    Args:
+        label: Human-readable name (used in plot headers and DataFrame indices).
+        values: Sequence of values to sweep over.
+    """
+
     label: str
     values: Sequence
 
@@ -380,7 +387,10 @@ class ModelGrid:
     @cached_property
     def parameters_mesh(self):
         """Returns a tuple of the meshgrid of the axes."""
-        return meshgrid(*(axis.values for axis in self.axes), indexing="ij")
+        tensors = [
+            torch.as_tensor(axis.values, dtype=torch.float32) for axis in self.axes
+        ]
+        return meshgrid(*tensors, indexing="ij")
 
     @property
     def _shape_from_axes(self) -> tuple[int, ...]:
@@ -496,6 +506,26 @@ class ModelGrid:
         snapshot_interval: int | None = None,
         sample_every: int = 25,
     ) -> ModelGrid | list[float] | None:
+        """Train all models in the grid in parallel using ``torch.vmap``.
+
+        Args:
+            n_epochs: Number of training epochs.
+            batch_size: Samples per model per epoch.
+            learning_rate: AdamW learning rate.
+            weight_decay: AdamW weight decay.
+            verbose: Show a tqdm progress bar.
+            compile: Apply ``torch.compile`` to the vectorized forward pass.
+            track_losses: Return per-epoch mean losses.
+            snapshot_interval: If set, capture model state every N epochs and
+                return a new ``ModelGrid`` with a prepended ``TrainingAxis``.
+            sample_every: Re-sample from distributions every N epochs.
+
+        Returns:
+            - If ``snapshot_interval`` is set: a new ``ModelGrid`` with
+              ``TrainingAxis`` prepended.
+            - If ``track_losses`` is True: list of per-epoch mean losses.
+            - Otherwise: ``None``.
+        """
         # Validate sample_every
         if sample_every < 1:
             raise ValueError(f"sample_every must be positive, got {sample_every}")
@@ -575,6 +605,11 @@ class ModelGrid:
             )
 
         # Training ---------------------------------------------------------------------
+        # Pre-allocate a device-side buffer so loss tracking never forces a
+        # per-step GPU→CPU sync. Converted to a Python list in one transfer
+        # at the end. (CUDA perf: .item() per epoch is a sync point.)
+        ae_device = flattened_models[0].ae.device
+        loss_buffer = torch.empty(n_epochs, device=ae_device) if track_losses else None
         losses: list[float] | None = [] if track_losses else None
 
         # Snapshot storage
@@ -620,7 +655,8 @@ class ModelGrid:
             end = start + batch_size
             stacked_samples = sample_buffer[:, start:end, :]  # ty:ignore
 
-            optimizer.zero_grad()
+            # CUDA perf: set_to_none=True avoids a memset kernel per parameter
+            optimizer.zero_grad(set_to_none=True)
             stacked_x_hat = stacked_forward(
                 stacked_params, stacked_buffers, stacked_samples
             )
@@ -645,8 +681,10 @@ class ModelGrid:
             total_loss.backward()
             optimizer.step()
 
-            if track_losses:
-                losses.append(total_loss.item())
+            if loss_buffer is not None:
+                # CUDA perf: store on device to avoid a GPU→CPU sync every epoch.
+                # Transferred to CPU in one batch after the loop.
+                loss_buffer[ep] = total_loss.detach()
 
             # Capture snapshot if needed
             if snapshot_interval is not None and (ep + 1) % snapshot_interval == 0:
@@ -673,6 +711,10 @@ class ModelGrid:
 
         if self.broadcast_samples:
             self._sync_generators(broadcasters, broadcast_map)
+
+        # Convert device-side loss buffer to a Python list in one transfer
+        if loss_buffer is not None:
+            losses = loss_buffer.cpu().tolist()
 
         # Build history grid if snapshots were captured
         if snapshots is not None:
@@ -802,7 +844,7 @@ class ModelGrid:
                     range_start = start if start is not None else dim_size - 1
                     range_stop = stop if stop is not None else -1
                     indices = list(range(range_start, range_stop, step))
-                    values = axis.values[indices]
+                    values = [axis.values[i] for i in indices]
                 else:
                     values = axis.values[s]
 

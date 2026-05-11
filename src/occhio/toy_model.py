@@ -23,7 +23,7 @@ from torch import Tensor
 from torch.optim import AdamW, Optimizer
 from tqdm.auto import tqdm
 
-from .autoencoder import AutoEncoderBase
+from .autoencoders import AutoEncoderBase
 from .distributions import Distribution
 from .sae_lens_adapter.activation_generator import ActivationGeneratorWrapper
 from .sae_lens_adapter.feature_dictionary import FeatureDictionaryWrapper
@@ -87,7 +87,16 @@ class SAERecord:
 
 
 class ToyModel:
-    """This is the ToyModel class which is the base for most experiments.
+    """Central experiment object combining a Distribution and AutoEncoder.
+
+    Wraps a feature distribution and a bottleneck autoencoder into a single
+    trainable unit.  After calling :meth:`fit`, the learned geometry is
+    available through properties like :attr:`feature_norms`,
+    :attr:`feature_dimensionalities`, :attr:`interferences`, and
+    :attr:`superposition`.
+
+    Also supports SAE training (:meth:`train_saes`) and evaluation
+    (:meth:`evaluate_saes`) via SAE Lens integration.
 
     Args:
         distribution: A Distribution object. May live on a different device from
@@ -97,8 +106,19 @@ class ToyModel:
         device: Device for the AutoEncoder and all computation. If the distribution
             has no explicit device it is also moved here for convenience. Pass
             ``None`` to infer from the ae or distribution.
-        generator: For seeded experiments.
-        importances: Weighing of the distribution.
+        importances: Per-feature weights in the reconstruction loss. Defaults to
+            uniform (all ones). Can be a Tensor or list.
+        hooks: Optional list of callables invoked after each optimizer step
+            during :meth:`fit`.
+
+    Example::
+
+        model = ToyModel(
+            distribution=SparseUniform(10, p_active=0.1),
+            ae=TiedLinearRelu(10, 5),
+        )
+        losses, _ = model.fit(n_epochs=10_000)
+        print(model.superposition)
     """
 
     distribution: Distribution
@@ -160,6 +180,68 @@ class ToyModel:
             else:
                 self.importances = torch.tensor(importances, device=ae_device)
 
+    @classmethod
+    def from_hub(
+        cls,
+        repo_id: str,
+        distribution: Distribution,
+        *,
+        filename: str = "model.safetensors",
+        revision: str | None = None,
+        device: torch.device | str | None = None,
+        importances: Tensor | list | None = None,
+    ) -> "ToyModel":
+        """Load a pretrained autoencoder from HuggingFace Hub and wrap it.
+
+        Downloads the autoencoder weights, reconstructs the correct
+        architecture automatically, and creates a ToyModel with the
+        user-supplied distribution.
+
+        Args:
+            repo_id: HuggingFace Hub repository ID.
+            distribution: Distribution to pair with the loaded autoencoder.
+            filename: Path to the safetensors file within the repo.
+            revision: Branch, tag, or commit hash.
+            device: Device for the model.
+            importances: Feature importance weights.
+
+        Returns:
+            A ToyModel wrapping the loaded autoencoder and distribution.
+        """
+        ae = AutoEncoderBase.from_hub(
+            repo_id, filename, revision=revision, device=device
+        )
+        return cls(distribution, ae, device=device, importances=importances)
+
+    def push_to_hub(
+        self,
+        repo_id: str,
+        *,
+        filename: str = "model.safetensors",
+        commit_message: str | None = None,
+        private: bool = False,
+        token: str | None = None,
+    ) -> str:
+        """Upload this model's autoencoder weights to HuggingFace Hub.
+
+        Args:
+            repo_id: HuggingFace Hub repository ID.
+            filename: Destination filename in the repo.
+            commit_message: Commit message (auto-generated if None).
+            private: Whether to create a private repo.
+            token: HuggingFace API token.
+
+        Returns:
+            URL of the repository.
+        """
+        return self.ae.push_to_hub(
+            repo_id,
+            filename=filename,
+            commit_message=commit_message,
+            private=private,
+            token=token,
+        )
+
     @staticmethod
     def _validate_data_file(
         tensors: dict[str, Tensor],
@@ -215,6 +297,28 @@ class ToyModel:
         sample_every: int = 25,
         precomputed_data: str | Path | None = None,
     ) -> tuple[list[float], list]:
+        """Train the autoencoder on samples from the distribution.
+
+        Args:
+            n_epochs: Number of training epochs.
+            batch_size: Samples per epoch.
+            learning_rate: AdamW learning rate (ignored if ``optimizer`` is provided).
+            weight_decay: AdamW weight decay (ignored if ``optimizer`` is provided).
+            track_losses: Whether to record per-epoch losses.
+            optimizer: Custom optimizer. If ``None``, uses AdamW.
+            hooks: Per-epoch hook callables receiving a dict with keys
+                ``tm``, ``epoch``, ``n_epochs``, ``loss``, ``x``, ``x_hat``.
+            verbose: Print loss every 5000 epochs.
+            sample_every: Re-sample from the distribution every N epochs
+                (amortizes sampling cost).
+            precomputed_data: Path to a ``.safetensors`` file of pre-generated
+                samples. When provided, the distribution is not used.
+
+        Returns:
+            ``(losses, hook_returns)`` where ``losses`` is a list of per-epoch
+            loss values (empty if ``track_losses=False``) and ``hook_returns``
+            is a list of lists (one per hook).
+        """
         if sample_every < 1:
             raise ValueError(f"sample_every must be positive, got {sample_every}")
 
@@ -286,15 +390,10 @@ class ToyModel:
                 assert raw_buffer is not None  # Always set on first iter (0 % n == 0)
                 start = buf_offset * batch_size
                 end = start + batch_size
+                # CUDA perf: raw_buffer was already transferred to ae_device
+                # when it was created (buf_offset == 0 branch above). The
+                # redundant .to() call per epoch has been removed.
                 if isinstance(raw_buffer, tuple):
-                    raw_buffer = tuple(
-                        (
-                            t.to(ae_device, non_blocking=True)
-                            if isinstance(t, Tensor)
-                            else t
-                        )
-                        for t in raw_buffer
-                    )
                     raw = tuple(
                         t[start:end] if isinstance(t, Tensor) else t for t in raw_buffer
                     )
@@ -335,11 +434,24 @@ class ToyModel:
         return losses, hook_returns
 
     def sample_latent(self, batch_size) -> Tensor:
+        """Sample from the distribution and return encoded hidden activations.
+
+        Args:
+            batch_size: Number of samples.
+
+        Returns:
+            Tensor of shape ``(batch_size, n_hidden)``.
+        """
         raw = self.distribution.sample(batch_size)
         x = raw[0] if isinstance(raw, tuple) else raw
         return self.ae.encode(x.to(self.ae.device))
 
     def get_one_hot_embeddings(self) -> Tensor:
+        """Encode one-hot feature vectors to get per-feature hidden embeddings.
+
+        Returns:
+            Tensor of shape ``(n_features, n_hidden)`` -- the transpose of :attr:`W`.
+        """
         return self.ae.encode(torch.eye(self.n_features, device=self.ae.device))
 
     def __repr__(self):
@@ -760,14 +872,21 @@ class ToyModel:
     def saes_feature_similarity_ordering(self) -> dict[str, Tensor]:
         """Indices to reorder SAE latents for diagonal alignment with true features.
 
-        For each SAE latent, finds the best-matching true feature (by absolute
-        cosine similarity), then sorts latents by that feature index. This produces
-        a reordering where the diagonal of the similarity matrix shows the best
-        matches.
+        Uses the Hungarian algorithm to find an optimal 1-to-1 assignment between
+        SAE latents and true features that maximizes total absolute cosine
+        similarity. Returns the ``min(n_sae_latents, n_features)`` matched SAE
+        latent indices, ordered so that the *i*-th entry corresponds to the *i*-th
+        true feature.
+
+        When ``n_sae_latents > n_features`` (the typical overcomplete case),
+        only the ``n_features`` best-matched latents are included; the remaining
+        latents are unmatched and omitted.
 
         Returns:
-            Dict mapping SAE label to tensor of shape (n_sae_latents,) containing
-            indices that reorder the SAE latents.
+            Dict mapping SAE label to tensor of shape
+            ``(min(n_sae_latents, n_features),)`` containing SAE latent indices
+            that, when used to index the similarity matrix rows, produce a
+            (near-)diagonal alignment with true features.
         """
         from scipy.optimize import linear_sum_assignment
 

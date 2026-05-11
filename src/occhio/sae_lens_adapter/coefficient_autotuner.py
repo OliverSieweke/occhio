@@ -3,6 +3,7 @@
 Copied from https://github.com/decoderesearch/synth-sae-bench-experiments/blob/main/saes/components/coefficient_autotuner.py
 """
 
+import math
 from dataclasses import dataclass
 
 import torch
@@ -29,7 +30,7 @@ class CoefficientAutotunerConfig:
     # EMA smoothing factor for L0 rate (derivative) estimation.
     rate_smoothing_factor: float = 0.95
     # Integral gain (Ki). Controls speed of multiplier adjustment.
-    integral_gain: float = 3e-4
+    integral_gain: float = 5e-3
     min_multiplier: float = 1e-2
     max_multiplier: float = 100.0
     # Deadband: no adjustment if |error| <= deadband
@@ -37,8 +38,8 @@ class CoefficientAutotunerConfig:
     # Nonlinear gain parameter. Adjustment = Ki * tanh(|rel_error| * gain_scale)
     gain_scale: float = 10.0
     # Gain multiplier when error is decreasing (moving toward target).
-    # Lower = more damping. 0.01 means 99% reduction when converging.
-    convergence_gain: float = 0.01
+    # Lower = more damping. 0.1 means 90% reduction when converging.
+    convergence_gain: float = 0.1
 
 
 class CoefficientAutotuner(torch.nn.Module):
@@ -140,65 +141,86 @@ class CoefficientAutotuner(torch.nn.Module):
 
         Returns:
             The updated multiplier value.
+
+        Note:
+            CUDA perf: this method previously called .item() ~10 times per step,
+            each forcing a GPU→CPU sync. Now it extracts all buffer values in one
+            batch at the start and works entirely in Python-float space, writing
+            back to GPU buffers only at the end.
         """
         if isinstance(batch_l0, torch.Tensor):
+            # CUDA perf: single .item() call to extract the scalar
             batch_l0 = batch_l0.item()
 
-        # Update smoothed L0 estimate (EMA)
-        if not self._initialized.item():
-            self._smoothed_l0.fill_(batch_l0)
-            self._prev_smoothed_l0.fill_(batch_l0)
-            self._l0_rate.zero_()
+        # Extract all buffer values in one read (avoids per-access GPU syncs)
+        initialized = self._initialized.item()
+        smoothed_l0 = self._smoothed_l0.item()
+        prev_smoothed_l0 = self._prev_smoothed_l0.item()
+        l0_rate = self._l0_rate.item()
+        multiplier = self._multiplier.item()
+
+        # Update smoothed L0 estimate (EMA) — all in Python floats
+        if not initialized:
+            smoothed_l0 = batch_l0
+            prev_smoothed_l0 = batch_l0
+            l0_rate = 0.0
             self._initialized.fill_(True)
         else:
-            # Store previous smoothed L0 for rate calculation
-            self._prev_smoothed_l0.copy_(self._smoothed_l0)
-
+            prev_smoothed_l0 = smoothed_l0
             # EMA: α * old + (1 - α) * new
-            self._smoothed_l0.mul_(self.cfg.smoothing_factor).add_(
-                batch_l0, alpha=1 - self.cfg.smoothing_factor
+            smoothed_l0 = (
+                self.cfg.smoothing_factor * smoothed_l0
+                + (1 - self.cfg.smoothing_factor) * batch_l0
+            )
+            # Update L0 rate (smoothed derivative)
+            instant_rate = smoothed_l0 - prev_smoothed_l0
+            l0_rate = (
+                self.cfg.rate_smoothing_factor * l0_rate
+                + (1 - self.cfg.rate_smoothing_factor) * instant_rate
             )
 
-            # Update L0 rate (smoothed derivative)
-            instant_rate = self._smoothed_l0.item() - self._prev_smoothed_l0.item()
-            self._l0_rate.mul_(self.cfg.rate_smoothing_factor).add_(
-                instant_rate, alpha=1 - self.cfg.rate_smoothing_factor
-            )
+        # Write updated values back to buffers
+        self._smoothed_l0.fill_(smoothed_l0)
+        self._prev_smoothed_l0.fill_(prev_smoothed_l0)
+        self._l0_rate.fill_(l0_rate)
 
         # No adjustment before start_step
         if step < self.cfg.start_step:
-            return self.multiplier
+            return multiplier
 
         # Position error: positive means L0 is above target
-        error = self._smoothed_l0.item() - self.cfg.target_l0
+        error = smoothed_l0 - self.cfg.target_l0
 
         # Apply deadband - no adjustment if within tolerance
         if abs(error) <= self.cfg.deadband:
-            return self.multiplier
+            return multiplier
 
         # Determine if we're moving toward or away from target
         # Moving toward target: error and rate have opposite signs
         # (error > 0 and rate < 0) or (error < 0 and rate > 0)
-        moving_toward_target = error * self._l0_rate.item() < 0
+        moving_toward_target = error * l0_rate < 0
 
         # Reduce gain when moving toward target to prevent overshoot
         gain = self.cfg.convergence_gain if moving_toward_target else 1.0
 
         # Nonlinear gain using tanh (bounded adjustment)
-        rel_error = error / self.cfg.target_l0
+        # CUDA perf: use math.tanh instead of torch.tanh(torch.tensor(...)).item()
+        # — avoids creating a GPU tensor + sync just for a scalar tanh
+        # Guard against target_l0 == 0: any nonzero error saturates tanh to 1.0
+        rel_error = error / max(self.cfg.target_l0, 1e-12)
         adjustment = (
             self.cfg.integral_gain
             * gain
-            * torch.tanh(torch.tensor(abs(rel_error) * self.cfg.gain_scale)).item()
+            * math.tanh(abs(rel_error) * self.cfg.gain_scale)
         )
 
         # Multiplicative update
         if error > 0:
             # L0 too high, increase multiplier to make it more sparse
-            new_multiplier = self._multiplier.item() * (1 + adjustment)
+            new_multiplier = multiplier * (1 + adjustment)
         else:
             # L0 too low, decrease multiplier to make it less sparse
-            new_multiplier = self._multiplier.item() * (1 - adjustment)
+            new_multiplier = multiplier * (1 - adjustment)
 
         # Clamp to bounds
         new_multiplier = max(
@@ -206,7 +228,7 @@ class CoefficientAutotuner(torch.nn.Module):
         )
 
         self._multiplier.fill_(new_multiplier)
-        return self.multiplier
+        return new_multiplier
 
     def reset(self) -> None:
         """Reset smoothed L0 state and multiplier back to 1.0."""

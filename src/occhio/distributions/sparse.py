@@ -57,9 +57,8 @@ class SparseExponential(Distribution):
 
     def sample(self, batch_size: int) -> Tensor:
         mask = self._rand(batch_size, self.n_features) < self.p_active
-        values = -(1.0 / self.scale) * torch.log(
-            1.0 - self._rand(batch_size, self.n_features)
-        )
+        u = self._rand(batch_size, self.n_features).clamp(max=1.0 - 1e-7)
+        values = -(1.0 / self.scale) * torch.log(1.0 - u)
         return mask * values
 
 
