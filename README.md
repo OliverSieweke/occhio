@@ -91,7 +91,7 @@ print(f"Feature norms: {model.feature_norms}")
 
 ```
 Distribution ──┐
-               ├── ToyModel ──── .fit() ──── Geometric Analysis
+               ├── ToyModel ──── .fit() ───── Geometric Analysis
 AutoEncoder ───┘       │                      (norms, dims, interference, superposition)
                        │
                        ├──── .train_saes() ── SAE Evaluation
