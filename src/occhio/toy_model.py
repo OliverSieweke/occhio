@@ -87,16 +87,7 @@ class SAERecord:
 
 
 class ToyModel:
-    """Central experiment object combining a Distribution and AutoEncoder.
-
-    Wraps a feature distribution and a bottleneck autoencoder into a single
-    trainable unit.  After calling :meth:`fit`, the learned geometry is
-    available through properties like :attr:`feature_norms`,
-    :attr:`feature_dimensionalities`, :attr:`interferences`, and
-    :attr:`superposition`.
-
-    Also supports SAE training (:meth:`train_saes`) and evaluation
-    (:meth:`evaluate_saes`) via SAE Lens integration.
+    """This is the ToyModel class which is the base for most experiments.
 
     Args:
         distribution: A Distribution object. May live on a different device from
@@ -106,19 +97,8 @@ class ToyModel:
         device: Device for the AutoEncoder and all computation. If the distribution
             has no explicit device it is also moved here for convenience. Pass
             ``None`` to infer from the ae or distribution.
-        importances: Per-feature weights in the reconstruction loss. Defaults to
-            uniform (all ones). Can be a Tensor or list.
-        hooks: Optional list of callables invoked after each optimizer step
-            during :meth:`fit`.
-
-    Example::
-
-        model = ToyModel(
-            distribution=SparseUniform(10, p_active=0.1),
-            ae=TiedLinearRelu(10, 5),
-        )
-        losses, _ = model.fit(n_epochs=10_000)
-        print(model.superposition)
+        generator: For seeded experiments.
+        importances: Weighing of the distribution.
     """
 
     distribution: Distribution
@@ -297,28 +277,6 @@ class ToyModel:
         sample_every: int = 25,
         precomputed_data: str | Path | None = None,
     ) -> tuple[list[float], list]:
-        """Train the autoencoder on samples from the distribution.
-
-        Args:
-            n_epochs: Number of training epochs.
-            batch_size: Samples per epoch.
-            learning_rate: AdamW learning rate (ignored if ``optimizer`` is provided).
-            weight_decay: AdamW weight decay (ignored if ``optimizer`` is provided).
-            track_losses: Whether to record per-epoch losses.
-            optimizer: Custom optimizer. If ``None``, uses AdamW.
-            hooks: Per-epoch hook callables receiving a dict with keys
-                ``tm``, ``epoch``, ``n_epochs``, ``loss``, ``x``, ``x_hat``.
-            verbose: Print loss every 5000 epochs.
-            sample_every: Re-sample from the distribution every N epochs
-                (amortizes sampling cost).
-            precomputed_data: Path to a ``.safetensors`` file of pre-generated
-                samples. When provided, the distribution is not used.
-
-        Returns:
-            ``(losses, hook_returns)`` where ``losses`` is a list of per-epoch
-            loss values (empty if ``track_losses=False``) and ``hook_returns``
-            is a list of lists (one per hook).
-        """
         if sample_every < 1:
             raise ValueError(f"sample_every must be positive, got {sample_every}")
 
@@ -434,24 +392,11 @@ class ToyModel:
         return losses, hook_returns
 
     def sample_latent(self, batch_size) -> Tensor:
-        """Sample from the distribution and return encoded hidden activations.
-
-        Args:
-            batch_size: Number of samples.
-
-        Returns:
-            Tensor of shape ``(batch_size, n_hidden)``.
-        """
         raw = self.distribution.sample(batch_size)
         x = raw[0] if isinstance(raw, tuple) else raw
         return self.ae.encode(x.to(self.ae.device))
 
     def get_one_hot_embeddings(self) -> Tensor:
-        """Encode one-hot feature vectors to get per-feature hidden embeddings.
-
-        Returns:
-            Tensor of shape ``(n_features, n_hidden)`` -- the transpose of :attr:`W`.
-        """
         return self.ae.encode(torch.eye(self.n_features, device=self.ae.device))
 
     def __repr__(self):
