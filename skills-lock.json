@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "skills": {
+    "readthedocs-api": {
+      "source": "readthedocs/skills",
+      "sourceType": "github",
+      "computedHash": "b094f7de8b692c15a31be42167f4651a8d86dd88efdfe0b68223742d7c288137"
+    },
+    "readthedocs-build-failure-triage": {
+      "source": "readthedocs/skills",
+      "sourceType": "github",
+      "computedHash": "1ab7da5f88fb9d222cdc2c906a36cc1b8d314916ca8e759a9ac8d0d89da4aba8"
+    },
+    "readthedocs-build-optimization": {
+      "source": "readthedocs/skills",
+      "sourceType": "github",
+      "computedHash": "cdde0bfb9da54ef5d3dcc15016838ee15a20ecd1de86d007b61c67639b952528"
+    },
+    "readthedocs-project-manager": {
+      "source": "readthedocs/skills",
+      "sourceType": "github",
+      "computedHash": "3d9d3f0258b78c177bb82b90264eb707ea7d2b412531e7a522af6052dd932220"
+    },
+    "readthedocs-redirects-manager": {
+      "source": "readthedocs/skills",
+      "sourceType": "github",
+      "computedHash": "82cfde32b9b8e682f6cbc49416a580a82dbd84cb1d9e01c8a09d6764e27bc7b1"
+    },
+    "readthedocs-search-api": {
+      "source": "readthedocs/skills",
+      "sourceType": "github",
+      "computedHash": "4edfcd9c97a0c338afd64f2d4fe44fefe044931b6849740d2a47c28927946809"
+    },
+    "readthedocs-write-config": {
+      "source": "readthedocs/skills",
+      "sourceType": "github",
+      "computedHash": "bfb5c1b66e180273b50bd71aed79be363d2bfd526236fe9b28cf6023bf390228"
+    }
+  }
+}
