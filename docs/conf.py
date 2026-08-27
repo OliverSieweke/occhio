@@ -1,3 +1,5 @@
+"""Sphinx configuration for the occhio documentation."""
+
 # Configuration file for the Sphinx documentation builder.
 #
 # For the full list of built-in configuration values, see the documentation:
@@ -75,14 +77,16 @@ nitpick_ignore = [
     ("py:class", "numpy.typing.NDArray"),
     # torch.nn.Parameter is not indexed as py:class in PyTorch's inventory
     ("py:class", "torch.nn.Parameter"),
-    # No public intersphinx inventories exist for these packages
-    ("py:exc", "httpx.HTTPStatusError"),
-    ("py:class", "fastmcp.FastMCP"),
+    # No public intersphinx inventory exists for SAE Lens
     ("py:class", "sae_lens.TrainingSAE"),
     ("py:class", "sae_lens.synthetic.SyntheticDataEvalResult"),
     # autodoc2 indexes at definition location; re-export paths have no py:class entry
     ("py:class", "occhio.distributions.Distribution"),
     ("py:class", "occhio.ModelGrid"),
+    ("py:class", "occhio.autoencoders.AutoEncoderBase"),
+    # Builtin/NumPy annotations that resolve ambiguously or as non-class objects
+    ("py:class", "type"),
+    ("py:class", "numpy.uint8"),
     # Intentional placeholder in syntax_lookup.md example
     ("py:func", "new_function"),
 ]
@@ -95,15 +99,11 @@ _is_readthedocs = bool(os.environ.get("READTHEDOCS", False))
 autodoc2_packages = [
     {
         "path": "../src/occhio",
-        "exclude_dirs": [
-            "examples",
-            "visualization",  # [2026-04-06 | OliverSieweke] TODO: reenable after migration
-            "tests",
-        ],
     },
 ]
 autodoc2_render_plugin = "myst"
 autodoc2_output_dir = "content/reference/apidocs"
+autodoc2_replace_annotations = [("type[", "typing.Type[")]
 autodoc2_docstring_parser_regexes = [
     (r".*", "_ext.google_docstring_parser"),
 ]
@@ -114,10 +114,15 @@ napoleon_numpy_docstring = False
 pygments_style = "lovelace"
 
 todo_include_todos = not _is_readthedocs
-todo_emit_warnings = not _is_readthedocs
+todo_emit_warnings = False
+suppress_warnings = [
+    # autodoc2 parses each embedded docstring in isolation and reports generated
+    # section levels without considering the surrounding generated module page.
+    "myst.header",
+]
 if _is_readthedocs:
     exclude_patterns.append("dev")
-    suppress_warnings = ["toc.excluded"]
+    suppress_warnings.append("toc.excluded")
 
 
 intersphinx_mapping = {

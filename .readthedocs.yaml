@@ -10,7 +10,11 @@ build:
   jobs:
     create_environment:
       - curl -LsSf https://astral.sh/uv/install.sh | sh
-      - $HOME/.local/bin/uv sync --group docs --no-dev
+      - $HOME/.local/bin/uv sync --extra docs --no-dev
     build:
       html:
-        - $HOME/.local/bin/uv run --no-sync sphinx-build -b html docs $READTHEDOCS_OUTPUT/html
+        - $HOME/.local/bin/uv run --no-sync sphinx-build -W --keep-going -b html docs $READTHEDOCS_OUTPUT/html
+
+sphinx:
+  configuration: docs/conf.py
+  fail_on_warning: true

@@ -315,10 +315,9 @@ class ModelGrid:
         is efficient during training.
 
         Returns:
-            (broadcasters, broadcast_map):
-                broadcasters: a list of unique Distribution objects used by the models.
-                broadcast_map: a tensor that, for each model (flattened), gives the index
-                                  into broadcasters for its distribution.
+            A tuple of ``(broadcasters, broadcast_map)``. ``broadcasters`` is a
+            list of unique distributions; ``broadcast_map`` maps each flattened
+            model to its broadcaster index.
 
         Generator-less distributions are never grouped together because their
         sampling state cannot be synchronized — each gets its own broadcaster slot.

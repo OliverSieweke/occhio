@@ -22,16 +22,11 @@ class AttnLinearAE(AutoEncoderBase):
 
     The softmax constraint forces each head's contribution to be a convex combination of its dictionary vectors, providing the architectural inductive bias for Minkowski-style tile representations.
 
-    Parameters
-    ----------
-    n_features : int
-        Input / output dimensionality.
-    n_hidden : int
-        Total latent dimensionality (must be divisible by ``n_heads``).
-    n_heads : int
-        Number of independent softmax heads.
-    dict_size : int
-        Number of dictionary elements (archetypes) per head.
+    Args:
+        n_features: Input/output dimensionality.
+        n_hidden: Total latent dimensionality (must be divisible by ``n_heads``).
+        n_heads: Number of independent softmax heads.
+        dict_size: Number of dictionary elements (archetypes) per head.
     """
 
     def __init__(
@@ -129,16 +124,11 @@ class AttnAttnAE(AutoEncoderBase):
     Both encoder and decoder use independent per-head softmax-weighted
     dictionary lookups with separate parameters.
 
-    Parameters
-    ----------
-    n_features : int
-        Input / output dimensionality.
-    n_hidden : int
-        Total latent dimensionality (must be divisible by ``n_heads``).
-    n_heads : int
-        Number of independent softmax heads.
-    dict_size : int
-        Number of dictionary elements (archetypes) per head.
+    Args:
+        n_features: Input/output dimensionality.
+        n_hidden: Total latent dimensionality (must be divisible by ``n_heads``).
+        n_heads: Number of independent softmax heads.
+        dict_size: Number of dictionary elements (archetypes) per head.
     """
 
     def __init__(
@@ -248,16 +238,11 @@ class LinearAttnAE(AutoEncoderBase):
     This is the complement of ``AttnLinearAE`` which uses attention for
     encoding and a linear projection for decoding.
 
-    Parameters
-    ----------
-    n_features : int
-        Input / output dimensionality.
-    n_hidden : int
-        Total latent dimensionality (must be divisible by ``n_heads``).
-    n_heads : int
-        Number of independent softmax heads in the decoder.
-    dict_size : int
-        Number of dictionary elements (archetypes) per decoder head.
+    Args:
+        n_features: Input/output dimensionality.
+        n_hidden: Total latent dimensionality (must be divisible by ``n_heads``).
+        n_heads: Number of independent softmax heads in the decoder.
+        dict_size: Number of dictionary elements (archetypes) per decoder head.
     """
 
     def __init__(

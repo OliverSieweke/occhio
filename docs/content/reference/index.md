@@ -5,5 +5,4 @@
    :titlesonly:
 
    apidocs/index
-   benchmark
 ```

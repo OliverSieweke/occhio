@@ -161,8 +161,8 @@ class CompositePlot(PlotOrchestrator):
         """Parse the raw layout into plot entries and Plotly specs.
 
         Returns:
-            entries: List of SubplotSpec instances.
-            specs: 2D list suitable for make_subplots(specs=...).
+            A tuple containing the resolved subplot entries and a two-dimensional
+            Plotly specs grid suitable for ``make_subplots(specs=...)``.
         """
         subplots: list[SubplotSpec] = []
         specs: PlotlySpecsGrid = [

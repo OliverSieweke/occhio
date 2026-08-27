@@ -24,6 +24,20 @@ _SKIP = object()
 
 
 class AutoEncoderBase(nn.Module, ABC):
+    """Base interface shared by occhio autoencoders.
+
+    Subclasses implement :meth:`encode`, :meth:`decode`, and
+    :meth:`resample_weights`. The base class supplies the default forward and
+    loss functions, device handling, and serialization helpers.
+
+    Args:
+        n_features: Input/output dimensionality.
+        n_hidden: Hidden or latent dimensionality.
+        loss_fn: Optional loss function replacing the default weighted MSE.
+        device: Torch device used for model parameters.
+        generator: Optional generator for reproducible initialization.
+    """
+
     # Auto-populated registry: class_name -> class.
     _registry: ClassVar[dict[str, type["AutoEncoderBase"]]] = {}
 

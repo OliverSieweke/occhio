@@ -24,22 +24,15 @@ class SynthAE(AutoEncoderBase):
     Uses a chunked implementation to reduce memory from O(N^2) to
     O(chunk_size × N).
 
-    Parameters
-    ----------
-    n_features : int
-        Number of ground-truth features N.
-    n_hidden : int
-        Hidden dimension D (must satisfy N ≥ D for meaningful superposition).
-    orthogonalize : bool
-        Run the orthogonalization procedure on init.
-    ortho_lambda : float
-        Norm penalty weight λ in L_ortho.
-    ortho_steps : int
-        Number of gradient descent iterations.
-    ortho_lr : float
-        Learning rate for the orthogonalization optimizer.
-    ortho_chunk_size : int
-        Block size for chunked pairwise dot products.
+    Args:
+        n_features: Number of ground-truth features N.
+        n_hidden: Hidden dimension D (must satisfy N ≥ D for meaningful
+            superposition).
+        orthogonalize: Run the orthogonalization procedure on initialization.
+        ortho_lambda: Norm penalty weight λ in L_ortho.
+        ortho_steps: Number of gradient descent iterations.
+        ortho_lr: Learning rate for the orthogonalization optimizer.
+        ortho_chunk_size: Block size for chunked pairwise dot products.
     """
 
     def __init__(

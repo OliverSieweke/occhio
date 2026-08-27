@@ -8,8 +8,6 @@
 :link: tmos
 :link-type: doc
 :link-alt: toy models of superposition
-:img-bottom: images/tmos.png
-:img-alt: toy models of superposition
 
 +++
 
@@ -20,8 +18,6 @@
 :link: a_is_for_absorption
 :link-type: doc
 :link-alt: a is for absorption
-:img-bottom: images/a_is_for_absorption.png
-:img-alt: A is for absorption
 
 +++
 
@@ -34,4 +30,12 @@
 
 ```{bibliography}
 :filter: docname in docnames
+```
+
+```{eval-rst}
+.. toctree::
+   :hidden:
+
+   tmos
+   a_is_for_absorption
 ```

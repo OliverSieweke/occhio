@@ -1,3 +1,5 @@
+![](https://app.readthedocs.org/projects/occhio/badge/?version=latest&style=flat-square)
+
 > [!CAUTION]
 >
 > Work in Progress
@@ -16,28 +18,26 @@ Named for the Italian word for "eye" — because we're trying to see what's hidi
 The main idea of this library is to help researchers speed up their implementation of various Toy Models of superposition. To that end we have implemented a `ToyModel` class which takes in a feature distribution and some type of AutoEncoder.
 
 ```python
+import torch
+
 from occhio import ToyModel
-from occhio.distribution import SparseUniform
-from occhio.autoencoder import TiedLinear
+from occhio.autoencoders import TiedLinear
+from occhio.distributions import SparseUniform
+
+n_features = 5
 
 tm = ToyModel(
-    distribution=SparseUniform(5, p_active=0.2),
-    ae=TiedLinear(5, 2),
-    importances=torch.tensor([0.8 ** i for i in range(n_features)])
+    distribution=SparseUniform(n_features, p_active=0.2),
+    ae=TiedLinear(n_features, 2),
+    importances=torch.tensor([0.8**i for i in range(n_features)]),
 )
 ```
 
 A reasonable training loop has already been implemented and can be performed easily by simply running `tm.fit(n_epochs=1000)`. Once trained, the latent space can be sampled either by `tm.get_one_hot_embeddings()`, which simply returns the embeddings of the one hot vectors of feature space (this corresponds exactly to `W` for the `TiedLinear` Autoencoder), or via `tm.sample_latent(batch_size)`, which samples the feature distribution and passes it through the encoder.
 
-The abstract `AutoEncoderBase`, and `Distribution` classes can be easily extended and ensures compatibility with the `ToyModel` class.
-
-
-### Sparse Autoencoders (SAEs)
-
-```python
-
-from occhio.sae import SAESimple
-```
+The abstract `AutoEncoderBase` and `Distribution` classes can be extended to add
+new architectures and feature distributions while retaining compatibility with
+`ToyModel`.
 
 ## Documentation
 
@@ -58,11 +58,3 @@ make -C docs clean
 ```
 
 Built docs will be in `docs/_build/html/`.
-
-## Future directions
-
-- [ ] Plotting
-- [ ] SAE's
-- [ ] Benchmarking tools
-- [ ] Easy interference calculations
-

@@ -77,7 +77,7 @@ Results from the literature, rebuilt with `occhio`.
 :link-type: doc
 :link-alt: reference
 
-The complete API for `occhio` and `toybench`.
+The complete API for `occhio`.
 
 +++
 
@@ -136,8 +136,7 @@ The complete API for `occhio` and `toybench`.
    :maxdepth: 2
    :caption: Replications
 
-   content/replications/tmos.md
-   content/replications/a_is_for_absorption.md
+   content/replications/index
 ```
 
 ```{eval-rst}

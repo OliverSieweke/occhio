@@ -12,26 +12,21 @@ from .base import AutoEncoderBase
 
 
 class ComputeAutoEncoder(AutoEncoderBase):
-    """
-    Autoencoder with a tied encoder/decoder and a linear compute step.
+    """Autoencoder with a tied encoder/decoder and a linear compute step.
 
     Subclasses occhio's AutoEncoderBase so it exposes encode/decode and slots
     into ToyModel for geometric analysis (feature norms, interferences, etc.).
 
-    Parameters
-    ----------
-    N : int   — number of features
-    k : int   — hidden / latent dimension
-    decode_activation : "softmax" | "relu"
-        "softmax" — outputs a probability simplex; use for one-hot targets (CE/MSE).
-        "relu"    — outputs non-negative values; use for continuous targets like x @ P.
-    seed : int — weight init seed
+    Weights are ``W`` (k, N), the tied encoder/decoder; ``Z`` (k, k), the
+    linear compute step; and ``b`` (N,), the decode bias.
 
-    Weights
-    -------
-    W : (k, N) — tied encoder / decoder
-    Z : (k, k) — linear compute step
-    b : (N,)   — decode bias
+    Args:
+        N: Number of features.
+        k: Hidden/latent dimension.
+        decode_activation: ``"softmax"`` outputs a probability simplex for
+            one-hot targets; ``"relu"`` outputs non-negative values for
+            continuous targets such as ``x @ P``.
+        seed: Weight-initialization seed.
     """
 
     def __init__(
