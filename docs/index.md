@@ -140,7 +140,7 @@ The complete API for `occhio`.
 ```
 
 ```{eval-rst}
-.. toctree::
+.. local-toctree::
    :hidden:
    :maxdepth: 2
    :caption: Development

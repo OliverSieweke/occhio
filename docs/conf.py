@@ -12,6 +12,8 @@ import os
 import sys
 from pathlib import Path
 
+from sphinx.directives.other import TocTree
+
 # Add the project root to sys.path so autodoc can find the module
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 # Add the docs directory so _ext modules are importable
@@ -122,7 +124,6 @@ suppress_warnings = [
 ]
 if _is_readthedocs:
     exclude_patterns.append("dev")
-    suppress_warnings.append("toc.excluded")
 
 
 intersphinx_mapping = {
@@ -209,3 +210,19 @@ def linkcode_resolve(domain, info):
 # -- sphinxcontrib-bibtex ----------------------------------------------------
 bibtex_bibfiles = ["refs.bib"]
 bibtex_default_style = "unsrt"
+
+
+class LocalTocTree(TocTree):
+    """A toctree that is omitted entirely from Read the Docs builds."""
+
+    def run(self):
+        """Create the toctree locally, before RTD can validate its entries."""
+        if _is_readthedocs:
+            return []
+        return super().run()
+
+
+def setup(app):
+    """Register documentation-specific Sphinx directives."""
+    app.add_directive("local-toctree", LocalTocTree)
+    return {"parallel_read_safe": True}
