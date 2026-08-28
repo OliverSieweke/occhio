@@ -1,7 +1,7 @@
 .PHONY: docs
 
 docs:
-	make -C docs $(filter-out docs,$(MAKECMDGOALS))
+	$(MAKE) -C docs $(filter-out docs,$(MAKECMDGOALS))
 
 %:
 	@:
