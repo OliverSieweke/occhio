@@ -47,14 +47,6 @@ dev = [
     "graphviz>=0.21",
     "huggingface-hub[cli]>=0.36.2",
 ]
-
-[tool.pytest.ini_options]
-pythonpath = ["src"]
-asyncio_mode = "auto"
-
-
-# For read the docs deployment with pip
-[project.optional-dependencies]
 docs = [
     "sphinx>=8.1.3",
     "myst-parser>=4.0.1",
@@ -62,4 +54,14 @@ docs = [
     "sphinx-rtd-theme>=3.1.0",
     "sphinx-notfound-page>=1.1.0",
     "sphinx-llm>=0.3.0",
+    "sphinx-autodoc2>=0.5",
+    "sphinx-copybutton>=0.5.2",
+    "linkify-it-py>=2.1.0",
+    "sphinx-design>=0.6.1",
+    "sphinxcontrib-bibtex>=2.6.3",
 ]
+
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+asyncio_mode = "auto"

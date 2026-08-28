@@ -13,6 +13,7 @@ test.ipynb
 .vscode/
 docs/_build
 docs/_autosummary
+docs/content/reference/apidocs/occhio/
 .ipynb_checkpoints/
 
 # Generated outputs
@@ -35,4 +36,3 @@ aider.conf.yml
 AGENTS.md
 CLAUDE.md
 skills/
-

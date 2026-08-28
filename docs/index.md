@@ -1,66 +1,150 @@
 # occhio
 
-A library for studying superposition in toy models of neural networks.
+`occhio` is a Python library for studying superposition in neural networks. Train toy models on structured feature distributions, measure and visualize the geometry of learned representations, and evaluate how well sparse autoencoders recover ground-truth features.
 
-occhio provides controlled environments for investigating how neural networks
-represent more features than they have dimensions, including distributions,
-autoencoder architectures, geometric analysis, SAE training/evaluation, and
-visualization tools.
+% TODO: add main graph
 
-## Quick Example
+% TODO: add link to paper
 
-```python
-from occhio import ToyModel
-from occhio.distributions import SparseUniform
-from occhio.autoencoders import TiedLinearRelu
+::::{grid} 2
+:gutter: 3
+:padding: 0
 
-model = ToyModel(
-    distribution=SparseUniform(n_features=5, p_active=0.1),
-    ae=TiedLinearRelu(n_features=5, n_hidden=2),
-)
-losses, _ = model.fit(n_epochs=10_000)
+:::{grid-item-card} Quick Start
+:columns: 12
+:link: content/tutorials/quick_start
+:link-type: doc
+:link-alt: quick start
 
-print(model.feature_norms)
-print(model.superposition)
-```
+Train distributions, visualize embedding spaces and evaluate SAEs in minutes.
 
-## Highlights
++++
 
-- **ToyModel** -- single-line setup for distribution + autoencoder experiments
-- **ModelGrid** -- vectorized parameter sweeps with `torch.vmap`
-- **15+ distributions** -- sparse, correlated, hierarchical, manifold-based, DAG-structured
-- **9 autoencoder architectures** -- tied linear, MLP, attention, compute, synthetic
-- **SAE integration** -- train and evaluate sparse autoencoders via SAE Lens
-- **Interactive visualization** -- Plotly-based plots with automatic faceting over grids
-- **HuggingFace Hub** -- save/load models and distributions from the Hub
+{octicon}`rocket;1em;card-footer-icon` Swift walk-through for the impatient
+:::
+
+:::{grid-item-card} Tutorials
+:link: content/tutorials/index
+:link-type: doc
+:link-alt: tutorials
+
+Get familiar with the library’s core abstractions, hands-on.
+
++++
+
+{octicon}`mortar-board;1em;card-footer-icon` Guided lessons for the methodical
+:::
+
+:::{grid-item-card} How-To Guides
+:link: content/how_to_guides/index
+:link-type: doc
+:link-alt: how-to guides
+
+Follow targeted recipes for common tasks and workflows.
+
++++
+
+{octicon}`tasklist;1em;card-footer-icon` Practical steps for the determined
+:::
+
+:::{grid-item-card} Explanations
+:link: content/explanations/index
+:link-type: doc
+:link-alt: explanations
+
+Develop your understanding of superposition through guided experiments.
+
++++
+
+{octicon}`light-bulb;1em;card-footer-icon` Deep-dives for the curious
+:::
+
+:::{grid-item-card} Replications
+:link: content/replications/index
+:link-type: doc
+:link-alt: replications
+
+Results from the literature, rebuilt with `occhio`.
+
++++
+
+{octicon}`repo-forked;1em;card-footer-icon` Reproductions for the sceptic
+:::
+
+:::{grid-item-card} Reference
+:columns: 12
+:link: content/reference/index
+:link-type: doc
+:link-alt: reference
+
+The complete API for `occhio`.
+
++++
+
+{octicon}`book;1em;card-footer-icon` Knobs and dials for the meticulous
+:::
+
+::::
 
 ```{eval-rst}
 .. toctree::
+   :hidden:
    :maxdepth: 2
-   :caption: User Guide
 
-   source/getting_started
-   source/concepts
-   source/distributions
-   source/autoencoders
-   source/visualization
+   content/tutorials/quick_start.md
+```
 
+```{eval-rst}
 .. toctree::
+   :hidden:
+   :maxdepth: 2
+   :caption: Tutorials
+
+   content/tutorials/index
+```
+
+```{eval-rst}
+.. toctree::
+   :hidden:
+   :maxdepth: 2
+   :caption: How-To?
+
+   content/how_to_guides/index
+```
+
+```{eval-rst}
+.. toctree::
+   :hidden:
+   :maxdepth: 2
+   :caption: Explanations
+
+   content/explanations/index
+```
+
+```{eval-rst}
+.. toctree::
+   :hidden:
    :maxdepth: 2
    :caption: Reference
 
-   source/api
+   content/reference/index
 ```
 
-## Citation
+```{eval-rst}
+.. toctree::
+   :hidden:
+   :maxdepth: 2
+   :caption: Replications
 
-If you use occhio in your research, please cite:
+   content/replications/index
+```
 
-```bibtex
-@software{occhio2025,
-  title   = {occhio: A Library for Studying Superposition in Toy Models},
-  author  = {Kupper, Niclas and Reddy, Kaushik and Sieweke, Oliver and Ayonrinde, Kola},
-  year    = {2025},
-  url     = {https://github.com/OliverSieweke/occhio},
-}
+```{eval-rst}
+.. local-toctree::
+   :hidden:
+   :maxdepth: 2
+   :caption: Development
+
+   dev/syntax_lookup.md
+   dev/todos.md
 ```

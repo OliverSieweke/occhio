@@ -120,11 +120,9 @@ class TiedMLPEncoder(AutoEncoderBase):
     This gives the MLP extra capacity over TiedLinearRelu while preserving
     the encoder-decoder symmetry that helps with superposition geometry.
 
-    Parameters
-    ----------
-    dims : list[int]
-        Layer dimensions from input to latent, e.g. [200, 200, 20].
-        The decoder mirrors this in reverse.
+    Args:
+        dims: Layer dimensions from input to latent, for example
+            ``[200, 200, 20]``. The decoder mirrors this in reverse.
     """
 
     def __init__(self, dims: list[int], **kwargs):

@@ -4,7 +4,9 @@
 # You can set these variables from the command line, and also
 # from the environment for the first two.
 SPHINXOPTS    ?=
-SPHINXBUILD   ?= sphinx-build
+UV            ?= uv
+SPHINXBUILD   ?= $(UV) run --extra docs sphinx-build
+SPHINXAUTOBUILD ?= $(UV) run --extra docs sphinx-autobuild
 SOURCEDIR     = .
 BUILDDIR      = _build
 
@@ -16,7 +18,7 @@ help:
 
 # Live reload server for development
 livehtml:
-	sphinx-autobuild "$(SOURCEDIR)" "$(BUILDDIR)/html" $(SPHINXOPTS) $(O)
+	$(SPHINXAUTOBUILD) "$(SOURCEDIR)" "$(BUILDDIR)/html" $(SPHINXOPTS) $(O)
 
 # Catch-all target: route all unknown targets to Sphinx using the new
 # "make mode" option.  $(O) is meant as a shortcut for $(SPHINXOPTS).
